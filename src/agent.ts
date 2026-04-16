@@ -487,10 +487,8 @@ Time context for bookings (always use real calendar dates—never default to 202
     const elevenApiKey =
       process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
     const openaiApiKeyForTts = process.env.OPENAI_API_KEY?.trim() || '';
-    let ttsMode: 'elevenlabs' | 'openai' | 'livekit';
-    if (ttsProviderRaw === 'livekit') {
-      ttsMode = 'livekit';
-    } else if (ttsProviderRaw === 'openai') {
+    let ttsMode: 'elevenlabs' | 'openai';
+    if (ttsProviderRaw === 'openai') {
       ttsMode = 'openai';
     } else if (ttsProviderRaw === 'elevenlabs') {
       ttsMode = 'elevenlabs';
@@ -499,8 +497,11 @@ Time context for bookings (always use real calendar dates—never default to 202
     } else if (openaiApiKeyForTts) {
       ttsMode = 'openai';
     } else {
-      /** LiveKit Cloud Inference TTS (e.g. Cartesia) — only LIVEKIT_API_KEY / LIVEKIT_API_SECRET. */
-      ttsMode = 'livekit';
+      console.error(
+        'No TTS credentials: set SALON_TTS_PROVIDER=openai with OPENAI_API_KEY, or set ELEVENLABS_API_KEY (and optional SALON_TTS_PROVIDER=elevenlabs).',
+      );
+      ctx.shutdown('missing_tts_credentials');
+      return;
     }
     if (ttsMode === 'openai' && !openaiApiKeyForTts) {
       console.error('SALON_TTS_PROVIDER=openai requires OPENAI_API_KEY in the worker environment.');
@@ -529,21 +530,6 @@ Time context for bookings (always use real calendar dates—never default to 202
     const openaiTtsVoice = (process.env.OPENAI_TTS_VOICE?.trim() || 'coral') as openai.TTSVoices;
     const openaiTtsSpeed = Number.parseFloat(process.env.OPENAI_TTS_SPEED ?? '1');
     const openaiTtsInstructions = process.env.OPENAI_TTS_INSTRUCTIONS?.trim();
-
-    /** Default: Cartesia sonic-turbo on LiveKit Inference (streaming, low latency). @see https://docs.livekit.io/agents/models/tts/inference/cartesia/ */
-    const livekitInferenceTtsModel = (process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() ||
-      'cartesia/sonic-turbo') as inference.TTSModels;
-    const livekitInferenceTtsVoice =
-      process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() || '9626c31c-bec5-4cca-baa8-f8ba9e84c8bc';
-    const livekitInferenceTtsLanguage = process.env.LIVEKIT_INFERENCE_TTS_LANGUAGE?.trim() || 'en';
-
-    if (ttsMode === 'livekit') {
-      console.info('[tts] LiveKit Inference', {
-        model: livekitInferenceTtsModel,
-        voice: livekitInferenceTtsVoice,
-        language: livekitInferenceTtsLanguage,
-      });
-    }
 
     const endpointMinMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '280', 10);
     const endpointMaxMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '2200', 10);
@@ -590,32 +576,25 @@ Time context for bookings (always use real calendar dates—never default to 202
         },
       }),
       tts:
-        ttsMode === 'livekit'
-          ? new inference.TTS({
-              model: livekitInferenceTtsModel,
-              voice: livekitInferenceTtsVoice,
-              language: livekitInferenceTtsLanguage,
-              modelOptions: {},
+        ttsMode === 'openai'
+          ? new openai.TTS({
+              apiKey: openaiApiKeyForTts,
+              model: openaiTtsModel,
+              voice: openaiTtsVoice,
+              speed: Number.isFinite(openaiTtsSpeed) ? openaiTtsSpeed : 1,
+              ...(openaiTtsInstructions ? { instructions: openaiTtsInstructions } : {}),
             })
-          : ttsMode === 'openai'
-            ? new openai.TTS({
-                apiKey: openaiApiKeyForTts,
-                model: openaiTtsModel,
-                voice: openaiTtsVoice,
-                speed: Number.isFinite(openaiTtsSpeed) ? openaiTtsSpeed : 1,
-                ...(openaiTtsInstructions ? { instructions: openaiTtsInstructions } : {}),
-              })
-            : new elevenlabs.TTS({
-                apiKey: elevenApiKey,
-                voiceId: elevenVoiceId,
-                model: elevenModel,
-                streamingLatency: Number.isFinite(elevenStreamingLatency) ? elevenStreamingLatency : 4,
-                voiceSettings: {
-                  stability: Number.isFinite(elevenVoiceStability) ? elevenVoiceStability : 0.48,
-                  similarity_boost: Number.isFinite(elevenVoiceSimilarity) ? elevenVoiceSimilarity : 0.82,
-                  style: Number.isFinite(elevenVoiceStyle) ? elevenVoiceStyle : 0.35,
-                },
-              }),
+          : new elevenlabs.TTS({
+              apiKey: elevenApiKey,
+              voiceId: elevenVoiceId,
+              model: elevenModel,
+              streamingLatency: Number.isFinite(elevenStreamingLatency) ? elevenStreamingLatency : 4,
+              voiceSettings: {
+                stability: Number.isFinite(elevenVoiceStability) ? elevenVoiceStability : 0.48,
+                similarity_boost: Number.isFinite(elevenVoiceSimilarity) ? elevenVoiceSimilarity : 0.82,
+                style: Number.isFinite(elevenVoiceStyle) ? elevenVoiceStyle : 0.35,
+              },
+            }),
       userData: sessionUserData,
       preemptiveGeneration: true,
       maxToolSteps: 5,
@@ -811,12 +790,7 @@ Time context for bookings (always use real calendar dates—never default to 202
           aiSummary = pp.aiSummary || null;
           didPostprocess = true;
         }
-        const ttsModelForCost =
-          ttsMode === 'livekit'
-            ? `${String(livekitInferenceTtsModel)}:${livekitInferenceTtsVoice}`
-            : ttsMode === 'openai'
-              ? String(openaiTtsModel)
-              : String(elevenModel);
+        const ttsModelForCost = ttsMode === 'openai' ? String(openaiTtsModel) : String(elevenModel);
         const costEstimate = estimateCallCostUsd({
           durationSeconds,
           smsSegmentsSent: ud.sessionFlags.smsSent,
