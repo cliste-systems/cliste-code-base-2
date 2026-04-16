@@ -1,5 +1,5 @@
 /**
- * Smoke-test LiveKit, Supabase, Twilio, and TTS credentials (ElevenLabs or OpenAI per SALON_TTS_PROVIDER).
+ * Smoke-test LiveKit, Supabase, Twilio, and TTS credentials (per SALON_TTS_PROVIDER).
  * Run: npx tsx scripts/verify-integrations.ts
  */
 import 'dotenv/config';
@@ -17,11 +17,14 @@ function httpsHost(): string {
 }
 
 /** Mirrors `src/agent.ts` TTS selection for smoke tests. */
-function resolveTtsModeForVerify(): 'openai' | 'elevenlabs' | null {
+function resolveTtsModeForVerify(): 'openai' | 'elevenlabs' | 'livekit' {
   const raw = process.env.SALON_TTS_PROVIDER?.trim().toLowerCase() || '';
   const eleven =
     process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
   const oai = process.env.OPENAI_API_KEY?.trim() || '';
+  if (raw === 'livekit') {
+    return 'livekit';
+  }
   if (raw === 'openai') {
     return 'openai';
   }
@@ -34,7 +37,7 @@ function resolveTtsModeForVerify(): 'openai' | 'elevenlabs' | null {
   if (oai) {
     return 'openai';
   }
-  return null;
+  return 'livekit';
 }
 
 async function main(): Promise<void> {
@@ -91,9 +94,13 @@ async function main(): Promise<void> {
     console.error('✗ LiveKit:', msg);
   }
 
-  // TTS (ElevenLabs or OpenAI — same rules as the worker)
+  // TTS (LiveKit Inference vs ElevenLabs vs OpenAI — same rules as the worker)
   const ttsMode = resolveTtsModeForVerify();
-  if (ttsMode === 'openai') {
+  if (ttsMode === 'livekit') {
+    const m = process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-turbo';
+    const v = process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() || '(default voice id)';
+    console.log('✓ LiveKit Inference TTS: worker will use', m, '+', v, '(LIVEKIT_API_KEY / SECRET)');
+  } else if (ttsMode === 'openai') {
     try {
       const key = process.env.OPENAI_API_KEY?.trim();
       if (!key) {
@@ -133,11 +140,6 @@ async function main(): Promise<void> {
       failures.push(`ElevenLabs: ${msg}`);
       console.error('✗ ElevenLabs:', msg);
     }
-  } else {
-    const msg =
-      'No TTS: set SALON_TTS_PROVIDER=openai with OPENAI_API_KEY, or set ELEVENLABS_API_KEY';
-    failures.push(msg);
-    console.error('✗ TTS:', msg);
   }
 
   // Salon routing sanity (optional)
