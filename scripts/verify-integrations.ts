@@ -1,5 +1,5 @@
 /**
- * Smoke-test LiveKit, Supabase, Twilio, and ElevenLabs credentials.
+ * Smoke-test LiveKit, Supabase, Twilio, and TTS credentials (ElevenLabs or OpenAI per SALON_TTS_PROVIDER).
  * Run: npx tsx scripts/verify-integrations.ts
  */
 import 'dotenv/config';
@@ -14,6 +14,27 @@ function httpsHost(): string {
     throw new Error('Missing LIVEKIT_URL');
   }
   return u.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
+}
+
+/** Mirrors `src/agent.ts` TTS selection for smoke tests. */
+function resolveTtsModeForVerify(): 'openai' | 'elevenlabs' | null {
+  const raw = process.env.SALON_TTS_PROVIDER?.trim().toLowerCase() || '';
+  const eleven =
+    process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
+  const oai = process.env.OPENAI_API_KEY?.trim() || '';
+  if (raw === 'openai') {
+    return 'openai';
+  }
+  if (raw === 'elevenlabs') {
+    return 'elevenlabs';
+  }
+  if (eleven) {
+    return 'elevenlabs';
+  }
+  if (oai) {
+    return 'openai';
+  }
+  return null;
 }
 
 async function main(): Promise<void> {
@@ -70,26 +91,53 @@ async function main(): Promise<void> {
     console.error('✗ LiveKit:', msg);
   }
 
-  // ElevenLabs (TTS)
-  try {
-    const apiKey =
-      process.env.ELEVEN_API_KEY?.trim() ||
-      process.env.ELEVENLABS_API_KEY?.trim();
-    if (!apiKey) {
-      throw new Error('ELEVENLABS_API_KEY or ELEVEN_API_KEY missing');
+  // TTS (ElevenLabs or OpenAI — same rules as the worker)
+  const ttsMode = resolveTtsModeForVerify();
+  if (ttsMode === 'openai') {
+    try {
+      const key = process.env.OPENAI_API_KEY?.trim();
+      if (!key) {
+        throw new Error('OPENAI_API_KEY missing (SALON_TTS_PROVIDER=openai)');
+      }
+      const res = await fetch('https://api.openai.com/v1/models', {
+        headers: { Authorization: `Bearer ${key}` },
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`${res.status} ${t.slice(0, 200)}`);
+      }
+      console.log('✓ OpenAI: API key accepted (TTS uses OPENAI_TTS_* / default gpt-4o-mini-tts + coral)');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      failures.push(`OpenAI TTS: ${msg}`);
+      console.error('✗ OpenAI TTS:', msg);
     }
-    const res = await fetch('https://api.elevenlabs.io/v1/voices?page_size=1', {
-      headers: { 'xi-api-key': apiKey },
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(`${res.status} ${t.slice(0, 200)}`);
+  } else if (ttsMode === 'elevenlabs') {
+    try {
+      const apiKey =
+        process.env.ELEVEN_API_KEY?.trim() ||
+        process.env.ELEVENLABS_API_KEY?.trim();
+      if (!apiKey) {
+        throw new Error('ELEVENLABS_API_KEY or ELEVEN_API_KEY missing');
+      }
+      const res = await fetch('https://api.elevenlabs.io/v1/voices?page_size=1', {
+        headers: { 'xi-api-key': apiKey },
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`${res.status} ${t.slice(0, 200)}`);
+      }
+      console.log('✓ ElevenLabs: API key valid (voices/TTS)');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      failures.push(`ElevenLabs: ${msg}`);
+      console.error('✗ ElevenLabs:', msg);
     }
-    console.log('✓ ElevenLabs: API key valid (voices/TTS)');
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    failures.push(`ElevenLabs: ${msg}`);
-    console.error('✗ ElevenLabs:', msg);
+  } else {
+    const msg =
+      'No TTS: set SALON_TTS_PROVIDER=openai with OPENAI_API_KEY, or set ELEVENLABS_API_KEY';
+    failures.push(msg);
+    console.error('✗ TTS:', msg);
   }
 
   // Salon routing sanity (optional)

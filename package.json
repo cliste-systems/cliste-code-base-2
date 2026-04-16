@@ -21,7 +21,6 @@
   "license": "ISC",
   "devDependencies": {
     "@types/node": "^25.5.0",
-    "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   },
   "dependencies": {
@@ -37,6 +36,7 @@
     "fuse.js": "^7.2.0",
     "livekit-server-sdk": "^2.15.0",
     "twilio": "^5.13.1",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "tsx": "^4.21.0"
   }
 }

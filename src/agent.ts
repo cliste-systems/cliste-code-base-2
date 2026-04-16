@@ -1,6 +1,7 @@
 import 'dotenv/config';
 
 import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
+import * as openai from '@livekit/agents-plugin-openai';
 import * as silero from '@livekit/agents-plugin-silero';
 import {
   type JobContext,
@@ -482,17 +483,39 @@ Time context for bookings (always use real calendar dates—never default to 202
     const sttPrimaryIsFlux = inferenceSttModel.toLowerCase().includes('flux');
     const sttIsDeepgram = inferenceSttModel.toLowerCase().includes('deepgram');
 
+    const ttsProviderRaw = process.env.SALON_TTS_PROVIDER?.trim().toLowerCase() || '';
     const elevenApiKey =
-      process.env.ELEVEN_API_KEY?.trim() ||
-      process.env.ELEVENLABS_API_KEY?.trim() ||
-      '';
-    if (!elevenApiKey) {
+      process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
+    const openaiApiKeyForTts = process.env.OPENAI_API_KEY?.trim() || '';
+    let ttsMode: 'elevenlabs' | 'openai';
+    if (ttsProviderRaw === 'openai') {
+      ttsMode = 'openai';
+    } else if (ttsProviderRaw === 'elevenlabs') {
+      ttsMode = 'elevenlabs';
+    } else if (elevenApiKey) {
+      ttsMode = 'elevenlabs';
+    } else if (openaiApiKeyForTts) {
+      ttsMode = 'openai';
+    } else {
       console.error(
-        'Missing ELEVEN_API_KEY or ELEVENLABS_API_KEY — set one in the worker environment (never commit keys).',
+        'No TTS credentials: set SALON_TTS_PROVIDER=openai with OPENAI_API_KEY, or set ELEVENLABS_API_KEY (and optional SALON_TTS_PROVIDER=elevenlabs).',
+      );
+      ctx.shutdown('missing_tts_credentials');
+      return;
+    }
+    if (ttsMode === 'openai' && !openaiApiKeyForTts) {
+      console.error('SALON_TTS_PROVIDER=openai requires OPENAI_API_KEY in the worker environment.');
+      ctx.shutdown('missing_openai_key');
+      return;
+    }
+    if (ttsMode === 'elevenlabs' && !elevenApiKey) {
+      console.error(
+        'SALON_TTS_PROVIDER=elevenlabs requires ELEVEN_API_KEY or ELEVENLABS_API_KEY (never commit keys).',
       );
       ctx.shutdown('missing_elevenlabs_key');
       return;
     }
+
     const elevenVoiceId =
       process.env.ELEVEN_VOICE_ID?.trim() || 'C92s6vssSLlabgIln1iY';
     const elevenModel =
@@ -501,6 +524,12 @@ Time context for bookings (always use real calendar dates—never default to 202
     const elevenVoiceStability = Number.parseFloat(process.env.ELEVEN_VOICE_STABILITY ?? '0.48');
     const elevenVoiceSimilarity = Number.parseFloat(process.env.ELEVEN_VOICE_SIMILARITY ?? '0.82');
     const elevenVoiceStyle = Number.parseFloat(process.env.ELEVEN_VOICE_STYLE ?? '0.35');
+
+    const openaiTtsModel =
+      (process.env.OPENAI_TTS_MODEL?.trim() || 'gpt-4o-mini-tts') as openai.TTSModels | string;
+    const openaiTtsVoice = (process.env.OPENAI_TTS_VOICE?.trim() || 'coral') as openai.TTSVoices;
+    const openaiTtsSpeed = Number.parseFloat(process.env.OPENAI_TTS_SPEED ?? '1');
+    const openaiTtsInstructions = process.env.OPENAI_TTS_INSTRUCTIONS?.trim();
 
     const endpointMinMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '280', 10);
     const endpointMaxMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '2200', 10);
@@ -546,17 +575,26 @@ Time context for bookings (always use real calendar dates—never default to 202
           // and can cause chat completion errors → no assistant text → silent call.
         },
       }),
-      tts: new elevenlabs.TTS({
-        apiKey: elevenApiKey,
-        voiceId: elevenVoiceId,
-        model: elevenModel,
-        streamingLatency: Number.isFinite(elevenStreamingLatency) ? elevenStreamingLatency : 4,
-        voiceSettings: {
-          stability: Number.isFinite(elevenVoiceStability) ? elevenVoiceStability : 0.48,
-          similarity_boost: Number.isFinite(elevenVoiceSimilarity) ? elevenVoiceSimilarity : 0.82,
-          style: Number.isFinite(elevenVoiceStyle) ? elevenVoiceStyle : 0.35,
-        },
-      }),
+      tts:
+        ttsMode === 'openai'
+          ? new openai.TTS({
+              apiKey: openaiApiKeyForTts,
+              model: openaiTtsModel,
+              voice: openaiTtsVoice,
+              speed: Number.isFinite(openaiTtsSpeed) ? openaiTtsSpeed : 1,
+              ...(openaiTtsInstructions ? { instructions: openaiTtsInstructions } : {}),
+            })
+          : new elevenlabs.TTS({
+              apiKey: elevenApiKey,
+              voiceId: elevenVoiceId,
+              model: elevenModel,
+              streamingLatency: Number.isFinite(elevenStreamingLatency) ? elevenStreamingLatency : 4,
+              voiceSettings: {
+                stability: Number.isFinite(elevenVoiceStability) ? elevenVoiceStability : 0.48,
+                similarity_boost: Number.isFinite(elevenVoiceSimilarity) ? elevenVoiceSimilarity : 0.82,
+                style: Number.isFinite(elevenVoiceStyle) ? elevenVoiceStyle : 0.35,
+              },
+            }),
       userData: sessionUserData,
       preemptiveGeneration: true,
       maxToolSteps: 5,
@@ -779,7 +817,7 @@ Time context for bookings (always use real calendar dates—never default to 202
       }
     });
 
-    /** Strips spoken tool-name junk from the LLM text stream before ElevenLabs so callers never hear it. */
+    /** Strips spoken tool-name junk from the LLM text stream before TTS so callers never hear it. */
     class SalonReceptionAgent extends voice.Agent<SalonAgentUserData> {
       override async ttsNode(
         text: ReadableStream<string>,
