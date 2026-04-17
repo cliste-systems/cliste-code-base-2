@@ -952,8 +952,17 @@ export class SalonTools {
     },
   });
 
-  /** Connect tier includes sendBookingLink; Native tier is in-call booking only. */
-  fncCtx(includeBookingLink: boolean) {
+  /**
+   * Build the tool surface for this call.
+   *
+   * - `includeBookingLink` — Connect tier only (Native is in-call booking).
+   * - `includePaymentTools` — only when STRIPE_SECRET_KEY is wired on this
+   *   worker. Exposing sendPaymentLink when Stripe is unconfigured means
+   *   the LLM sometimes decides to call it and then has to apologise on
+   *   the call — the prompt already hides the pay-online branch in that
+   *   case, so we also hide the tool to remove the temptation.
+   */
+  fncCtx(includeBookingLink: boolean, includePaymentTools: boolean = true) {
     const core = {
       matchServiceFromUtterance: this.matchServiceFromUtterance,
       checkAvailability: this.checkAvailability,
@@ -961,9 +970,9 @@ export class SalonTools {
       listMyBookings: this.listMyBookings,
       cancelBooking: this.cancelBooking,
       rescheduleBooking: this.rescheduleBooking,
-      sendPaymentLink: this.sendPaymentLink,
       endPhoneCall: this.endPhoneCall,
       createActionTicket: this.createActionTicket,
+      ...(includePaymentTools ? { sendPaymentLink: this.sendPaymentLink } : {}),
     };
     return includeBookingLink
       ? { sendBookingLink: this.sendBookingLink, ...core }
