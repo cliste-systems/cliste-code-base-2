@@ -25,6 +25,7 @@ import {
   createBookingCheckoutSession,
   paymentLinkOnlySmsBody,
 } from './payments.js';
+import { maskPhone } from './gdpr.js';
 import { matchServicesFromUtterance } from './service_menu_match.js';
 import { stripeIsConfigured } from './stripe.js';
 import { getSalonServices, getSupabaseClient } from './supabase.js';
@@ -318,7 +319,7 @@ export class SalonTools {
       }
       const body = `Book ${ud.salonName}: ${url}`;
       const sms = await sendBookingSms(normalizePhoneE164(customerPhoneNumber), body);
-      console.log('sendBookingLink', { customerPhoneNumber, sms });
+      console.log('sendBookingLink', { customerPhone: maskPhone(customerPhoneNumber), sms });
       if (sms.ok) {
         ud.sessionFlags.linkSent = true;
         ud.sessionFlags.smsSent += 1;
@@ -569,7 +570,7 @@ export class SalonTools {
         smsDetail = sms.detail;
         smsOk = sms.ok;
         console.log('bookAppointment confirmation SMS', {
-          customerPhone,
+          customerPhone: maskPhone(customerPhone),
           ok: sms.ok,
           detail: sms.detail,
           paymentPreference: effectivePaymentPref,
@@ -915,7 +916,10 @@ export class SalonTools {
         engineeringPriority: 'urgent',
       });
       ud.sessionFlags.actionTicketCreated = true;
-      console.log('createActionTicket', { organizationId: ud.organizationId, phone });
+      console.log('createActionTicket', {
+        organizationId: ud.organizationId,
+        phone: maskPhone(phone),
+      });
       return {
         ok: true,
         message:

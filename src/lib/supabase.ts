@@ -1,5 +1,13 @@
 import { type SupabaseClient, createClient } from '@supabase/supabase-js';
 
+import { cached } from './cache.js';
+
+/** Read-mostly salon config / catalogue cache window. Dashboard edits surface within this. */
+const SALON_CACHE_TTL_MS = Number.parseInt(
+  process.env.CLISTE_SALON_CACHE_TTL_MS ?? '60000',
+  10,
+);
+
 let client: SupabaseClient | null = null;
 
 function getSupabase(): SupabaseClient {
@@ -100,46 +108,50 @@ export async function getSalonConfigBySlug(slug: string): Promise<SalonConfig | 
 
 export async function getSalonForCall(input: { slug?: string; phone?: string }): Promise<SalonConfig | null> {
   const slug = input.slug?.trim();
-  if (slug) {
-    const bySlug = await getSalonConfigBySlug(slug);
-    if (bySlug) {
-      return bySlug;
-    }
-  }
-
   const phone = input.phone?.trim();
-  if (!phone) {
-    return null;
-  }
+  // Cache key includes both inputs so a slug-vs-phone mismatch can't return
+  // the wrong salon. Salon rows themselves contain no per-call PII.
+  const cacheKey = `salon:${slug ?? ''}:${phone ?? ''}`;
+  return cached(cacheKey, SALON_CACHE_TTL_MS, async () => {
+    if (slug) {
+      const bySlug = await getSalonConfigBySlug(slug);
+      if (bySlug) {
+        return bySlug;
+      }
+    }
+    if (!phone) {
+      return null;
+    }
+    const supabase = getSupabase();
+    for (const variant of phoneLookupVariants(phone)) {
+      const { data, error } = await supabase
+        .from('organizations')
+        .select(orgSelect)
+        .eq('phone_number', variant)
+        .maybeSingle();
 
-  const supabase = getSupabase();
-  for (const variant of phoneLookupVariants(phone)) {
+      if (error) {
+        throw error;
+      }
+      if (data) {
+        return data as SalonConfig;
+      }
+    }
+    return null;
+  });
+}
+
+export async function getSalonServices(organizationId: string): Promise<SalonServiceRow[]> {
+  return cached(`services:${organizationId}`, SALON_CACHE_TTL_MS, async () => {
+    const supabase = getSupabase();
     const { data, error } = await supabase
-      .from('organizations')
-      .select(orgSelect)
-      .eq('phone_number', variant)
-      .maybeSingle();
+      .from('services')
+      .select('id, name, description, price, duration_minutes')
+      .eq('organization_id', organizationId);
 
     if (error) {
       throw error;
     }
-    if (data) {
-      return data as SalonConfig;
-    }
-  }
-
-  return null;
-}
-
-export async function getSalonServices(organizationId: string): Promise<SalonServiceRow[]> {
-  const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from('services')
-    .select('id, name, description, price, duration_minutes')
-    .eq('organization_id', organizationId);
-
-  if (error) {
-    throw error;
-  }
-  return (data ?? []) as SalonServiceRow[];
+    return (data ?? []) as SalonServiceRow[];
+  });
 }

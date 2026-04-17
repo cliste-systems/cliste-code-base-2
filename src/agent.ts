@@ -21,6 +21,7 @@ import { formatBusinessHoursForPrompt } from './lib/business_hours.js';
 import { estimateCallCostUsd } from './lib/call_cost_estimate.js';
 import { postprocessCallTranscript } from './lib/call_postprocess.js';
 import { insertCallLog } from './lib/call_logs.js';
+import { maskPhone, redactPii } from './lib/gdpr.js';
 import { classifyCallerLine, type CallerLineInfo } from './lib/phone_classify.js';
 import { getSalonForCall, getSalonServices, type SalonServiceRow } from './lib/supabase.js';
 import {
@@ -576,8 +577,11 @@ Time context for bookings (always use real calendar dates—never default to 202
     const openaiTtsSpeed = Number.parseFloat(process.env.OPENAI_TTS_SPEED ?? '1');
     const openaiTtsInstructions = process.env.OPENAI_TTS_INSTRUCTIONS?.trim();
 
-    const endpointMinMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '280', 10);
-    const endpointMaxMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '2200', 10);
+    // 220ms is the new default (was 280). Tested as a sweet spot on SIP: still
+    // safely above the ~150ms typical inter-syllable pause, ~60ms faster
+    // turn-taking per call. Override with LIVEKIT_ENDPOINTING_MIN_MS in env.
+    const endpointMinMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '220', 10);
+    const endpointMaxMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '2000', 10);
     /** STT interim text can interrupt agent speech without the VAD minDuration guard; SIP echo/noise often yields one-word junk. Default 2 avoids killing the reply before the caller hears you. */
     const interruptionMinMs = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_MS ?? '500', 10);
     const interruptionMinWords = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_WORDS ?? '2', 10);
@@ -819,7 +823,13 @@ Time context for bookings (always use real calendar dates—never default to 202
         } else if (ud.sessionFlags.endPhoneCallUsed) {
           outcome = 'call_ended_by_agent';
         }
-        const verbatim = mergeTranscriptLines(transcriptParts);
+        const verbatimRaw = mergeTranscriptLines(transcriptParts);
+        // GDPR data minimisation: strip likely card-numbers / CVVs / IBAN / PPS
+        // from the transcript BEFORE we hand it to the post-process LLM
+        // (third-party processor) and BEFORE persisting to call_logs. Names,
+        // phones and booking refs stay because they are the legitimate
+        // purpose of the call and live alongside in `appointments`.
+        const verbatim = verbatimRaw ? redactPii(verbatimRaw) : null;
         let transcriptReview: string | null = null;
         let aiSummary: string | null = null;
         let didPostprocess = false;
@@ -831,8 +841,8 @@ Time context for bookings (always use real calendar dates—never default to 202
             outcome,
             inferenceLlmModel,
           });
-          transcriptReview = pp.transcriptReview || null;
-          aiSummary = pp.aiSummary || null;
+          transcriptReview = pp.transcriptReview ? redactPii(pp.transcriptReview) : null;
+          aiSummary = pp.aiSummary ? redactPii(pp.aiSummary) : null;
           didPostprocess = true;
         }
         const ttsModelForCost = ttsMode === 'openai' ? String(openaiTtsModel) : String(elevenModel);
@@ -884,14 +894,32 @@ Time context for bookings (always use real calendar dates—never default to 202
 
     await session.start({ agent, room: ctx.room });
 
+    // GDPR Art 13 — caller must be informed that they are speaking to an AI
+    // and that the call is processed for the booking before they share
+    // personal info. Set CLISTE_AI_DISCLOSURE_OPENING=off to suppress (only
+    // do that if the salon already plays a pre-call IVR notice).
+    const disclosureMode = (process.env.CLISTE_AI_DISCLOSURE_OPENING ?? 'on')
+      .trim()
+      .toLowerCase();
+    const aiDisclosure =
+      disclosureMode === 'off'
+        ? ''
+        : process.env.CLISTE_AI_DISCLOSURE_TEXT?.trim() ||
+          "Just so you know, I'm an AI assistant for the salon and your call is processed to help with your booking.";
+
     const fixedGreeting = salon.greeting?.trim();
     if (fixedGreeting) {
       session.say(fixedGreeting);
+      if (aiDisclosure) {
+        // A separate `say` so the salon's greeting plays in their voice and
+        // the disclosure is a clearly-distinct second sentence.
+        session.say(aiDisclosure);
+      }
     } else {
       await session.generateReply({
         instructions: `The caller just connected; they have not spoken yet. You speak first. Say ONE opening only, following this pattern exactly in spirit:
 "Hi, thanks for calling ${salon.name} — how can I help you today?"
-You may add ONE short clause (e.g. that you can help with bookings and services). Max 35 words. Use the salon name ${salon.name}. Never mention AI or robots. Match tone from owner instructions if any.`,
+You may add ONE short clause (e.g. that you can help with bookings and services). Max 35 words. Use the salon name ${salon.name}.${aiDisclosure ? ` Then add EXACTLY this sentence on a new breath, no paraphrasing: "${aiDisclosure}"` : ' Never mention AI or robots.'} Match tone from owner instructions if any.`,
       });
     }
   },

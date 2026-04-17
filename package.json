@@ -14,7 +14,9 @@
     "dispatch": "tsx scripts/dispatch.ts",
     "sip:wire-us": "tsx scripts/sip-wire-us-number.ts",
     "verify": "tsx scripts/verify-integrations.ts",
-    "report:costs": "tsx scripts/report-daily-costs.ts"
+    "report:costs": "tsx scripts/report-daily-costs.ts",
+    "gdpr:erase": "tsx scripts/gdpr-erase.ts",
+    "gdpr:purge-transcripts": "tsx scripts/gdpr-purge-transcripts.ts"
   },
   "keywords": [],
   "author": "",

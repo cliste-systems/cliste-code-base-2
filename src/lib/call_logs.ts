@@ -1,4 +1,5 @@
 import type { CallCostEstimateRecord } from './call_cost_estimate.js';
+import { redactPii } from './gdpr.js';
 import { getSupabaseClient } from './supabase.js';
 
 export async function insertCallLog(input: {
@@ -16,6 +17,12 @@ export async function insertCallLog(input: {
   costEstimate?: CallCostEstimateRecord | null;
 }): Promise<string | null> {
   const supabase = getSupabaseClient();
+  // Belt-and-braces: even if the caller passed an already-redacted transcript
+  // (agent.ts does this), we re-run redaction here so any future caller of
+  // insertCallLog cannot accidentally persist raw card / IBAN data.
+  const transcript = input.transcript ? redactPii(input.transcript) : null;
+  const transcriptReview = input.transcriptReview ? redactPii(input.transcriptReview) : null;
+  const aiSummary = input.aiSummary ? redactPii(input.aiSummary) : null;
   const { data, error } = await supabase
     .from('call_logs')
     .insert({
@@ -23,9 +30,9 @@ export async function insertCallLog(input: {
       caller_number: input.callerNumber,
       duration_seconds: input.durationSeconds,
       outcome: input.outcome,
-      transcript: input.transcript ?? null,
-      transcript_review: input.transcriptReview ?? null,
-      ai_summary: input.aiSummary ?? null,
+      transcript,
+      transcript_review: transcriptReview,
+      ai_summary: aiSummary,
       cost_estimate: input.costEstimate ?? null,
     })
     .select('id')
