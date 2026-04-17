@@ -21,6 +21,7 @@ import { formatBusinessHoursForPrompt } from './lib/business_hours.js';
 import { estimateCallCostUsd } from './lib/call_cost_estimate.js';
 import { postprocessCallTranscript } from './lib/call_postprocess.js';
 import { insertCallLog } from './lib/call_logs.js';
+import { classifyCallerLine, type CallerLineInfo } from './lib/phone_classify.js';
 import { getSalonForCall, getSalonServices, type SalonServiceRow } from './lib/supabase.js';
 import {
   SalonTools,
@@ -283,6 +284,41 @@ export default defineAgent({
       ? `- If the caller needs something you can't do, offer a clear alternative (callback from the team or a visit to the salon).`
       : `- If the caller needs something you can't do, offer a clear alternative (callback, link, or visit).`;
 
+    // Classify the calling line up-front so the prompt can carry the number +
+    // a one-liner steering the agent (skip asking when it's a mobile, ask once
+    // for an SMS-capable mobile when it's a landline, etc.). Saves 1–2 turns.
+    const earlyCallerNumberRaw = callerNumberFromParticipant(participant);
+    const callerLine: CallerLineInfo = classifyCallerLine(earlyCallerNumberRaw);
+    console.info('Caller line classified', {
+      raw: earlyCallerNumberRaw,
+      e164: callerLine.e164,
+      kind: callerLine.kind,
+      canReceiveSms: callerLine.canReceiveSms,
+    });
+
+    const callerLineBlock = (() => {
+      if (callerLine.kind === 'unknown' || !callerLine.e164) {
+        return `## Caller line (you already know it)
+- The caller's number is **withheld / unparseable** on this leg. You will need to ask for an SMS-capable mobile the normal way before bookAppointment.`;
+      }
+      if (callerLine.kind === 'irish_landline') {
+        return `## Caller line (you already know it)
+- The caller is on an **Irish landline**: **${callerLine.display}** (E.164 ${callerLine.e164}). Landlines **cannot receive SMS**.
+- **Do not** ask "what's your phone number" from scratch. Instead, when you reach the phone step, say something natural like *"I can see you're calling from ${callerLine.display}, but that looks like a landline so it can't get our text — what mobile would suit best for the confirmation?"* and use **the mobile they give** (Irish 08x or international) in **bookAppointment**.
+- If they say to use the landline anyway, explain once that the SMS will not arrive and read the booking reference aloud after you book.`;
+      }
+      if (callerLine.kind === 'international') {
+        return `## Caller line (you already know it)
+- The caller is on an **international** number: **${callerLine.display}** (E.164 ${callerLine.e164}). Most international lines accept SMS, but confirm before texting.
+- **Do not** ask "what's your phone number" from scratch. Say something like *"I have you on ${callerLine.display} — is that a mobile I can text the confirmation to?"* If yes, pass that number to **bookAppointment** without asking them to repeat it. If no, ask once for an SMS-capable mobile and use that.`;
+      }
+      // irish_mobile
+      return `## Caller line (you already know it)
+- The caller is on an **Irish mobile**: **${callerLine.display}** (E.164 ${callerLine.e164}). It can receive SMS.
+- **Do not** ask "what's your phone number" — that wastes a turn. Instead **confirm in one short line**: *"I'll text the confirmation to ${callerLine.display} — is that the best number for you?"* If they say yes (or "that's grand", "yeah", "perfect"), pass that exact number to **bookAppointment** as the **phone** argument and move on. If they ask you to use a different mobile, use that one instead.
+- Read the number naturally as the digits (e.g. *"oh-eight-seven, four-five-six, seven-eight-nine-zero"*)—**never** read it as "plus three five three…" on the call.`;
+    })();
+
     const systemPrompt = `You are the receptionist answering the phone for **${salon.name}**. Live phone call; salon tier: **${salon.tier}**. You are **not** a generic chatbot—you run the call like an experienced front desk: **you lead**, **one step at a time**.
 
 ## Call control — you dictate the flow (highest priority after owner instructions)
@@ -407,6 +443,7 @@ ${noMenuMatchOffer}
 
 ## Tools and actions
 - Before booking or sending an SMS, confirm the key details aloud (service, date/time, **name spelling from their spell-out**, phone).
+- **Phone capture (efficient — see "Caller line" section above):** When the caller's line is already an SMS-capable mobile, **confirm it in one short line** (e.g. *"I'll text the confirmation to that number — sound good?"*) instead of asking "what's your number" — that wastes a turn and annoys callers. Only ask for a different number when (a) the caller line is a landline / withheld, (b) they tell you to use a different mobile, or (c) the caller line failed to parse.
 - If a tool fails or returns an error, apologize briefly, explain simply, and offer the next step—don't pretend it worked.
 - **matchServiceFromUtterance** — When booking intent is clear but the **service** is unclear or STT looks wrong, call this with the caller's phrase **before** checkAvailability. It matches against the **actual menu** (fuzzy + optional intent model); **confirm** using **only the menu name** in speech (see **Never say the bad transcript word** above), then pass that exact name into **checkAvailability** / **bookAppointment**.
 - Use the **checkAvailability** tool with ISO-8601 datetimes (include timezone, e.g. ${exampleIso}). Pass **serviceName** when you have a **menu-listed** name (duration and matching). **Before** you say anything like "I'm checking" or "one moment" to the caller, **invoke this tool** in that same turn—do not describe checking without running it. Slots must fall **inside** dashboard opening hours when those are configured.
@@ -435,6 +472,8 @@ ${handoffAlternatives}
 - **Sound natural on the closing line:** Keep it **one sentence**, calm, not theatrical. **Avoid** loud or drawn-out **"Goodbye!"** (exclamation can make TTS sound odd); prefer *"bye for now"*, *"talk soon"*, or *"take care"*—no long vowel sounds or multiple exclamation marks.
 - **endPhoneCall** — Plays a brief phone hang-up tone and disconnects their line. Only after your closing line in that turn; then **stop**—do not generate more speech.
 
+${callerLineBlock}
+
 ## Services and facts you may rely on
 Services menu: ${servicesList}.
 
@@ -445,7 +484,7 @@ Time context for bookings (always use real calendar dates—never default to 202
 
     const salonTools = new SalonTools();
     const callStartedAt = Date.now();
-    const callerNumber = callerNumberFromParticipant(participant);
+    const callerNumber = earlyCallerNumberRaw;
     const roomName =
       (typeof ctx.room.name === 'string' && ctx.room.name.trim()) ||
       (ctx.job.room && typeof (ctx.job.room as { name?: string }).name === 'string'
