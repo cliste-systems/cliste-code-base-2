@@ -399,6 +399,24 @@ export default defineAgent({
       | 'dynamic';
     const useTurnDetector =
       (process.env.LIVEKIT_USE_TURN_DETECTOR?.trim().toLowerCase() || 'on') !== 'off';
+
+    // The EnglishModel constructor can throw synchronously if the HuggingFace
+    // model cache is empty (npm run download-files was skipped) or the
+    // onnxruntime-node build is missing for the target arch. If anything goes
+    // wrong, fall back to STT/VAD turn detection so the worker still ANSWERS
+    // calls — losing ~200ms of latency is infinitely better than dead air.
+    let turnDetectorInstance: InstanceType<typeof lkTurn.turnDetector.EnglishModel> | null = null;
+    if (useTurnDetector) {
+      try {
+        turnDetectorInstance = new lkTurn.turnDetector.EnglishModel();
+      } catch (err) {
+        console.error(
+          '[agent] EOU turn-detector could not be constructed — falling back to VAD/STT',
+          err instanceof Error ? err.message : err,
+        );
+        turnDetectorInstance = null;
+      }
+    }
     /** STT interim text can interrupt agent speech without the VAD minDuration guard; SIP echo/noise often yields one-word junk. Default 2 avoids killing the reply before the caller hears you. */
     const interruptionMinMs = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_MS ?? '500', 10);
     const interruptionMinWords = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_WORDS ?? '2', 10);
@@ -477,12 +495,9 @@ export default defineAgent({
         // inference per turn) predicts end-of-utterance from language
         // context — noticeably faster + more accurate than VAD silence alone,
         // especially when callers pause mid-sentence. Falls back to STT EOU
-        // cues on Deepgram if the detector is disabled in env.
-        turnDetection: useTurnDetector
-          ? new lkTurn.turnDetector.EnglishModel()
-          : sttIsDeepgram
-            ? 'stt'
-            : 'vad',
+        // cues on Deepgram if the detector is disabled in env or failed to
+        // initialise (e.g. model files not downloaded yet).
+        turnDetection: turnDetectorInstance ?? (sttIsDeepgram ? 'stt' : 'vad'),
         endpointing: {
           mode: endpointMode,
           minDelay: Number.isFinite(endpointMinMs) ? endpointMinMs : 200,

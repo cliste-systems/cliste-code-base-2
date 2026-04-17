@@ -7,7 +7,7 @@
   },
   "type": "module",
   "scripts": {
-    "start": "tsx src/agent.ts start",
+    "start": "npm run download-files && tsx src/agent.ts start",
     "dev": "tsx watch src/agent.ts dev",
     "dev:trace": "tsx watch src/agent.ts dev --log-level trace",
     "connect": "tsx src/agent.ts connect",
@@ -16,7 +16,8 @@
     "verify": "tsx scripts/verify-integrations.ts",
     "report:costs": "tsx scripts/report-daily-costs.ts",
     "gdpr:erase": "tsx scripts/gdpr-erase.ts",
-    "gdpr:purge-transcripts": "tsx scripts/gdpr-purge-transcripts.ts"
+    "gdpr:purge-transcripts": "tsx scripts/gdpr-purge-transcripts.ts",
+    "download-files": "tsx src/agent.ts download-files || echo '[download-files] failed — agent will fall back to VAD for turn detection'"
   },
   "keywords": [],
   "author": "",
