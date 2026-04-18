@@ -54,6 +54,7 @@ type AppointmentRow = {
   booking_reference: string;
   start_time: string;
   payment_status: string | null;
+  payment_link_sent_at: string | null;
   services: {
     name: string;
     price: unknown;
@@ -88,7 +89,7 @@ async function loadAppointmentForPayment(
     .from('appointments')
     .select(
       `id, organization_id, service_id, customer_phone, customer_name,
-       booking_reference, start_time, payment_status,
+       booking_reference, start_time, payment_status, payment_link_sent_at,
        services ( name, price ),
        organization:organizations ( id, name, slug, stripe_account_id, stripe_charges_enabled, application_fee_bps )`,
     )
@@ -285,6 +286,10 @@ export async function createBookingCheckoutSession(
         currency,
         stripe_checkout_session_id: session.id,
         stripe_payment_intent_id: paymentIntentId,
+        // First time we sent the link — used by the dashboard badge to
+        // show "Link sent X min ago, awaiting payment". Don't overwrite
+        // on regenerate so the salon sees the original wait time.
+        payment_link_sent_at: appt.payment_link_sent_at ?? new Date().toISOString(),
       })
       .eq('id', appt.id);
     if (updateErr) {
