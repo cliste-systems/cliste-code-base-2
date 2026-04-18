@@ -328,13 +328,9 @@ function bookingRescheduledSmsBody(input: {
 export class SalonTools {
   readonly sendBookingLink = llm.tool({
     description:
-      'Send the customer an SMS with the online booking link (Fresha or salon URL). Use when they prefer text.',
-    parameters: z.object({
-      customerPhoneNumber: z
-        .string()
-        .describe('Customer phone; Irish national ok, e.g. 0871234567 or +353871234567'),
-    }),
-    execute: async ({ customerPhoneNumber }, { ctx }) => {
+      'Send the CALLER (whoever is on the line) an SMS with the online booking link. The number is taken from the active call — you do NOT pass a phone number. Use when they prefer text. Only callable once per call.',
+    parameters: z.object({}),
+    execute: async (_args, { ctx }) => {
       const ud = readSalonUserData(ctx);
       const url = ud.bookingLinkUrl?.trim();
       if (!url) {
@@ -344,16 +340,38 @@ export class SalonTools {
           message: 'No booking link is configured. Offer to book by phone or read services aloud.',
         };
       }
+      // Hard cap: at most one booking-link SMS per call. Without this, a
+      // confused / jailbroken model could keep firing the tool — costs +
+      // harassment risk. Caller can always call back if they need it again.
+      if (ud.sessionFlags.linkSent) {
+        return {
+          sent: false,
+          message:
+            'A booking link has already been sent to the caller this call. Tell them it is on the way and do not send another.',
+        };
+      }
+      // SECURITY: only ever SMS the caller's own line, derived server-side
+      // from the SIP participant. The LLM is NOT allowed to choose a
+      // destination — that would let a jailbroken model SMS anyone (toll
+      // pumping, harassment, misdirected booking links).
+      const callerE164 = (ud.callerPhone || '').trim();
+      if (!callerE164 || !callerE164.startsWith('+') || callerE164.length < 8) {
+        return {
+          sent: false,
+          message:
+            'No valid caller phone number on this call (line withheld). Ask the caller to call back from a mobile.',
+        };
+      }
       const body = `Book ${ud.salonName}: ${url}`;
-      const sms = await sendBookingSms(normalizePhoneE164(customerPhoneNumber), body);
-      console.log('sendBookingLink', { customerPhone: maskPhone(customerPhoneNumber), sms });
+      const sms = await sendBookingSms(callerE164, body);
+      console.log('sendBookingLink', { to: maskPhone(callerE164), sms });
       if (sms.ok) {
         ud.sessionFlags.linkSent = true;
         ud.sessionFlags.smsSent += 1;
       }
       return {
         sent: sms.ok,
-        message: sms.ok ? 'SMS with booking link was sent.' : sms.detail,
+        message: sms.ok ? 'SMS with booking link was sent to the caller.' : sms.detail,
       };
     },
   });
@@ -615,7 +633,7 @@ export class SalonTools {
       const spokenTimeLocal = formatSlotTimeSpoken(start.toISOString(), ud.bookingTimeZone);
 
       const baseMessage = smsOk
-        ? `Booking saved (ref ${bookingReference}). Confirmation text sent to ${customerPhone}.`
+        ? `Booking saved (ref ${bookingReference}). Confirmation text sent to ${maskPhone(customerPhone)}.`
         : `Booking saved (ref ${bookingReference}). SMS did not go through (${smsDetail}).`;
 
       const hangupGuidance = smsOk
@@ -764,7 +782,7 @@ export class SalonTools {
 
       return {
         ok: true,
-        message: `Payment link texted to ${normalizedCaller} (${pay.currency.toUpperCase()} ${(pay.amountCents / 100).toFixed(2)}). Tell them the link is in a new text from the salon number; they tap it and pay on Stripe. Never ask for card numbers on the call.`,
+        message: `Payment link texted to ${maskPhone(normalizedCaller)} (${pay.currency.toUpperCase()} ${(pay.amountCents / 100).toFixed(2)}). Tell them the link is in a new text from the salon number; they tap it and pay on Stripe. Never ask for card numbers on the call.`,
       };
     },
   });

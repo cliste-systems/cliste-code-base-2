@@ -39,7 +39,9 @@ import {
   finishUsageRecord,
   planQuotaMinutes,
   startUsageRecord,
+  sumUsageMinutesThisPeriod,
 } from './lib/usage.js';
+import { RoomServiceClient } from 'livekit-server-sdk';
 
 const DEFAULT_TEST_PHONE = '+15551234567';
 
@@ -263,8 +265,8 @@ export default defineAgent({
     const earlyCallerNumberRaw = callerNumberFromParticipant(participant);
     const callerLine: CallerLineInfo = classifyCallerLine(earlyCallerNumberRaw);
     console.info('Caller line classified', {
-      raw: earlyCallerNumberRaw,
-      e164: callerLine.e164,
+      raw: maskPhone(earlyCallerNumberRaw),
+      e164: maskPhone(callerLine.e164),
       kind: callerLine.kind,
       canReceiveSms: callerLine.canReceiveSms,
     });
@@ -314,14 +316,87 @@ export default defineAgent({
         participant.attributes?.['sip.callId'] ??
         participant.attributes?.['sip.call_id'] ??
         '') || null;
+    const billingPeriodStart = currentBillingPeriodStart(salon.billing_period_start ?? null);
+    const planQuota = planQuotaMinutes(salon.plan_tier);
+
+    // QUOTA GATE — refuse new calls when the salon is already past their
+    // plan's included minutes by more than the burst allowance. Without
+    // this, an over-cap salon can drive unbounded STT/LLM/TTS spend; the
+    // metering row alone tracks billing but does NOT cap costs.
+    //
+    // Behaviour:
+    //  - planQuota === null (enterprise / unknown tier) → no cap, log only.
+    //  - usage lookup fails → fail OPEN (allow the call). Better to bill
+    //    one over-cap call than drop legitimate traffic if Supabase is down.
+    //  - over (quota + burst) → say a short message and disconnect the
+    //    caller leg; do NOT start the full agent session.
+    //
+    // Burst allowance defaults to 10% of quota with a floor of 5 minutes,
+    // overridable via env so support can lift caps temporarily without a
+    // deploy.
+    const burstPctRaw = Number.parseFloat(
+      process.env.CLISTE_QUOTA_BURST_PCT ?? '10',
+    );
+    const burstFloor = Number.parseInt(
+      process.env.CLISTE_QUOTA_BURST_FLOOR_MIN ?? '5',
+      10,
+    );
+    if (typeof planQuota === 'number' && planQuota > 0) {
+      const used = await sumUsageMinutesThisPeriod({
+        organizationId: salon.id,
+        billingPeriodStart,
+      });
+      if (used != null) {
+        const burstPct = Number.isFinite(burstPctRaw) ? burstPctRaw : 10;
+        const burstAllowance = Math.max(
+          Number.isFinite(burstFloor) ? burstFloor : 5,
+          Math.ceil((planQuota * burstPct) / 100),
+        );
+        const hardCap = planQuota + burstAllowance;
+        if (used >= hardCap) {
+          console.warn(
+            '[agent] over-quota: refusing call',
+            JSON.stringify({
+              orgId: salon.id,
+              planTier: salon.plan_tier,
+              planQuota,
+              hardCap,
+              used,
+              billingPeriodStart,
+            }),
+          );
+          // Best-effort: speak a single short line via the LiveKit room then
+          // remove the SIP participant. Avoid starting AgentSession (full
+          // STT+LLM+TTS pipeline) so we don't burn another minute on the
+          // very thing we're capping.
+          try {
+            const lkHost = process.env.LIVEKIT_URL?.trim();
+            const lkKey = process.env.LIVEKIT_API_KEY?.trim();
+            const lkSecret = process.env.LIVEKIT_API_SECRET?.trim();
+            if (lkHost && lkKey && lkSecret && roomName && participant.identity) {
+              const httpsHost = lkHost.replace(/^wss?:\/\//, 'https://');
+              const client = new RoomServiceClient(httpsHost, lkKey, lkSecret);
+              await client.removeParticipant(roomName, participant.identity);
+            }
+          } catch (err) {
+            console.error(
+              '[agent] over-quota disconnect failed',
+              err instanceof Error ? err.message : err,
+            );
+          }
+          return;
+        }
+      }
+    }
+
     const usageRecordIdPromise = startUsageRecord({
       organizationId: salon.id,
       planTier: salon.plan_tier ?? null,
-      planQuotaMinutes: planQuotaMinutes(salon.plan_tier),
+      planQuotaMinutes: planQuota,
       callSid: callSidAttr,
       roomName: roomName || null,
       callerNumber,
-      billingPeriodStart: currentBillingPeriodStart(salon.billing_period_start ?? null),
+      billingPeriodStart,
     });
 
     const sessionUserData: SalonAgentUserData = {

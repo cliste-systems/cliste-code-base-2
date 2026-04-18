@@ -112,6 +112,63 @@ export function currentBillingPeriodStart(
 }
 
 /**
+ * Sum the salon's billable minutes inside the current billing period. Used
+ * by the agent to decide whether to refuse a new call when the salon is
+ * already over their plan quota — the metering row alone tracks billing
+ * but does NOT cap costs without this gate.
+ *
+ * Counts BOTH closed records (minutes_billable) AND open ones (rounded up
+ * from `started_at` → now) so a long in-flight call still counts toward
+ * the cap. Returns null on DB error so callers can fail-open if metering
+ * is broken (better to let the call through than to drop legitimate
+ * traffic if Supabase is having a moment).
+ */
+export async function sumUsageMinutesThisPeriod(input: {
+  organizationId: string;
+  billingPeriodStart: string;
+}): Promise<number | null> {
+  try {
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase
+      .from('usage_records')
+      .select('minutes_billable, started_at, ended_at')
+      .eq('organization_id', input.organizationId)
+      .eq('billing_period_start', input.billingPeriodStart);
+    if (error) {
+      console.warn('[usage] sumUsageMinutesThisPeriod failed', error.message);
+      return null;
+    }
+    let total = 0;
+    const now = Date.now();
+    for (const row of data ?? []) {
+      const billed =
+        typeof (row as { minutes_billable?: number }).minutes_billable === 'number'
+          ? (row as { minutes_billable: number }).minutes_billable
+          : null;
+      if (billed != null) {
+        total += billed;
+        continue;
+      }
+      // Open record — estimate from started_at so a long ongoing call counts.
+      const startedAt = (row as { started_at?: string | null }).started_at;
+      if (startedAt) {
+        const startedMs = Date.parse(startedAt);
+        if (Number.isFinite(startedMs)) {
+          total += Math.max(0, Math.ceil((now - startedMs) / 60_000));
+        }
+      }
+    }
+    return total;
+  } catch (err) {
+    console.warn(
+      '[usage] sumUsageMinutesThisPeriod threw',
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+/**
  * Minutes included per plan tier. Kept in sync with cliste-code-base-1's
  * `src/lib/cliste-plans.ts`. Returns null for unknown/enterprise tiers so
  * the metering row doesn't claim a false quota.
