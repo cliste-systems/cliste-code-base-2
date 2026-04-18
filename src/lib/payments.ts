@@ -205,7 +205,8 @@ export async function createBookingCheckoutSession(
 
   try {
     const stripe = getStripeClient();
-    const session = await stripe.checkout.sessions.create({
+    const session = await stripe.checkout.sessions.create(
+      {
       mode: 'payment',
       // Stripe requires success_url for `mode: 'payment'` Checkout Sessions.
       // Without it the API 400s with `parameter_missing: success_url` and the
@@ -247,7 +248,16 @@ export async function createBookingCheckoutSession(
       },
       // 24h grace so a customer who pays later in the day still completes.
       expires_at: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
-    });
+      },
+      {
+        // Idempotent across retries — if the agent's tool gets retried (call
+        // disconnect mid-tool, queue replay), we return the SAME Checkout
+        // Session URL instead of stacking duplicate sessions on the
+        // appointment. Key includes a 5-minute bucket so a stale link can
+        // be regenerated when the customer rings back hours later.
+        idempotencyKey: `voice-checkout-${appt.id}-${Math.floor(Date.now() / (5 * 60 * 1000))}`,
+      },
+    );
 
     if (!session.url) {
       return {

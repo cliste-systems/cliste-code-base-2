@@ -17,6 +17,10 @@ import type { RemoteParticipant } from '@livekit/rtc-node';
 import { fileURLToPath } from 'node:url';
 
 import { stripForbiddenTtsPhrasesStreaming } from './lib/tts_text_sanitize.js';
+import {
+  assertAiDisclosureSafeForBoot,
+  resolveAiDisclosure,
+} from './lib/ai_disclosure.js';
 import { linkAppointmentToCallLog } from './lib/booking.js';
 import { formatBusinessHoursForPrompt } from './lib/business_hours.js';
 import { estimateCallCostUsd } from './lib/call_cost_estimate.js';
@@ -1004,18 +1008,12 @@ export default defineAgent({
 
     await session.start({ agent, room: ctx.room });
 
-    // GDPR Art 13 — caller must be informed that they are speaking to an AI
-    // and that the call is processed for the booking before they share
-    // personal info. Set CLISTE_AI_DISCLOSURE_OPENING=off to suppress (only
-    // do that if the salon already plays a pre-call IVR notice).
-    const disclosureMode = (process.env.CLISTE_AI_DISCLOSURE_OPENING ?? 'on')
-      .trim()
-      .toLowerCase();
-    const aiDisclosure =
-      disclosureMode === 'off'
-        ? ''
-        : process.env.CLISTE_AI_DISCLOSURE_TEXT?.trim() ||
-          "Just so you know, I'm an AI assistant for the salon and your call is processed to help with your booking.";
+    // GDPR Art 13(2)(f) + EU AI Act Art 50(1) — caller must be informed
+    // they are speaking to an AI before sharing personal info. Resolution
+    // is centralised in lib/ai_disclosure.ts so the same rules apply at
+    // boot (assert) and per-call. In production, "off" is refused unless
+    // an explicit override token is set; non-prod warns instead.
+    const aiDisclosure = resolveAiDisclosure().text;
 
     const fixedGreeting = salon.greeting?.trim();
     if (fixedGreeting) {
@@ -1038,6 +1036,12 @@ You may add ONE short clause (e.g. that you can help with bookings and services)
 const _agentNameRaw = process.env.LIVEKIT_AGENT_NAME;
 const resolvedAgentName =
   _agentNameRaw === undefined ? 'cliste-salon-node' : _agentNameRaw.trim();
+
+// Fail-fast at boot if the AI-disclosure config is unsafe for this
+// environment. We do this AFTER dotenv (top of file) and BEFORE
+// cli.runApp so a misconfigured prod worker never registers with
+// LiveKit and never picks up a call.
+assertAiDisclosureSafeForBoot();
 
 cli.runApp(
   new WorkerOptions({
