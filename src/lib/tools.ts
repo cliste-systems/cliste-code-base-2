@@ -111,6 +111,33 @@ export function assistantTextSoundsLikeFakeHangup(text: string): boolean {
 }
 
 /**
+ * Did the assistant just say a clean farewell line? Used to auto-fire the
+ * hang-up when the LLM forgets to invoke endPhoneCall in the same turn.
+ * Kept narrow on purpose — only matches lines that are clearly a goodbye,
+ * not "have a good day, will I check that?" mid-conversation phrasing.
+ */
+export function assistantTextSoundsLikeGoodbye(text: string): boolean {
+  const t = text
+    .replace(/\*+/g, ' ')
+    .replace(/`+/g, ' ')
+    .replace(/[!?.,]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  if (!t) return false;
+  // Cap length — a true sign-off is short. Long replies are still
+  // mid-conversation even if they happen to contain "talk soon".
+  if (t.split(' ').length > 14) return false;
+  return (
+    /\b(talk soon|talk to you soon|take care|see you (soon|then|tomorrow|next time)|see ya|cheers now|bye for now|bye bye|goodbye|grand so bye|all the best|have a (good|lovely|grand) (day|one|evening|weekend))\b/.test(
+      t,
+    ) ||
+    // "thanks for ringing/calling" with no follow-up question is a sign-off.
+    (/\bthanks for (ringing|calling|the call)\b/.test(t) && !/\?/.test(text))
+  );
+}
+
+/**
  * Plays hang-up tone (if available) and removes the SIP participant. Shared by the endPhoneCall tool
  * and the agent output guard when the model says “end phone call” in speech.
  */

@@ -30,6 +30,7 @@ import { getSalonForCall, getSalonServices, type SalonServiceRow } from './lib/s
 import {
   SalonTools,
   assistantTextSoundsLikeFakeHangup,
+  assistantTextSoundsLikeGoodbye,
   disconnectSalonCallerLeg,
   type SalonAgentUserData,
 } from './lib/tools.js';
@@ -752,6 +753,34 @@ export default defineAgent({
           } catch (e) {
             console.error('[AgentSession] filler-no-tool recovery failed', e);
           }
+        }, delay);
+      }
+      // Agent said a clear goodbye line ("talk soon", "see you tomorrow",
+      // "thanks for ringing") but didn't invoke endPhoneCall. Force the
+      // disconnect after a short grace window so the real tool call (if
+      // it's about to land) wins. Only armed once a booking is in the bag
+      // OR an action-ticket / link-sent flag is set — otherwise we'd hang
+      // up if she casually said "have a good day" mid-conversation.
+      if (
+        role === 'assistant' &&
+        !session.userData.sessionFlags.endPhoneCallUsed &&
+        (session.userData.sessionFlags.appointmentBooked ||
+          session.userData.sessionFlags.linkSent ||
+          session.userData.sessionFlags.actionTicketCreated) &&
+        assistantTextSoundsLikeGoodbye(text)
+      ) {
+        clearPostBookingGoodbyeTimer();
+        const delay = 1500;
+        postBookingGoodbyeTimer = setTimeout(() => {
+          postBookingGoodbyeTimer = null;
+          const ud = session.userData;
+          if (ud.sessionFlags.endPhoneCallUsed) return;
+          console.warn(
+            '[agent] assistant said goodbye but endPhoneCall did not fire — forcing disconnect',
+          );
+          void disconnectSalonCallerLeg(session, ud, async () => {
+            await new Promise((r) => setTimeout(r, 650));
+          });
         }, delay);
       }
       if (role === 'assistant' && assistantTextSoundsLikeFakeHangup(text)) {
