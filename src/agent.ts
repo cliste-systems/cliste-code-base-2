@@ -421,12 +421,16 @@ export default defineAgent({
     const openaiTtsSpeed = Number.parseFloat(process.env.OPENAI_TTS_SPEED ?? '1');
     const openaiTtsInstructions = process.env.OPENAI_TTS_INSTRUCTIONS?.trim();
 
-    // With the turn-detector EOU model, 'dynamic' endpointing adapts the
-    // silence threshold to each caller's natural rhythm. minDelay 200 gives
-    // fast replies without clipping; maxDelay 2500 protects longer pauses
-    // mid-spell ("B…R…E…N…"). Override via env if needed.
-    const endpointMinMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '200', 10);
-    const endpointMaxMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '2500', 10);
+    // Endpointing budget — the silence window after a caller stops speaking
+    // before the agent commits to "they're done" and starts generating.
+    // Aggressive defaults because callers flagged long gaps: minDelay 80ms
+    // fires almost immediately on clear EOU cues, maxDelay 900ms still
+    // tolerates a short mid-sentence pause but no longer budgets for full
+    // mid-spell hesitation (we instead rely on the EOU model + preemptive
+    // generation to handle that). Raise LIVEKIT_ENDPOINTING_MAX_MS if you
+    // see the agent cutting callers off mid-thought.
+    const endpointMinMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '80', 10);
+    const endpointMaxMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '900', 10);
     const endpointMode = (process.env.LIVEKIT_ENDPOINTING_MODE?.trim() || 'dynamic') as
       | 'fixed'
       | 'dynamic';
@@ -450,9 +454,13 @@ export default defineAgent({
         turnDetectorInstance = null;
       }
     }
-    /** STT interim text can interrupt agent speech without the VAD minDuration guard; SIP echo/noise often yields one-word junk. Default 2 avoids killing the reply before the caller hears you. */
-    const interruptionMinMs = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_MS ?? '500', 10);
-    const interruptionMinWords = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_WORDS ?? '2', 10);
+    // Barge-in sensitivity. Previously required 500ms + 2 words to interrupt
+    // the agent, which callers experienced as "I have to talk twice for her
+    // to stop". Tighter defaults: 200ms + 1 word means one confident "no"
+    // or "wait" will cut her off. Watch for false interrupts from SIP echo;
+    // raise LIVEKIT_INTERRUPTION_MIN_MS back toward 350 if that happens.
+    const interruptionMinMs = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_MS ?? '200', 10);
+    const interruptionMinWords = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_WORDS ?? '1', 10);
 
     const menuTokens = services.flatMap((row) => {
       const n = typeof row.name === 'string' ? row.name.trim() : '';
@@ -475,8 +483,11 @@ export default defineAgent({
           smart_format: false,
           punctuate: true,
           interim_results: true,
-          // Slightly higher than 45ms: short words (“fade”, etc.) get a bit more audio before EOU.
-          endpointing: Number.parseInt(process.env.LIVEKIT_STT_ENDPOINTING_MS ?? '120', 10) || 120,
+          // Deepgram endpointing in ms — how long of silence before it flushes
+          // a final transcript. 60ms keeps the pipeline snappy; combined with
+          // preemptiveGeneration + the EOU model, this is what lets the agent
+          // start responding before the caller's last word is even finalised.
+          endpointing: Number.parseInt(process.env.LIVEKIT_STT_ENDPOINTING_MS ?? '60', 10) || 60,
           filler_words: true,
           ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
         },
