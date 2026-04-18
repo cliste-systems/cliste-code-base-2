@@ -42,6 +42,7 @@ import {
   currentBillingPeriodStart,
   finishUsageRecord,
   planQuotaMinutes,
+  reapZombieUsageRows,
   startUsageRecord,
   sumUsageMinutesThisPeriod,
 } from './lib/usage.js';
@@ -1042,6 +1043,11 @@ const resolvedAgentName =
 // cli.runApp so a misconfigured prod worker never registers with
 // LiveKit and never picks up a call.
 assertAiDisclosureSafeForBoot();
+
+// Best-effort: close out any usage rows whose worker died mid-call (no
+// ended_at, started >6h ago). Without this, a single crashed call can
+// poison the quota gate forever and lock the salon out of new calls.
+void reapZombieUsageRows();
 
 cli.runApp(
   new WorkerOptions({
