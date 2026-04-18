@@ -575,6 +575,39 @@ export default defineAgent({
     let silenceRecoveryCount = 0;
     /** If the model says "end phone call" as speech, we still disconnect after a short delay (real tool may run first). */
     let fakeHangupGuardTimer: ReturnType<typeof setTimeout> | null = null;
+    /**
+     * Guard against "one moment while I check the diary…" + NO tool call.
+     * The prompt instructs her to ALWAYS pair a filler with the matching
+     * tool call in the same turn, but the LLM occasionally forgets, leaving
+     * the caller staring at silence after the filler TTS finishes. This
+     * timer fires iff a filler was spoken AND no tool executed shortly
+     * after — we then nudge her to either run the tool or actually answer.
+     */
+    let fillerNoToolGuardTimer: ReturnType<typeof setTimeout> | null = null;
+    const fillerNoToolGuardMs = Number.parseInt(
+      process.env.LIVEKIT_FILLER_NO_TOOL_MS ?? '1800',
+      10,
+    );
+    const clearFillerNoToolGuardTimer = () => {
+      if (fillerNoToolGuardTimer) {
+        clearTimeout(fillerNoToolGuardTimer);
+        fillerNoToolGuardTimer = null;
+      }
+    };
+    const assistantTextSoundsLikeFiller = (t: string): boolean => {
+      const s = t.toLowerCase();
+      // Match the exact filler openings the prompt lists. Kept narrow so
+      // ordinary sentences containing "moment" don't trip it.
+      return (
+        /\bone moment\b/.test(s) ||
+        /\blet me (have a look|check|see|pull)/.test(s) ||
+        /\bgive me a (second|sec|moment)/.test(s) ||
+        /\bbear with me\b/.test(s) ||
+        /\bpulling up\b/.test(s) ||
+        /\bpopping that in\b/.test(s) ||
+        /\blet me get that in\b/.test(s)
+      );
+    };
 
     const clearSilenceRecoveryTimer = () => {
       if (silenceRecoveryTimer) {
@@ -620,6 +653,7 @@ export default defineAgent({
     session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
       if (ev.newState === 'speaking') {
         clearSilenceRecoveryTimer();
+        clearFillerNoToolGuardTimer();
       }
     });
 
@@ -649,6 +683,26 @@ export default defineAgent({
       if (!text) {
         return;
       }
+      if (role === 'assistant' && assistantTextSoundsLikeFiller(text)) {
+        clearFillerNoToolGuardTimer();
+        const delay = Number.isFinite(fillerNoToolGuardMs) ? fillerNoToolGuardMs : 1800;
+        fillerNoToolGuardTimer = setTimeout(() => {
+          fillerNoToolGuardTimer = null;
+          try {
+            if (session.userState === 'speaking') return;
+            if (session.agentState !== 'listening') return;
+            console.warn(
+              '[agent] assistant said a filler ("one moment…") but no tool ran — nudging follow-up',
+            );
+            void session.generateReply({
+              instructions:
+                'You just told the caller "one moment" or similar but did not actually run a tool, so they are hearing dead air. Right now, either (a) invoke the tool you implied — usually checkAvailability with a concrete ISO, or listMyBookings, or cancelBooking — OR (b) if you cannot because you lack a detail, ask the single next question from the CALL SKELETON (service, time, name+spell, or mobile). One short sentence. Do NOT apologise for the pause; just move forward.',
+            });
+          } catch (e) {
+            console.error('[AgentSession] filler-no-tool recovery failed', e);
+          }
+        }, delay);
+      }
       if (role === 'assistant' && assistantTextSoundsLikeFakeHangup(text)) {
         clearFakeHangupGuardTimer();
         fakeHangupGuardTimer = setTimeout(() => {
@@ -675,6 +729,7 @@ export default defineAgent({
     });
 
     session.on(voice.AgentSessionEventTypes.FunctionToolsExecuted, (ev) => {
+      clearFillerNoToolGuardTimer();
       for (const [call, out] of voice.zipFunctionCallsAndOutputs(ev)) {
         transcriptParts.push({
           at: call.createdAt ?? ev.createdAt,
@@ -700,6 +755,7 @@ export default defineAgent({
       callLogWritten = true;
       clearSilenceRecoveryTimer();
       clearFakeHangupGuardTimer();
+      clearFillerNoToolGuardTimer();
       try {
         const ud = session.userData;
         if (!ud?.organizationId) {
