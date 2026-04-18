@@ -401,11 +401,19 @@ export default defineAgent({
     const elevenModel =
       (process.env.ELEVEN_TTS_MODEL?.trim() || 'eleven_flash_v2_5') as elevenlabs.TTSModels;
     const elevenStreamingLatency = Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '4', 10);
-    // Flash sounds best with slightly higher stability + lower style than turbo:
-    // turbo's defaults (0.48 / 0.35) overshoot on flash and cause mushy prosody.
-    const elevenVoiceStability = Number.parseFloat(process.env.ELEVEN_VOICE_STABILITY ?? '0.55');
-    const elevenVoiceSimilarity = Number.parseFloat(process.env.ELEVEN_VOICE_SIMILARITY ?? '0.80');
-    const elevenVoiceStyle = Number.parseFloat(process.env.ELEVEN_VOICE_STYLE ?? '0.25');
+    // Voice-prosody tuning. Prior defaults (stability=0.55, style=0.25) were
+    // making the voice sound *shouty* on phone audio and occasionally glitch
+    // on confirmations (callers reported a "glitch" when their name was
+    // echoed back). Root cause: nonzero `style` on flash_v2_5 overshoots and
+    // exaggerates pitch; too-low stability lets the model re-emote line by
+    // line, producing inconsistent volume. New defaults:
+    //  - stability 0.72  → calmer, more consistent across turns
+    //  - similarity 0.85 → preserves the Irish voice clone
+    //  - style     0.00  → eliminates the "exaggeration" that caused shouting
+    // Override any of these via env without redeploying code.
+    const elevenVoiceStability = Number.parseFloat(process.env.ELEVEN_VOICE_STABILITY ?? '0.72');
+    const elevenVoiceSimilarity = Number.parseFloat(process.env.ELEVEN_VOICE_SIMILARITY ?? '0.85');
+    const elevenVoiceStyle = Number.parseFloat(process.env.ELEVEN_VOICE_STYLE ?? '0');
 
     const openaiTtsModel =
       (process.env.OPENAI_TTS_MODEL?.trim() || 'gpt-4o-mini-tts') as openai.TTSModels | string;

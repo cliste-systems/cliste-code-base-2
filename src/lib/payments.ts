@@ -27,6 +27,7 @@ export type AppointmentPaymentResult =
   | {
       ok: true;
       url: string;
+      shortUrl: string;
       sessionId: string;
       paymentIntentId: string | null;
       amountCents: number;
@@ -285,9 +286,15 @@ export async function createBookingCheckoutSession(
       );
     }
 
+    // Short SMS-friendly redirector hosted on the main app. We pass this to
+    // customers instead of the 140-char Stripe Checkout URL so the text looks
+    // trustworthy and fits in one segment. /p/<ref> 302s to Stripe on tap.
+    const shortUrl = `${origin}/p/${encodeURIComponent(appt.booking_reference)}`;
+
     return {
       ok: true,
       url: session.url,
+      shortUrl,
       sessionId: session.id,
       paymentIntentId,
       amountCents,
@@ -338,7 +345,9 @@ export function bookingPaymentSmsBody(input: {
     when = input.start.toLocaleString('en-IE', { hour12: true });
   }
   const price = formatMoney(input.amountCents, input.currency);
-  return `Hi ${first}, your booking at ${input.salonName} is confirmed: ${input.serviceName} on ${when} (ref ${input.bookingReference}). Pay ${price} securely here: ${input.paymentUrl} — ${input.salonName}`;
+  // Kept under 160 chars where possible so it's 1 SMS segment, and leads with
+  // salon name for brand recognition in the preview.
+  return `${input.salonName}: ${input.serviceName} on ${when} booked (ref ${input.bookingReference}). Pay ${price}: ${input.paymentUrl}`;
 }
 
 /** Follow-up SMS when the agent sends just a payment link after a prior confirmation text. */
@@ -351,9 +360,43 @@ export function paymentLinkOnlySmsBody(input: {
   paymentUrl: string;
   bookingReference: string;
 }): string {
-  const first = input.customerName.trim().split(/\s+/)[0] || 'there';
   const price = formatMoney(input.amountCents, input.currency);
-  return `Hi ${first}, here is the secure payment link for your ${input.serviceName} at ${input.salonName} (ref ${input.bookingReference}): pay ${price} → ${input.paymentUrl}`;
+  return `${input.salonName}: pay ${price} for your ${input.serviceName} (ref ${input.bookingReference}): ${input.paymentUrl}`;
+}
+
+/**
+ * Short post-payment "you're all set" SMS, sent from the main app's Stripe
+ * webhook after `payment_intent.succeeded`. This is *in addition to* the
+ * booking SMS that already went out at booking time — separates the
+ * "pay here" text from the "thanks, payment received" receipt.
+ */
+export function paymentReceiptSmsBody(input: {
+  customerName: string;
+  salonName: string;
+  serviceName: string;
+  start: Date;
+  bookingReference: string;
+  amountCents: number;
+  currency: string;
+  timeZone: string;
+}): string {
+  const first = input.customerName.trim().split(/\s+/)[0] || 'there';
+  let when: string;
+  try {
+    when = input.start.toLocaleString('en-IE', {
+      timeZone: input.timeZone,
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  } catch {
+    when = input.start.toLocaleString('en-IE', { hour12: true });
+  }
+  const price = formatMoney(input.amountCents, input.currency);
+  return `${input.salonName}: payment of ${price} received — see you ${when} (ref ${input.bookingReference}). Thanks ${first}!`;
 }
 
 function formatMoney(cents: number, currency: string): string {

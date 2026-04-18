@@ -544,7 +544,7 @@ export class SalonTools {
               bookingReference,
               amountCents: pay.amountCents,
               currency: pay.currency,
-              paymentUrl: pay.url,
+              paymentUrl: pay.shortUrl,
               timeZone: ud.bookingTimeZone,
             });
             effectivePaymentPref = 'online';
@@ -720,7 +720,7 @@ export class SalonTools {
         serviceName,
         amountCents: pay.amountCents,
         currency: pay.currency,
-        paymentUrl: pay.url,
+        paymentUrl: pay.shortUrl,
         bookingReference: ref,
       });
 
