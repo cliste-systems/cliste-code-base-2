@@ -584,6 +584,37 @@ export default defineAgent({
      * after — we then nudge her to either run the tool or actually answer.
      */
     let fillerNoToolGuardTimer: ReturnType<typeof setTimeout> | null = null;
+    /**
+     * After a successful booking, if the caller's next utterance is a clear
+     * goodbye ("thanks", "no that's grand", "bye", etc) and the model still
+     * doesn't invoke endPhoneCall within a few seconds, force the disconnect.
+     * Stops the "I had to say bye for her to hang up" feedback.
+     */
+    let postBookingGoodbyeTimer: ReturnType<typeof setTimeout> | null = null;
+    const postBookingGoodbyeMs = Number.parseInt(
+      process.env.LIVEKIT_POST_BOOKING_GOODBYE_MS ?? '3500',
+      10,
+    );
+    const clearPostBookingGoodbyeTimer = () => {
+      if (postBookingGoodbyeTimer) {
+        clearTimeout(postBookingGoodbyeTimer);
+        postBookingGoodbyeTimer = null;
+      }
+    };
+    const callerSoundsDone = (t: string): boolean => {
+      const s = t.toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!s) return false;
+      // Anything 5+ words is probably a new request; only short ack-style
+      // utterances should auto-close.
+      const wc = s.split(' ').length;
+      if (wc > 6) return false;
+      return (
+        /\b(no|nope|nah)\b/.test(s) && /\b(thanks?|thank you|grand|all good|that's it|that's grand|good)\b/.test(s) ||
+        /^(bye|goodbye|cheers|talk soon|see ya|see you|grand thanks)\b/.test(s) ||
+        /^(thanks|thank you|grand|perfect|brilliant|lovely|that's it|that's grand|all good|all sorted)\b/.test(s) && wc <= 4 ||
+        /^no\b/.test(s) && wc <= 2
+      );
+    };
     const fillerNoToolGuardMs = Number.parseInt(
       process.env.LIVEKIT_FILLER_NO_TOOL_MS ?? '1800',
       10,
@@ -683,6 +714,26 @@ export default defineAgent({
       if (!text) {
         return;
       }
+      if (
+        role === 'user' &&
+        session.userData.sessionFlags.appointmentBooked &&
+        !session.userData.sessionFlags.endPhoneCallUsed &&
+        callerSoundsDone(text)
+      ) {
+        clearPostBookingGoodbyeTimer();
+        const delay = Number.isFinite(postBookingGoodbyeMs) ? postBookingGoodbyeMs : 3500;
+        postBookingGoodbyeTimer = setTimeout(() => {
+          postBookingGoodbyeTimer = null;
+          const ud = session.userData;
+          if (ud.sessionFlags.endPhoneCallUsed) return;
+          console.warn(
+            '[agent] caller said goodbye after booking but endPhoneCall did not fire — forcing disconnect',
+          );
+          void disconnectSalonCallerLeg(session, ud, async () => {
+            await new Promise((r) => setTimeout(r, 650));
+          });
+        }, delay);
+      }
       if (role === 'assistant' && assistantTextSoundsLikeFiller(text)) {
         clearFillerNoToolGuardTimer();
         const delay = Number.isFinite(fillerNoToolGuardMs) ? fillerNoToolGuardMs : 1800;
@@ -756,6 +807,7 @@ export default defineAgent({
       clearSilenceRecoveryTimer();
       clearFakeHangupGuardTimer();
       clearFillerNoToolGuardTimer();
+      clearPostBookingGoodbyeTimer();
       try {
         const ud = session.userData;
         if (!ud?.organizationId) {
