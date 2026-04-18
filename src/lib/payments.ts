@@ -63,12 +63,14 @@ type AppointmentRow = {
     slug: string | null;
     stripe_account_id: string | null;
     stripe_charges_enabled: boolean | null;
+    application_fee_bps: number | null;
   } | Array<{
     id: string;
     name: string | null;
     slug: string | null;
     stripe_account_id: string | null;
     stripe_charges_enabled: boolean | null;
+    application_fee_bps: number | null;
   }> | null;
 };
 
@@ -87,7 +89,7 @@ async function loadAppointmentForPayment(
       `id, organization_id, service_id, customer_phone, customer_name,
        booking_reference, start_time, payment_status,
        services ( name, price ),
-       organization:organizations ( id, name, slug, stripe_account_id, stripe_charges_enabled )`,
+       organization:organizations ( id, name, slug, stripe_account_id, stripe_charges_enabled, application_fee_bps )`,
     )
     .eq('id', appointmentId)
     .maybeSingle();
@@ -179,7 +181,10 @@ export async function createBookingCheckoutSession(
 
   const amountCents = toMinorUnits(priceEur);
   const currency = getDefaultCurrency();
-  const feeCents = computeApplicationFeeCents(amountCents);
+  const feeCents = computeApplicationFeeCents(
+    amountCents,
+    typeof org.application_fee_bps === 'number' ? org.application_fee_bps : undefined,
+  );
 
   const origin = resolveBookingSiteOrigin();
   const slug =
@@ -201,6 +206,11 @@ export async function createBookingCheckoutSession(
     const stripe = getStripeClient();
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
+      // Stripe requires success_url for `mode: 'payment'` Checkout Sessions.
+      // Without it the API 400s with `parameter_missing: success_url` and the
+      // agent apologises on-call. cancel_url is optional but pairs naturally.
+      success_url: successUrl,
+      cancel_url: cancelUrl,
       line_items: [
         {
           quantity: 1,
