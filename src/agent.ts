@@ -33,6 +33,12 @@ import {
   disconnectSalonCallerLeg,
   type SalonAgentUserData,
 } from './lib/tools.js';
+import {
+  currentBillingPeriodStart,
+  finishUsageRecord,
+  planQuotaMinutes,
+  startUsageRecord,
+} from './lib/usage.js';
 
 const DEFAULT_TEST_PHONE = '+15551234567';
 
@@ -297,6 +303,25 @@ export default defineAgent({
         ? String((ctx.job.room as { name: string }).name).trim()
         : '') ||
       '';
+
+    // Kick off the per-call metering row BEFORE the caller even says hello so
+    // crashes mid-call still show up in the dashboard's usage meter. Failures
+    // are swallowed inside startUsageRecord — metering must never take a live
+    // call off the line.
+    const callSidAttr =
+      (participant.attributes?.['sip.callID'] ??
+        participant.attributes?.['sip.callId'] ??
+        participant.attributes?.['sip.call_id'] ??
+        '') || null;
+    const usageRecordIdPromise = startUsageRecord({
+      organizationId: salon.id,
+      planTier: salon.plan_tier ?? null,
+      planQuotaMinutes: planQuotaMinutes(salon.plan_tier),
+      callSid: callSidAttr,
+      roomName: roomName || null,
+      callerNumber,
+      billingPeriodStart: currentBillingPeriodStart(salon.billing_period_start ?? null),
+    });
 
     const sessionUserData: SalonAgentUserData = {
       organizationId: salon.id,
@@ -716,6 +741,11 @@ export default defineAgent({
         });
         if (callLogId && ud.lastBookedAppointmentId) {
           await linkAppointmentToCallLog(ud.lastBookedAppointmentId, callLogId);
+        }
+        // Close out the metering row the nightly Stripe-sync cron reads.
+        const usageRecordId = await usageRecordIdPromise;
+        if (usageRecordId) {
+          await finishUsageRecord({ usageId: usageRecordId, durationSeconds });
         }
       } catch (err) {
         console.error('[AgentSession] close handler failed', err);

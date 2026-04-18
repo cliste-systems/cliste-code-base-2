@@ -44,17 +44,29 @@ export function stripeIsConfigured(): boolean {
 }
 
 /**
- * Cliste's platform fee in basis points (500 = 5.00%). Can be overridden per
- * deployment via `CLISTE_STRIPE_APPLICATION_FEE_BPS`.
+ * Cliste's platform fee in basis points. Sourced in this order:
+ *   1. The per-organisation value passed in by the caller (from
+ *      `organizations.application_fee_bps`, tier-defaulted in the DB trigger).
+ *   2. Legacy env override `CLISTE_STRIPE_APPLICATION_FEE_BPS`.
+ *   3. 100 bps (1.00%) — the Professional-tier default.
  *
- * Kept identical to `cliste-code-base-1/src/lib/stripe.ts` so public bookings
- * and AI-call bookings charge the same fee.
+ * Must stay in sync with `cliste-code-base-1/src/lib/stripe.ts` so both
+ * codebases take the same fee on the same booking.
  */
-export function getApplicationFeeBps(): number {
+const DEFAULT_APPLICATION_FEE_BPS = 100;
+export function getApplicationFeeBps(orgBps?: number | null): number {
+  if (
+    typeof orgBps === 'number' &&
+    Number.isFinite(orgBps) &&
+    orgBps >= 0 &&
+    orgBps <= 5000
+  ) {
+    return orgBps;
+  }
   const raw = process.env.CLISTE_STRIPE_APPLICATION_FEE_BPS?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
   if (!Number.isFinite(parsed) || parsed < 0 || parsed > 5000) {
-    return 500;
+    return DEFAULT_APPLICATION_FEE_BPS;
   }
   return parsed;
 }
@@ -80,12 +92,15 @@ export function toMinorUnits(amount: number): number {
 
 export function computeApplicationFeeCents(
   amountCents: number,
-  feeBps: number = getApplicationFeeBps(),
+  feeBps?: number | null,
 ): number {
-  if (amountCents <= 0 || feeBps <= 0) {
+  const bps = getApplicationFeeBps(
+    typeof feeBps === 'number' ? feeBps : undefined,
+  );
+  if (amountCents <= 0 || bps <= 0) {
     return 0;
   }
-  return Math.min(amountCents, Math.floor((amountCents * feeBps) / 10_000));
+  return Math.min(amountCents, Math.floor((amountCents * bps) / 10_000));
 }
 
 /**

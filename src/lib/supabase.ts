@@ -36,6 +36,10 @@ export type SalonConfig = {
   greeting: string | null;
   fresha_url: string | null;
   phone_number: string | null;
+  /** Cliste platform subscription tier (starter/pro/business/enterprise). Used for metering. */
+  plan_tier?: string | null;
+  /** First day of the salon's current Stripe billing period (YYYY-MM-DD). */
+  billing_period_start?: string | null;
 };
 
 export type SalonServiceRow = {
@@ -47,7 +51,7 @@ export type SalonServiceRow = {
 };
 
 const orgSelect =
-  'id, name, slug, tier, business_hours, custom_prompt, greeting, fresha_url, phone_number';
+  'id, name, slug, tier, business_hours, custom_prompt, greeting, fresha_url, phone_number, plan_tier, billing_period_start';
 
 function phoneLookupVariants(phone: string): string[] {
   const t = phone.trim();

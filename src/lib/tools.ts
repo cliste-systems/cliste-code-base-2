@@ -592,8 +592,8 @@ export class SalonTools {
         : `Booking saved (ref ${bookingReference}). SMS did not go through (${smsDetail}).`;
 
       const hangupGuidance = smsOk
-        ? 'Say the time using **spokenTimeLocal** (not raw ISO). Repeat the reference aloud. When they need nothing else, invoke endPhoneCall in the same turn as goodbye—do not say "end phone call" as speech.'
-        : 'Say the time using **spokenTimeLocal**. Read the reference aloud. For hang-up, invoke endPhoneCall—do not say it as words.';
+        ? 'Say the time using **spokenTimeLocal** verbatim (never read "3:00 pm" aloud — TTS mispronounces it). Repeat the reference aloud. When they need nothing else, say ONE warm goodbye line ("Grand, talk soon!") AND invoke endPhoneCall in the same turn. Never narrate the hang-up ("I\'m hanging up now") — just say goodbye and invoke the tool.'
+        : 'Say the time using **spokenTimeLocal** verbatim (never read "3:00 pm" aloud). Read the reference aloud. For hang-up, say ONE warm goodbye and invoke endPhoneCall in the same turn — never narrate it.';
 
       const onlineNote =
         effectivePaymentPref === 'online'
