@@ -133,7 +133,10 @@ export function assistantTextSoundsLikeGoodbye(text: string): boolean {
       t,
     ) ||
     // "thanks for ringing/calling" with no follow-up question is a sign-off.
-    (/\bthanks for (ringing|calling|the call)\b/.test(t) && !/\?/.test(text))
+    (/\bthanks for (ringing|calling|the call)\b/.test(t) && !/\?/.test(text)) ||
+    // Short closers after "anything else?"
+    /^(grand|lovely|perfect|brilliant|no bother|cheers),?\s*(talk soon|thanks|thank you|bye)\b/.test(t) ||
+    /^lovely,?\s*thanks for ringing\b/.test(t)
   );
 }
 

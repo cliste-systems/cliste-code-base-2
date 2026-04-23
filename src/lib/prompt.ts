@@ -49,7 +49,7 @@ function formatCallerLineBlock(callerLine: CallerLineInfo): string {
   if (callerLine.kind === 'international') {
     return `Caller line: international ${callerLine.display} (E.164 ${callerLine.e164}). Say "I have you on ${callerLine.display} — is that a mobile I can text the confirmation to?" If yes, pass that number to bookAppointment; if no, ask once for an SMS-capable mobile. If reading digits aloud, use once: "${callerLine.spoken}" — same rules as Irish (no "hundred", no hyphens, no double read-back).`;
   }
-  return `Caller line: Irish mobile ${callerLine.display} (E.164 ${callerLine.e164}). Confirm in ONE short line: "I'll text the confirmation to ${callerLine.display} — is that the best number?" If yes, pass that exact number to bookAppointment and move on. If you read the number aloud, use **this exact phrase once** (commas = short pause): "${callerLine.spoken}". **Never** paraphrase, **never** repeat it twice, **never** say "hundred" for digit groups, **never** use hyphens between digits — that confuses TTS. NEVER "plus three five three".`;
+  return `Caller line: Irish mobile ${callerLine.display} (E.164 ${callerLine.e164}). Confirm in ONE short line: "I'll text the confirmation to ${callerLine.display} — is that the best number?" If yes, pass that exact number to bookAppointment and move on. If you read the number aloud, use **this exact phrase once** (commas = tiny pause between digit words): "${callerLine.spoken}". **Only** the words oh / one / two … nine — **never** "twenty", "eighty-seven", "hundred", or grouped numbers. **Never** paraphrase, **never** read it twice, **never** use hyphens. NEVER "plus three five three".`;
 }
 
 function formatPaymentBlock(stripeAvailable: boolean): string {
@@ -151,7 +151,7 @@ Collect, in this order, asking ONE field at a time:
 2. Confirm + ask ONCE in ONE turn: "Grand — you're booked in for a fade on **Tuesday the 25th of April at 3 pm**" (always **ordinal day**: "the 25th of April", not "25 April"). Say you've texted the confirmation. **Do not** read a booking reference code on the call — it's in the text. Then: **Is there anything else I can help you with?**
 3. Branch on the caller's reply, ONE TIME ONLY:
    - **Caller says YES / asks a new question** → answer it in one short line, then go back to step 2 (ask "anything else?" again — but only after you've answered something new, never as filler).
-   - **Caller says NO / "that's grand" / "no thanks" / "that's it" / "all good" / "perfect" / "thanks" / "cheers" / "bye" / "talk soon" / silence** → say ONE short warm line ("Grand, talk soon!") AND invoke endPhoneCall in the SAME turn. NO exceptions, NO second "anything else?", NO waiting for them to say the literal word "bye".
+   - **Caller says NO / "that's grand" / "no thanks" / "that's it" / "all good" / "perfect" / "thanks" / "cheers" / "bye" / "talk soon" / silence** → reply **straight away** with ONE short warm line ("Grand, talk soon!") AND invoke endPhoneCall in the SAME turn. A lone **"no"** after "anything else?" counts — do not wait for them to shout or say "bye". NO second "anything else?", NO long pause before you speak.
 
 NEVER:
 - Ask "anything else?" twice in a row without the caller adding a new request in between.

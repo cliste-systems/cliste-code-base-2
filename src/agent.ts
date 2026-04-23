@@ -773,29 +773,55 @@ export default defineAgent({
      * Stops the "I had to say bye for her to hang up" feedback.
      */
     let postBookingGoodbyeTimer: ReturnType<typeof setTimeout> | null = null;
+    /** If the model doesn't answer a clear "no thanks" quickly, nudge a goodbye + endPhoneCall. */
+    let postBookingGoodbyeNudgeTimer: ReturnType<typeof setTimeout> | null = null;
     const postBookingGoodbyeMs = Number.parseInt(
-      process.env.LIVEKIT_POST_BOOKING_GOODBYE_MS ?? '3500',
+      process.env.LIVEKIT_POST_BOOKING_GOODBYE_MS ?? '2400',
       10,
     );
-    const clearPostBookingGoodbyeTimer = () => {
+    const postBookingGoodbyeNudgeMs = Number.parseInt(
+      process.env.LIVEKIT_POST_BOOKING_GOODBYE_NUDGE_MS ?? '280',
+      10,
+    );
+    const clearPostBookingGoodbyeTimers = () => {
       if (postBookingGoodbyeTimer) {
         clearTimeout(postBookingGoodbyeTimer);
         postBookingGoodbyeTimer = null;
       }
+      if (postBookingGoodbyeNudgeTimer) {
+        clearTimeout(postBookingGoodbyeNudgeTimer);
+        postBookingGoodbyeNudgeTimer = null;
+      }
     };
     const callerSoundsDone = (t: string): boolean => {
-      const s = t.toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const s = t.toLowerCase().replace(/[^a-z0-9' ]/g, ' ').replace(/\s+/g, ' ').trim();
       if (!s) return false;
-      // Anything 5+ words is probably a new request; only short ack-style
-      // utterances should auto-close.
-      const wc = s.split(' ').length;
-      if (wc > 6) return false;
-      return (
-        /\b(no|nope|nah)\b/.test(s) && /\b(thanks?|thank you|grand|all good|that's it|that's grand|good)\b/.test(s) ||
-        /^(bye|goodbye|cheers|talk soon|see ya|see you|grand thanks)\b/.test(s) ||
-        /^(thanks|thank you|grand|perfect|brilliant|lovely|that's it|that's grand|all good|all sorted)\b/.test(s) && wc <= 4 ||
-        /^no\b/.test(s) && wc <= 2
-      );
+      const wc = s.split(' ').filter(Boolean).length;
+      if (wc > 8) return false;
+
+      if (/^(no|nope|nah)\b/.test(s) && wc <= 3) return true;
+      if (
+        /\b(nothing else|that'?s all|that is all|all set|we'?re good|no thanks|no thank you)\b/.test(s) &&
+        wc <= 8
+      ) {
+        return true;
+      }
+      if (
+        /\b(no|nope|nah)\b/.test(s) &&
+        /\b(thanks?|thank you|grand|all good|that'?s it|that'?s grand|good)\b/.test(s)
+      ) {
+        return true;
+      }
+      if (/^(bye|goodbye|cheers|talk soon|see ya|see you|grand thanks)\b/.test(s)) return true;
+      if (
+        /^(thanks|thank you|grand|perfect|brilliant|lovely|that'?s it|that'?s grand|all good|all sorted)\b/.test(
+          s,
+        ) &&
+        wc <= 5
+      ) {
+        return true;
+      }
+      return false;
     };
     const fillerNoToolGuardMs = Number.parseInt(
       process.env.LIVEKIT_FILLER_NO_TOOL_MS ?? '1800',
@@ -902,8 +928,24 @@ export default defineAgent({
         !session.userData.sessionFlags.endPhoneCallUsed &&
         callerSoundsDone(text)
       ) {
-        clearPostBookingGoodbyeTimer();
-        const delay = Number.isFinite(postBookingGoodbyeMs) ? postBookingGoodbyeMs : 3500;
+        clearPostBookingGoodbyeTimers();
+        const nudgeMs = Number.isFinite(postBookingGoodbyeNudgeMs) ? postBookingGoodbyeNudgeMs : 280;
+        postBookingGoodbyeNudgeTimer = setTimeout(() => {
+          postBookingGoodbyeNudgeTimer = null;
+          const ud = session.userData;
+          if (ud.sessionFlags.endPhoneCallUsed) return;
+          if (session.agentState === 'speaking') return;
+          try {
+            void session.generateReply({
+              instructions:
+                'The caller clearly said they are finished (e.g. "no" to "anything else?", thanks, or goodbye). Reply **immediately** with ONE short warm line ("Grand, talk soon!" or "Lovely, thanks for ringing!") and invoke **endPhoneCall** in the **same** turn. Do not ask another question. Do not stay silent.',
+            });
+          } catch (e) {
+            console.error('[agent] post-booking goodbye nudge failed', e);
+          }
+        }, nudgeMs);
+
+        const delay = Number.isFinite(postBookingGoodbyeMs) ? postBookingGoodbyeMs : 2400;
         postBookingGoodbyeTimer = setTimeout(() => {
           postBookingGoodbyeTimer = null;
           const ud = session.userData;
@@ -950,7 +992,7 @@ export default defineAgent({
           session.userData.sessionFlags.actionTicketCreated) &&
         assistantTextSoundsLikeGoodbye(text)
       ) {
-        clearPostBookingGoodbyeTimer();
+        clearPostBookingGoodbyeTimers();
         const delay = 1500;
         postBookingGoodbyeTimer = setTimeout(() => {
           postBookingGoodbyeTimer = null;
@@ -1017,7 +1059,7 @@ export default defineAgent({
       clearSilenceRecoveryTimer();
       clearFakeHangupGuardTimer();
       clearFillerNoToolGuardTimer();
-      clearPostBookingGoodbyeTimer();
+      clearPostBookingGoodbyeTimers();
       try {
         const ud = session.userData;
         if (!ud?.organizationId) {

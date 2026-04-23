@@ -69,6 +69,16 @@ function spokenFromGroups(groups: string[]): string {
     .join(', ');
 }
 
+/**
+ * Irish national mobile read-back: one spoken word per digit, comma-separated.
+ * Stops TTS/LLM from turning "87" into "eighty-seven" or "271" into "two hundred seventy-one".
+ * Example 872715938 → "oh, eight, seven, two, seven, one, five, nine, three, eight"
+ */
+function spokenIrishNationalDigitByDigit(localNineDigits: string): string {
+  const words = localNineDigits.split('').map((d) => DIGIT_WORD[d] ?? d);
+  return `oh, ${words.join(', ')}`;
+}
+
 /** Irish mobile national number (9 digits after +353): 08x xxx xxxx → 2+3+4 grouping. */
 function groupIrishLocalDigits(local: string): string[] {
   if (local.length === 9 && local.startsWith('8')) {
@@ -158,11 +168,13 @@ export function classifyCallerLine(raw: string | null | undefined): CallerLineIn
   if (e164.startsWith('+353')) {
     const local = e164.slice(4);
     const groups = groupIrishLocalDigits(local);
-    // "oh eight seven, one two three, four five six seven" — no hyphens, no "hundred" artefacts.
-    const spoken = `oh ${spokenFromGroups(groups)}`;
+    const cls = classifyIrishE164(local);
     const display =
       groups.length >= 1 ? `0${groups[0]}${groups.length > 1 ? ` ${groups.slice(1).join(' ')}` : ''}` : `0${local}`;
-    const cls = classifyIrishE164(local);
+    const spoken =
+      local.length === 9 && cls.kind === 'irish_mobile'
+        ? spokenIrishNationalDigitByDigit(local)
+        : `oh ${spokenFromGroups(groups)}`;
     return {
       e164,
       kind: cls.kind,
