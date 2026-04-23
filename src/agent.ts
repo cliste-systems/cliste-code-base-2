@@ -1,6 +1,5 @@
 import 'dotenv/config';
 
-import * as deepgram from '@livekit/agents-plugin-deepgram';
 import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 import * as lkTurn from '@livekit/agents-plugin-livekit';
 import * as openai from '@livekit/agents-plugin-openai';
@@ -29,7 +28,6 @@ import { postprocessCallTranscript } from './lib/call_postprocess.js';
 import { insertCallLog } from './lib/call_logs.js';
 import { maskPhone, redactPii } from './lib/gdpr.js';
 import { classifyCallerLine, type CallerLineInfo } from './lib/phone_classify.js';
-import { softLandPipelineFailure } from './lib/pipeline_incident.js';
 import { buildSalonSystemPrompt } from './lib/prompt.js';
 import { stripeIsConfigured } from './lib/stripe.js';
 import { getSalonForCall, getSalonServices, type SalonServiceRow } from './lib/supabase.js';
@@ -442,23 +440,6 @@ export default defineAgent({
     const sttPrimaryIsFlux = inferenceSttModel.toLowerCase().includes('flux');
     const sttIsDeepgram = inferenceSttModel.toLowerCase().includes('deepgram');
 
-    // STT provider selection. `inference` (default) routes STT through
-    // LiveKit's agent-gateway (agent-gateway.livekit.cloud). That gateway
-    // had an outage on 2026-04-22 that killed a live call because STT
-    // retries exhausted inside ~4s — see the incident write-up in this
-    // repo's history and the "Voice pipeline health" section on /admin.
-    // Flip `SALON_STT_PROVIDER=deepgram` (requires DEEPGRAM_API_KEY) to
-    // bypass the agent-gateway entirely and talk to Deepgram's realtime
-    // API directly — a separate failure domain.
-    const sttProviderRaw = process.env.SALON_STT_PROVIDER?.trim().toLowerCase() || '';
-    const useDirectDeepgramStt =
-      sttProviderRaw === 'deepgram' && !!process.env.DEEPGRAM_API_KEY?.trim();
-    if (sttProviderRaw === 'deepgram' && !process.env.DEEPGRAM_API_KEY?.trim()) {
-      console.warn(
-        '[agent] SALON_STT_PROVIDER=deepgram requested but DEEPGRAM_API_KEY is missing; falling back to LiveKit inference STT.',
-      );
-    }
-
     const ttsProviderRaw = process.env.SALON_TTS_PROVIDER?.trim().toLowerCase() || '';
     const elevenApiKey =
       process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
@@ -575,59 +556,24 @@ export default defineAgent({
       ...new Set([...envExtra, ...salonNameTokens, ...menuTokens]),
     ].slice(0, 100);
 
-    const sttEndpointingMs =
-      Number.parseInt(process.env.LIVEKIT_STT_ENDPOINTING_MS ?? '60', 10) || 60;
-
-    // Two STT builds:
-    //  (a) LiveKit inference (default) — multiplexed via agent-gateway.
-    //  (b) Direct Deepgram plugin — opt-in via SALON_STT_PROVIDER=deepgram,
-    //      bypasses agent-gateway.livekit.cloud so a gateway outage can't
-    //      kill the speech pipeline. Keep this as a toggle (not default)
-    //      until it's been running in prod for a few hundred calls.
-    const deepgramSttOpts = useDirectDeepgramStt
-      ? ({
-          apiKey: process.env.DEEPGRAM_API_KEY?.trim() ?? '',
-          model: process.env.SALON_STT_DEEPGRAM_MODEL?.trim() || 'nova-3',
-          language: inferenceSttLanguage,
-          interimResults: true,
-          punctuate: true,
-          smartFormat: false,
-          endpointing: sttEndpointingMs,
-          fillerWords: true,
-          ...(sttKeyterms.length > 0 ? { keyterm: sttKeyterms } : {}),
-        } as unknown as Partial<deepgram.STTOptions>)
-      : null;
-
-    const sttInstance: inference.STT<inference.STTModels> | deepgram.STT = useDirectDeepgramStt
-      ? new deepgram.STT(deepgramSttOpts ?? {})
-      : new inference.STT({
-          model: inferenceSttModel,
-          language: inferenceSttLanguage,
-          modelOptions: {
-            smart_format: false,
-            punctuate: true,
-            interim_results: true,
-            // Deepgram endpointing in ms — how long of silence before it flushes
-            // a final transcript. 60ms keeps the pipeline snappy; combined with
-            // preemptiveGeneration + the EOU model, this is what lets the agent
-            // start responding before the caller's last word is even finalised.
-            endpointing: sttEndpointingMs,
-            filler_words: true,
-            ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
-          },
-          ...(sttPrimaryIsFlux ? { fallback: 'deepgram/nova-3:en-GB' } : {}),
-        });
-
-    const activeSttLabel = useDirectDeepgramStt
-      ? `deepgram-direct:${process.env.SALON_STT_DEEPGRAM_MODEL?.trim() || 'nova-3'}`
-      : inferenceSttModel;
-    // Once STT fails hard, downstream turn detection still needs a signal
-    // — direct Deepgram still emits STT turn events, so 'stt' is safe.
-    const sttTurnDetectionSignal: 'stt' | 'vad' =
-      useDirectDeepgramStt || sttIsDeepgram ? 'stt' : 'vad';
-
     const session = new voice.AgentSession<SalonAgentUserData>({
-      stt: sttInstance,
+      stt: new inference.STT({
+        model: inferenceSttModel,
+        language: inferenceSttLanguage,
+        modelOptions: {
+          smart_format: false,
+          punctuate: true,
+          interim_results: true,
+          // Deepgram endpointing in ms — how long of silence before it flushes
+          // a final transcript. 60ms keeps the pipeline snappy; combined with
+          // preemptiveGeneration + the EOU model, this is what lets the agent
+          // start responding before the caller's last word is even finalised.
+          endpointing: Number.parseInt(process.env.LIVEKIT_STT_ENDPOINTING_MS ?? '60', 10) || 60,
+          filler_words: true,
+          ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
+        },
+        ...(sttPrimaryIsFlux ? { fallback: 'deepgram/nova-3:en-GB' } : {}),
+      }),
       vad: ctx.proc.userData.vad as silero.VAD,
       llm: new inference.LLM({
         model: inferenceLlmModel as inference.LLMModels,
@@ -676,7 +622,7 @@ export default defineAgent({
         // especially when callers pause mid-sentence. Falls back to STT EOU
         // cues on Deepgram if the detector is disabled in env or failed to
         // initialise (e.g. model files not downloaded yet).
-        turnDetection: turnDetectorInstance ?? sttTurnDetectionSignal,
+        turnDetection: turnDetectorInstance ?? (sttIsDeepgram ? 'stt' : 'vad'),
         endpointing: {
           mode: endpointMode,
           minDelay: Number.isFinite(endpointMinMs) ? endpointMinMs : 200,
@@ -687,40 +633,8 @@ export default defineAgent({
           minWords: Number.isFinite(interruptionMinWords) ? interruptionMinWords : 2,
         },
       },
-      // Retry budget for STT/LLM/TTS WebSocket connects. Defaults are
-      // maxRetry:3 + retryIntervalMs:2000 which gives the pipeline only
-      // ~4s to recover before the session closes with `recoverable:false`
-      // (see `node_modules/@livekit/agents/src/stt/stt.ts` mainTask loop).
-      // That killed a live call on 2026-04-22 when the LiveKit inference
-      // gateway had a brief blip — caller heard dead air, then the SIP
-      // line dropped. Bumping the STT budget to ~10s of gateway downtime
-      // keeps brief incidents from dropping callers, while
-      // maxUnrecoverableErrors still caps total in-call damage. Override
-      // any of these via env if you need to dial it tighter/looser.
-      connOptions: {
-        sttConnOptions: {
-          maxRetry: Number.parseInt(process.env.LIVEKIT_STT_MAX_RETRY ?? '6', 10),
-          retryIntervalMs: Number.parseInt(process.env.LIVEKIT_STT_RETRY_MS ?? '1500', 10),
-          timeoutMs: Number.parseInt(process.env.LIVEKIT_STT_TIMEOUT_MS ?? '6000', 10),
-        },
-        llmConnOptions: {
-          maxRetry: Number.parseInt(process.env.LIVEKIT_LLM_MAX_RETRY ?? '4', 10),
-          retryIntervalMs: Number.parseInt(process.env.LIVEKIT_LLM_RETRY_MS ?? '1500', 10),
-          timeoutMs: Number.parseInt(process.env.LIVEKIT_LLM_TIMEOUT_MS ?? '8000', 10),
-        },
-        maxUnrecoverableErrors: Number.parseInt(
-          process.env.LIVEKIT_MAX_UNRECOVERABLE_ERRORS ?? '3',
-          10,
-        ),
-      },
     });
 
-    // Diagnostic-only: log every pipeline error event, recoverable or not.
-    // The SDK emits both "transient retry blip" events (recoverable: true,
-    // e.g. LLM 5xx on attempt 2 of 5) and "give up" events. We only want
-    // ops alerts on the latter — see the Close handler below, which
-    // receives the outer STT/LLM/TTS wrapper (with `recoverable`) whereas
-    // this Error event only has the inner Error.
     session.on(voice.AgentSessionEventTypes.Error, (ev) => {
       const err = ev.error;
       const msg =
@@ -729,79 +643,7 @@ export default defineAgent({
           : typeof err === 'object' && err !== null && 'message' in err
             ? String((err as { message: unknown }).message)
             : String(err);
-      console.error('[AgentSession] pipeline error', msg);
-    });
-
-    // Soft-landing guard — fires once per call when the session closes
-    // with reason='error' (i.e. STT/LLM/TTS died with recoverable:false
-    // and blew the unrecoverable-errors budget). Without this, the
-    // caller sits on dead air until LiveKit eventually tears down the
-    // SIP leg — often 10+ seconds. With it we:
-    //   1. SMS the caller a booking link (no-op if Twilio creds missing)
-    //   2. forward a redacted incident to /admin (Voice pipeline health)
-    //   3. force-disconnect the SIP leg right away
-    //
-    // Using the Close event (not Error) because the Close payload carries
-    // the outer wrapper with the recoverable flag, so we can't misfire
-    // on transient retry-loop blips.
-    let softLandingFired = false;
-    session.on(voice.AgentSessionEventTypes.Close, (ev) => {
-      if (ev.reason !== voice.CloseReason.ERROR) return;
-      if (softLandingFired) return;
-      softLandingFired = true;
-
-      const wrapper = ev.error as
-        | {
-            type?: string;
-            label?: string;
-            recoverable?: boolean;
-            error?: Error | { message?: unknown };
-          }
-        | null;
-      let stage: 'stt' | 'llm' | 'tts' | 'session' | 'unknown' = 'unknown';
-      let label: string | null = null;
-      let innerErr: Error | null = null;
-      if (wrapper && typeof wrapper === 'object') {
-        const t = wrapper.type;
-        if (t === 'stt_error') stage = 'stt';
-        else if (t === 'llm_error') stage = 'llm';
-        else if (t === 'tts_error') stage = 'tts';
-        else if (t === 'realtime_model_error') stage = 'llm';
-        if (typeof wrapper.label === 'string') label = wrapper.label;
-        if (wrapper.error instanceof Error) innerErr = wrapper.error;
-      }
-      const msg =
-        innerErr?.message ??
-        (wrapper && typeof wrapper === 'object' && wrapper.error
-          ? String(
-              (wrapper.error as { message?: unknown }).message ?? wrapper.error,
-            )
-          : 'AgentSession closed with unrecoverable error');
-
-      // Fire-and-forget: don't block the session's close path.
-      void (async () => {
-        try {
-          await softLandPipelineFailure({
-            organizationId: salon.id,
-            calledNumber: routing.phone ?? null,
-            callerNumber: callerNumber,
-            callerIdentity: participant.identity ?? null,
-            roomName: roomName || null,
-            callSid: callSidAttr,
-            salonName: salon.name,
-            bookingUrl: salon.fresha_url ?? null,
-            stage,
-            errorMessage: msg.slice(0, 500),
-            modelLabel: label ?? activeSttLabel,
-            retryable: null,
-          });
-        } catch (e) {
-          console.error(
-            '[AgentSession] soft-landing failed',
-            e instanceof Error ? e.message : e,
-          );
-        }
-      })();
+      console.error('[AgentSession] pipeline error', msg, err);
     });
 
     /** If assistant TTS was cut off (often before the caller heard anything), re-speak so they never get dead air. */
