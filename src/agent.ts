@@ -465,12 +465,15 @@ export default defineAgent({
       ttsMode = 'elevenlabs';
     } else if (ttsProviderRaw === 'deepgram') {
       ttsMode = 'deepgram';
+    } else if (deepgramApiKeyForTts) {
+      // TEST: prefer Deepgram Aura-2 Angus whenever DEEPGRAM_API_KEY is present,
+      // so we don't need to fiddle with SALON_TTS_PROVIDER in Railway.
+      // To force ElevenLabs back on, set SALON_TTS_PROVIDER=elevenlabs.
+      ttsMode = 'deepgram';
     } else if (elevenApiKey) {
       ttsMode = 'elevenlabs';
     } else if (openaiApiKeyForTts) {
       ttsMode = 'openai';
-    } else if (deepgramApiKeyForTts) {
-      ttsMode = 'deepgram';
     } else {
       console.error(
         'No TTS credentials: set SALON_TTS_PROVIDER to one of openai|elevenlabs|deepgram with the matching API key.',
