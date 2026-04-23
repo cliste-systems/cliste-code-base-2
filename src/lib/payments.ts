@@ -343,6 +343,8 @@ export function bookingPaymentSmsBody(input: {
   currency: string;
   paymentUrl: string;
   timeZone: string;
+  /** Salon voice line — not the Twilio SMS sender. */
+  salonCallbackPhone?: string;
 }): string {
   const first = input.customerName.trim().split(/\s+/)[0] || 'there';
   let when: string;
@@ -360,9 +362,10 @@ export function bookingPaymentSmsBody(input: {
     when = input.start.toLocaleString('en-IE', { hour12: true });
   }
   const price = formatMoney(input.amountCents, input.currency);
-  // Kept under 160 chars where possible so it's 1 SMS segment, and leads with
-  // salon name for brand recognition in the preview.
-  return `${input.salonName}: ${input.serviceName} on ${when} booked (ref ${input.bookingReference}). Pay ${price}: ${input.paymentUrl}`;
+  const ring = input.salonCallbackPhone?.trim();
+  const help = ring ? ` Qs: ${ring}` : '';
+  // May span 2 SMS segments when pay link + phone are included — clarity beats one segment.
+  return `${input.salonName}: ${input.serviceName} on ${when} booked (ref ${input.bookingReference}). Pay ${price}: ${input.paymentUrl}${help}`;
 }
 
 /** Follow-up SMS when the agent sends just a payment link after a prior confirmation text. */

@@ -29,7 +29,11 @@ import { estimateCallCostUsd } from './lib/call_cost_estimate.js';
 import { postprocessCallTranscript } from './lib/call_postprocess.js';
 import { insertCallLog } from './lib/call_logs.js';
 import { maskPhone, redactPii } from './lib/gdpr.js';
-import { classifyCallerLine, type CallerLineInfo } from './lib/phone_classify.js';
+import {
+  classifyCallerLine,
+  formatSalonPhoneForCustomerSms,
+  type CallerLineInfo,
+} from './lib/phone_classify.js';
 import { buildSalonSystemPrompt } from './lib/prompt.js';
 import { stripeIsConfigured } from './lib/stripe.js';
 import { getSalonForCall, getSalonServices, type SalonServiceRow } from './lib/supabase.js';
@@ -423,6 +427,8 @@ export default defineAgent({
       businessHours: salon.business_hours,
       bookingTimeZone: bookingTz,
       lastBookedAppointmentId: null,
+      salonCallbackPhoneDisplay: formatSalonPhoneForCustomerSms(salon.phone_number),
+      lastBookedCustomerFirstName: null,
       ...(roomName && participant.identity
         ? {
             endCallTarget: {
@@ -936,9 +942,12 @@ export default defineAgent({
           if (ud.sessionFlags.endPhoneCallUsed) return;
           if (session.agentState === 'speaking') return;
           try {
+            const fn = session.userData.lastBookedCustomerFirstName;
+            const nameLine = fn
+              ? `Use their name "${fn}" — e.g. "${fn}, thanks for ringing — see you then!" `
+              : '';
             void session.generateReply({
-              instructions:
-                'The caller clearly said they are finished (e.g. "no" to "anything else?", thanks, or goodbye). Reply **immediately** with ONE short warm line ("Grand, talk soon!" or "Lovely, thanks for ringing!") and invoke **endPhoneCall** in the **same** turn. Do not ask another question. Do not stay silent.',
+              instructions: `The caller clearly said they are finished (e.g. "no" to "anything else?", thanks, or goodbye). Reply **immediately** with ONE short warm personalised line. ${nameLine}Otherwise "Grand, talk soon!" Invoke **endPhoneCall** in the **same** turn. Do not ask another question. Do not stay silent.`,
             });
           } catch (e) {
             console.error('[agent] post-booking goodbye nudge failed', e);

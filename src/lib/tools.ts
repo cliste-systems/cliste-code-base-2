@@ -61,6 +61,10 @@ export type SalonAgentUserData = {
   endCallTarget?: { roomName: string; callerIdentity: string };
   /** Latest AI booking this session — linked to `call_logs` on hang-up for the dashboard. */
   lastBookedAppointmentId: string | null;
+  /** Human-friendly salon voice line for SMS ("087 …") — never the bulk SMS sender. */
+  salonCallbackPhoneDisplay: string;
+  /** First name from the last successful bookAppointment (personalized goodbyes). */
+  lastBookedCustomerFirstName: string | null;
 };
 
 function readSalonUserData(ctx: { userData: unknown }): SalonAgentUserData {
@@ -271,6 +275,7 @@ function bookingConfirmationSmsBody(input: {
   serviceName: string;
   start: Date;
   bookingReference: string;
+  salonCallbackPhone?: string;
 }): string {
   const first = input.customerName.trim().split(/\s+/)[0] || 'there';
   const tz = process.env.SALON_TIMEZONE?.trim() || 'Europe/Dublin';
@@ -289,7 +294,11 @@ function bookingConfirmationSmsBody(input: {
     when = input.start.toLocaleString('en-IE', { hour12: true });
   }
   const ref = input.bookingReference.trim();
-  return `Hi ${first}, your booking at ${input.salonName} is confirmed: ${input.serviceName} on ${when}. Ref: ${ref}. To change or cancel, call this number and quote your reference. — ${input.salonName}`;
+  const ring = input.salonCallbackPhone?.trim();
+  const help = ring
+    ? `To change or cancel, ring ${ring} and quote ref ${ref}.`
+    : `To change or cancel, ring the same salon number you called and quote ref ${ref}.`;
+  return `Hi ${first}, your booking at ${input.salonName} is confirmed: ${input.serviceName} on ${when}. Ref: ${ref}. ${help} — ${input.salonName}`;
 }
 
 function bookingCancelledSmsBody(input: {
@@ -297,9 +306,12 @@ function bookingCancelledSmsBody(input: {
   salonName: string;
   serviceName: string;
   bookingReference: string;
+  salonCallbackPhone?: string;
 }): string {
   const first = input.customerName.trim().split(/\s+/)[0] || 'there';
-  return `Hi ${first}, your ${input.salonName} booking is cancelled (${input.serviceName}, ref ${input.bookingReference}). — ${input.salonName}`;
+  const ring = input.salonCallbackPhone?.trim();
+  const help = ring ? ` Questions: ${ring}.` : '';
+  return `Hi ${first}, your ${input.salonName} booking is cancelled (${input.serviceName}, ref ${input.bookingReference}).${help} — ${input.salonName}`;
 }
 
 function bookingRescheduledSmsBody(input: {
@@ -308,6 +320,7 @@ function bookingRescheduledSmsBody(input: {
   serviceName: string;
   bookingReference: string;
   newStart: Date;
+  salonCallbackPhone?: string;
 }): string {
   const first = input.customerName.trim().split(/\s+/)[0] || 'there';
   const tz = process.env.SALON_TIMEZONE?.trim() || 'Europe/Dublin';
@@ -325,7 +338,9 @@ function bookingRescheduledSmsBody(input: {
   } catch {
     when = input.newStart.toLocaleString('en-IE', { hour12: true });
   }
-  return `Hi ${first}, your ${input.salonName} booking (${input.serviceName}, ref ${input.bookingReference}) is now ${when}. See you then! — ${input.salonName}`;
+  const ring = input.salonCallbackPhone?.trim();
+  const help = ring ? ` Questions: ${ring}.` : '';
+  return `Hi ${first}, your ${input.salonName} booking (${input.serviceName}, ref ${input.bookingReference}) is now ${when}. See you then!${help} — ${input.salonName}`;
 }
 
 export class SalonTools {
@@ -365,7 +380,10 @@ export class SalonTools {
             'No valid caller phone number on this call (line withheld). Ask the caller to call back from a mobile.',
         };
       }
-      const body = `Book ${ud.salonName}: ${url}`;
+      const ring = ud.salonCallbackPhoneDisplay?.trim();
+      const body = ring
+        ? `Book ${ud.salonName}: ${url} — call ${ring} with questions.`
+        : `Book ${ud.salonName}: ${url}`;
       const sms = await sendBookingSms(callerE164, body);
       console.log('sendBookingLink', { to: maskPhone(callerE164), sms });
       if (sms.ok) {
@@ -558,6 +576,7 @@ export class SalonTools {
       });
       ud.sessionFlags.appointmentBooked = true;
       ud.lastBookedAppointmentId = appointmentId;
+      ud.lastBookedCustomerFirstName = name.trim().split(/\s+/)[0] || null;
 
       const serviceNameForSms = typeof svc.name === 'string' ? svc.name : service;
       const wantsOnlinePayment = paymentPreference === 'online';
@@ -575,6 +594,9 @@ export class SalonTools {
         serviceName: serviceNameForSms,
         start,
         bookingReference,
+        ...(ud.salonCallbackPhoneDisplay?.trim()
+          ? { salonCallbackPhone: ud.salonCallbackPhoneDisplay.trim() }
+          : {}),
       });
 
       if (wantsOnlinePayment) {
@@ -594,6 +616,9 @@ export class SalonTools {
               currency: pay.currency,
               paymentUrl: pay.shortUrl,
               timeZone: ud.bookingTimeZone,
+              ...(ud.salonCallbackPhoneDisplay?.trim()
+                ? { salonCallbackPhone: ud.salonCallbackPhoneDisplay.trim() }
+                : {}),
             });
             effectivePaymentPref = 'online';
             ud.sessionFlags.paymentLinksSent += 1;
@@ -639,9 +664,14 @@ export class SalonTools {
         ? `Booking saved (ref ${bookingReference}). Confirmation text sent to ${maskPhone(customerPhone)}.`
         : `Booking saved (ref ${bookingReference}). SMS did not go through (${smsDetail}).`;
 
+      const fn = ud.lastBookedCustomerFirstName;
+      const personal =
+        fn ?
+          ` Use their first name (**${fn}**) on the call now: "Is there anything else I can help you with, ${fn}?" and a warm goodbye like "${fn}, thanks for ringing — see you [use the date from spokenTimeLocal]!" Then endPhoneCall.`
+        : '';
       const hangupGuidance = smsOk
-        ? 'Say the time using **spokenTimeLocal** verbatim (never read "3:00 pm" aloud — TTS mispronounces it). **Do not** read the booking reference on the call — it is in the confirmation text. When they need nothing else, say ONE warm goodbye line ("Grand, talk soon!") AND invoke endPhoneCall in the same turn. Never narrate the hang-up ("I\'m hanging up now") — just say goodbye and invoke the tool.'
-        : 'Say the time using **spokenTimeLocal** verbatim (never read "3:00 pm" aloud). **Do not** read the booking reference aloud. For hang-up, say ONE warm goodbye and invoke endPhoneCall in the same turn — never narrate it.';
+        ? `Say the time using **spokenTimeLocal** verbatim (never read "3:00 pm" aloud — TTS mispronounces it). **Do not** read the booking reference on the call — it is in the confirmation text.${personal} When they need nothing else, ONE short personalised goodbye AND invoke endPhoneCall in the same turn. Never narrate the hang-up ("I\'m hanging up now").`
+        : `Say the time using **spokenTimeLocal** verbatim (never read "3:00 pm" aloud). **Do not** read the booking reference aloud.${personal} For hang-up, ONE warm personalised goodbye and invoke endPhoneCall in the same turn — never narrate it.`;
 
       const onlineNote =
         effectivePaymentPref === 'online'
@@ -859,6 +889,9 @@ export class SalonTools {
         salonName: ud.salonName,
         serviceName: result.serviceName,
         bookingReference: result.bookingReference,
+        ...(ud.salonCallbackPhoneDisplay?.trim()
+          ? { salonCallbackPhone: ud.salonCallbackPhoneDisplay.trim() }
+          : {}),
       });
       const to = normalizePhoneE164(phone);
       void sendBookingSms(to, smsBody)
@@ -910,6 +943,9 @@ export class SalonTools {
         serviceName: result.serviceName,
         bookingReference: result.bookingReference,
         newStart: result.newStart,
+        ...(ud.salonCallbackPhoneDisplay?.trim()
+          ? { salonCallbackPhone: ud.salonCallbackPhoneDisplay.trim() }
+          : {}),
       });
       const to = normalizePhoneE164(phone);
       void sendBookingSms(to, smsBody)

@@ -103,6 +103,42 @@ function classifyIrishE164(local: string): { kind: CallerLineKind; canReceiveSms
  * Inspect a raw caller identifier (E.164, "sip_+353…", or attribute string) and
  * return everything the agent needs to handle the phone-capture step efficiently.
  */
+/**
+ * Salon directory / voice line as customers should see it in SMS (not the Twilio SMS-sender ID).
+ * Irish numbers → "087 271 5938"; US → "+1 415 …"; otherwise returns +E.164 when possible.
+ */
+export function formatSalonPhoneForCustomerSms(raw: string | null | undefined): string {
+  const t = (raw ?? '').trim();
+  if (!t) return '';
+  const digits = t.replace(/\D/g, '');
+  if (!digits) return t;
+
+  let d = digits;
+  if (d.startsWith('0') && d.length >= 10 && d.length <= 11 && !d.startsWith('00')) {
+    d = `353${d.slice(1)}`;
+  }
+
+  if (d.startsWith('353') && d.length >= 11) {
+    const local = d.slice(3);
+    if (local.length === 9) {
+      return `0${local.slice(0, 2)} ${local.slice(2, 5)} ${local.slice(5)}`;
+    }
+    return `+${d}`;
+  }
+
+  if (d.length === 11 && d.startsWith('1')) {
+    const n = d.slice(1);
+    return `+1 ${n.slice(0, 3)} ${n.slice(3, 6)} ${n.slice(6)}`;
+  }
+
+  if (d.length === 12 && d.startsWith('44')) {
+    return `+${d}`;
+  }
+
+  if (t.startsWith('+')) return t;
+  return t;
+}
+
 export function classifyCallerLine(raw: string | null | undefined): CallerLineInfo {
   const trimmed = (raw ?? '').trim();
   const lower = trimmed.toLowerCase();
