@@ -469,7 +469,7 @@ export class SalonTools {
 
   readonly bookAppointment = llm.tool({
     description:
-      'Create a confirmed appointment in the salon calendar (Supabase). Only for a service that exists on the salon menu. Only after slot is free: customer must have **spelled their name** letter-by-letter (at least first name) and you read it back; do not use only audio/STT for spelling. Use ISO-8601 start time matching checkAvailability. After success, a confirmation SMS is sent when Twilio is configured. If the caller has said they want to **pay online**, pass **paymentPreference: "online"** — a secure Stripe Checkout link will be added to the confirmation SMS automatically; otherwise use **"in_person"** (default) and do not ask for card details on the call.',
+      'Create a confirmed appointment in the salon calendar (Supabase). Only for a service that exists on the salon menu. Only after slot is free: customer must have **spelled their name** letter-by-letter (at least first name) and you read back the **assembled** name (letters are truth — e.g. B-R-E-N-D-A-N is Brendan, not Brandon). Use ISO-8601 start time matching checkAvailability. After success, confirm using **spokenTimeLocal** only; **never** read the booking reference code on the call (it is in the SMS). If the caller has said they want to **pay online**, pass **paymentPreference: "online"** — a secure Stripe Checkout link will be added to the confirmation SMS automatically; otherwise use **"in_person"** (default) and do not ask for card details on the call.',
     parameters: z.object({
       name: z
         .string()
@@ -637,8 +637,8 @@ export class SalonTools {
         : `Booking saved (ref ${bookingReference}). SMS did not go through (${smsDetail}).`;
 
       const hangupGuidance = smsOk
-        ? 'Say the time using **spokenTimeLocal** verbatim (never read "3:00 pm" aloud — TTS mispronounces it). Repeat the reference aloud. When they need nothing else, say ONE warm goodbye line ("Grand, talk soon!") AND invoke endPhoneCall in the same turn. Never narrate the hang-up ("I\'m hanging up now") — just say goodbye and invoke the tool.'
-        : 'Say the time using **spokenTimeLocal** verbatim (never read "3:00 pm" aloud). Read the reference aloud. For hang-up, say ONE warm goodbye and invoke endPhoneCall in the same turn — never narrate it.';
+        ? 'Say the time using **spokenTimeLocal** verbatim (never read "3:00 pm" aloud — TTS mispronounces it). **Do not** read the booking reference on the call — it is in the confirmation text. When they need nothing else, say ONE warm goodbye line ("Grand, talk soon!") AND invoke endPhoneCall in the same turn. Never narrate the hang-up ("I\'m hanging up now") — just say goodbye and invoke the tool.'
+        : 'Say the time using **spokenTimeLocal** verbatim (never read "3:00 pm" aloud). **Do not** read the booking reference aloud. For hang-up, say ONE warm goodbye and invoke endPhoneCall in the same turn — never narrate it.';
 
       const onlineNote =
         effectivePaymentPref === 'online'
@@ -819,8 +819,9 @@ export class SalonTools {
           serviceName: r.serviceName,
           startTime: r.startIso,
           endTime: r.endIso,
+          spokenTimeLocal: formatSlotTimeSpoken(r.startIso, ud.bookingTimeZone),
         })),
-        message: `${rows.length} upcoming booking(s). Use bookingReference with cancelBooking or rescheduleBooking.`,
+        message: `${rows.length} upcoming booking(s). Describe each by **service + spokenTimeLocal**; pass bookingReference only as a tool argument — do not read reference codes aloud unless the caller must disambiguate.`,
       };
     },
   });
@@ -868,7 +869,7 @@ export class SalonTools {
         .catch((e) => console.error('[cancelBooking] SMS error', e));
       return {
         ok: true,
-        message: `Cancelled booking ${result.bookingReference} in the diary. A confirmation text is being sent—they should get it shortly. Tell them aloud now that it's cancelled, repeat the reference once, and mention the text—never rely on SMS alone.`,
+        message: `Cancelled booking ${result.bookingReference} in the diary. A confirmation text is being sent—they should get it shortly. Tell them aloud it's cancelled (service + date if helpful). **Do not** read the reference code on the call unless they need it to disambiguate—it's in the text.`,
       };
     },
   });
@@ -919,7 +920,7 @@ export class SalonTools {
         .catch((e) => console.error('[rescheduleBooking] SMS error', e));
       return {
         ok: true,
-        message: `Rescheduled ref ${result.bookingReference} to the new time. A text with updated details is being sent. Confirm the new time clearly on the call.`,
+        message: `Rescheduled (ref ${result.bookingReference} for logs). A text with updated details is being sent. Confirm the new **spokenTimeLocal** on the call; do not read the reference code unless they need it.`,
       };
     },
   });

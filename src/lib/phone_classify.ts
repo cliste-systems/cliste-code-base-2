@@ -62,15 +62,19 @@ const DIGIT_WORD: Record<string, string> = {
   '9': 'nine',
 };
 
+/** Digit words with spaces inside a group — hyphens can make TTS say "hundred" or mash digits. */
 function spokenFromGroups(groups: string[]): string {
   return groups
-    .map((g) =>
-      g
-        .split('')
-        .map((d) => DIGIT_WORD[d] ?? d)
-        .join('-'),
-    )
+    .map((g) => g.split('').map((d) => DIGIT_WORD[d] ?? d).join(' '))
     .join(', ');
+}
+
+/** Irish mobile national number (9 digits after +353): 08x xxx xxxx → 2+3+4 grouping. */
+function groupIrishLocalDigits(local: string): string[] {
+  if (local.length === 9 && local.startsWith('8')) {
+    return [local.slice(0, 2), local.slice(2, 5), local.slice(5, 9)];
+  }
+  return groupDigits(local);
 }
 
 function classifyIrishE164(local: string): { kind: CallerLineKind; canReceiveSms: boolean } {
@@ -153,9 +157,11 @@ export function classifyCallerLine(raw: string | null | undefined): CallerLineIn
 
   if (e164.startsWith('+353')) {
     const local = e164.slice(4);
-    const groups = groupDigits(local.padStart(9, ''));
-    const spoken = `oh, ${spokenFromGroups(groups)}`; // model often says the leading 0 = "oh"
-    const display = `0${groups.join(' ')}`.replace(/\s+$/, '');
+    const groups = groupIrishLocalDigits(local);
+    // "oh eight seven, one two three, four five six seven" — no hyphens, no "hundred" artefacts.
+    const spoken = `oh ${spokenFromGroups(groups)}`;
+    const display =
+      groups.length >= 1 ? `0${groups[0]}${groups.length > 1 ? ` ${groups.slice(1).join(' ')}` : ''}` : `0${local}`;
     const cls = classifyIrishE164(local);
     return {
       e164,

@@ -597,6 +597,11 @@ export default defineAgent({
     // raise LIVEKIT_INTERRUPTION_MIN_MS back toward 350 if that happens.
     const interruptionMinMs = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_MS ?? '200', 10);
     const interruptionMinWords = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_WORDS ?? '1', 10);
+    const interruptionModeRaw = process.env.LIVEKIT_INTERRUPTION_MODE?.trim().toLowerCase();
+    const interruptionMode: 'adaptive' | 'vad' | undefined =
+      interruptionModeRaw === 'vad' ? 'vad' : interruptionModeRaw === 'auto' ? undefined : 'adaptive';
+    const discardAudioIfUninterruptible =
+      process.env.LIVEKIT_DISCARD_AUDIO_IF_UNINTERRUPTIBLE?.trim().toLowerCase() !== 'false';
 
     const menuTokens = services.flatMap((row) => {
       const n = typeof row.name === 'string' ? row.name.trim() : '';
@@ -723,8 +728,10 @@ export default defineAgent({
           maxDelay: Number.isFinite(endpointMaxMs) ? endpointMaxMs : 2500,
         },
         interruption: {
-          minDuration: Number.isFinite(interruptionMinMs) ? interruptionMinMs : 500,
-          minWords: Number.isFinite(interruptionMinWords) ? interruptionMinWords : 2,
+          mode: interruptionMode,
+          discardAudioIfUninterruptible,
+          minDuration: Number.isFinite(interruptionMinMs) ? interruptionMinMs : 200,
+          minWords: Number.isFinite(interruptionMinWords) ? interruptionMinWords : 1,
         },
       },
     });

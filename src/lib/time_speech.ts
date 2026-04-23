@@ -4,12 +4,27 @@
  * into "three hundred o'clock p m".
  *
  * We return two things in the same string:
- *   1. A calendar phrase ("Saturday 18 April")
+ *   1. A calendar phrase ("Saturday the 18th of April")
  *   2. A TTS-safe clock phrase ("at 3 pm", "at half past 2", "at a quarter past 10")
  *
  * ElevenLabs/most TTS engines read "3:00 pm" literally as digits; spelling the
  * hour + am/pm out (and dropping the :00) gives natural speech.
  */
+function ordinalSuffix(day: number): string {
+  const n = day % 100;
+  if (n >= 11 && n <= 13) return 'th';
+  switch (day % 10) {
+    case 1:
+      return 'st';
+    case 2:
+      return 'nd';
+    case 3:
+      return 'rd';
+    default:
+      return 'th';
+  }
+}
+
 export function formatSlotTimeSpoken(iso: string, timeZone: string): string {
   const d = new Date(iso.trim());
   if (Number.isNaN(d.getTime())) {
@@ -17,12 +32,24 @@ export function formatSlotTimeSpoken(iso: string, timeZone: string): string {
   }
   const tz = timeZone.trim() || 'Europe/Dublin';
   try {
-    const datePart = new Intl.DateTimeFormat('en-IE', {
+    const parts = new Intl.DateTimeFormat('en-IE', {
       timeZone: tz,
       weekday: 'long',
       day: 'numeric',
       month: 'long',
-    }).format(d);
+    }).formatToParts(d);
+    const weekday = parts.find((p) => p.type === 'weekday')?.value ?? '';
+    const month = parts.find((p) => p.type === 'month')?.value ?? '';
+    const dayNum = Number.parseInt(parts.find((p) => p.type === 'day')?.value ?? '0', 10);
+    const datePart =
+      weekday && month && dayNum > 0
+        ? `${weekday} the ${dayNum}${ordinalSuffix(dayNum)} of ${month}`
+        : new Intl.DateTimeFormat('en-IE', {
+            timeZone: tz,
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+          }).format(d);
 
     const hour24 = Number.parseInt(
       new Intl.DateTimeFormat('en-GB', {
