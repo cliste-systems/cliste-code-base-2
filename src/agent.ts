@@ -1,5 +1,6 @@
 import 'dotenv/config';
 
+import * as deepgram from '@livekit/agents-plugin-deepgram';
 import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 import * as lkTurn from '@livekit/agents-plugin-livekit';
 import * as openai from '@livekit/agents-plugin-openai';
@@ -440,6 +441,18 @@ export default defineAgent({
     const sttPrimaryIsFlux = inferenceSttModel.toLowerCase().includes('flux');
     const sttIsDeepgram = inferenceSttModel.toLowerCase().includes('deepgram');
 
+    // Bypass LiveKit's inference gateway for STT and/or LLM. The gateway is
+    // a single point of failure (its STT WebSocket has dropped, and its
+    // LLM credit quota has hit zero in production). These toggles let each
+    // tenant route directly to Deepgram and OpenAI instead, on independent
+    // failure domains. Default off — same wire-path as before unless flipped.
+    const useDirectDeepgramStt =
+      process.env.SALON_STT_PROVIDER?.trim().toLowerCase() === 'deepgram' &&
+      !!process.env.DEEPGRAM_API_KEY?.trim();
+    const useDirectOpenAiLlm =
+      process.env.SALON_LLM_PROVIDER?.trim().toLowerCase() === 'openai' &&
+      !!process.env.OPENAI_API_KEY?.trim();
+
     const ttsProviderRaw = process.env.SALON_TTS_PROVIDER?.trim().toLowerCase() || '';
     const elevenApiKey =
       process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
@@ -556,42 +569,66 @@ export default defineAgent({
       ...new Set([...envExtra, ...salonNameTokens, ...menuTokens]),
     ].slice(0, 100);
 
-    const session = new voice.AgentSession<SalonAgentUserData>({
-      stt: new inference.STT({
-        model: inferenceSttModel,
-        language: inferenceSttLanguage,
-        modelOptions: {
-          smart_format: false,
+    const sttEndpointingMs =
+      Number.parseInt(process.env.LIVEKIT_STT_ENDPOINTING_MS ?? '60', 10) || 60;
+    const llmTemperature = Number.parseFloat(process.env.LIVEKIT_LLM_TEMPERATURE ?? '0.45');
+    const llmMaxCompletionTokens = Number.parseInt(
+      process.env.LIVEKIT_LLM_MAX_TOKENS ?? '220',
+      10,
+    );
+
+    const sttInstance: inference.STT<inference.STTModels> | deepgram.STT = useDirectDeepgramStt
+      ? new deepgram.STT({
+          apiKey: process.env.DEEPGRAM_API_KEY?.trim() ?? '',
+          model: process.env.SALON_STT_DEEPGRAM_MODEL?.trim() || 'nova-3',
+          language: inferenceSttLanguage,
+          interimResults: true,
           punctuate: true,
-          interim_results: true,
-          // Deepgram endpointing in ms — how long of silence before it flushes
-          // a final transcript. 60ms keeps the pipeline snappy; combined with
-          // preemptiveGeneration + the EOU model, this is what lets the agent
-          // start responding before the caller's last word is even finalised.
-          endpointing: Number.parseInt(process.env.LIVEKIT_STT_ENDPOINTING_MS ?? '60', 10) || 60,
-          filler_words: true,
-          ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
-        },
-        ...(sttPrimaryIsFlux ? { fallback: 'deepgram/nova-3:en-GB' } : {}),
-      }),
+          smartFormat: false,
+          endpointing: sttEndpointingMs,
+          fillerWords: true,
+          ...(sttKeyterms.length > 0 ? { keyterm: sttKeyterms } : {}),
+        } as unknown as Partial<deepgram.STTOptions>)
+      : new inference.STT({
+          model: inferenceSttModel,
+          language: inferenceSttLanguage,
+          modelOptions: {
+            smart_format: false,
+            punctuate: true,
+            interim_results: true,
+            endpointing: sttEndpointingMs,
+            filler_words: true,
+            ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
+          },
+          ...(sttPrimaryIsFlux ? { fallback: 'deepgram/nova-3:en-GB' } : {}),
+        });
+
+    const directOpenAiLlmModel = inferenceLlmModel.replace(/^openai\//, '');
+    const llmInstance = useDirectOpenAiLlm
+      ? new openai.LLM({
+          apiKey: process.env.OPENAI_API_KEY?.trim() ?? '',
+          model: directOpenAiLlmModel,
+          temperature: llmTemperature,
+          maxCompletionTokens: llmMaxCompletionTokens,
+        })
+      : new inference.LLM({
+          model: inferenceLlmModel as inference.LLMModels,
+          modelOptions: {
+            temperature: llmTemperature,
+            max_completion_tokens: llmMaxCompletionTokens,
+          },
+        });
+
+    console.info('[agent] pipeline providers', {
+      stt: useDirectDeepgramStt ? `deepgram-direct:nova-3` : inferenceSttModel,
+      llm: useDirectOpenAiLlm ? `openai-direct:${directOpenAiLlmModel}` : inferenceLlmModel,
+      tts: ttsMode,
+    });
+
+    const session = new voice.AgentSession<SalonAgentUserData>({
+      stt: sttInstance,
       vad: ctx.proc.userData.vad as silero.VAD,
-      llm: new inference.LLM({
-        model: inferenceLlmModel as inference.LLMModels,
-        modelOptions: {
-          // Lower temp (was 0.68) = tighter, less-waffly replies. Voice agents
-          // sound better with small lexical variation, not paragraph-level.
-          temperature: Number.parseFloat(process.env.LIVEKIT_LLM_TEMPERATURE ?? '0.45'),
-          // Tighter cap (was 300). With the slimmer system prompt the model
-          // no longer needs headroom to quote long rules — caps responses at
-          // ~3 short sentences, which is where the prompt already wants it.
-          max_completion_tokens: Number.parseInt(
-            process.env.LIVEKIT_LLM_MAX_TOKENS ?? '220',
-            10,
-          ),
-          // Do not set reasoning_effort here — it is for OpenAI reasoning models (o1/o3), not gpt-4o-mini,
-          // and can cause chat completion errors → no assistant text → silent call.
-        },
-      }),
+      llm: llmInstance,
       tts:
         ttsMode === 'openai'
           ? new openai.TTS({
@@ -622,7 +659,7 @@ export default defineAgent({
         // especially when callers pause mid-sentence. Falls back to STT EOU
         // cues on Deepgram if the detector is disabled in env or failed to
         // initialise (e.g. model files not downloaded yet).
-        turnDetection: turnDetectorInstance ?? (sttIsDeepgram ? 'stt' : 'vad'),
+        turnDetection: turnDetectorInstance ?? (useDirectDeepgramStt || sttIsDeepgram ? 'stt' : 'vad'),
         endpointing: {
           mode: endpointMode,
           minDelay: Number.isFinite(endpointMinMs) ? endpointMinMs : 200,
