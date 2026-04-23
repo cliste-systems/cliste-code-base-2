@@ -457,18 +457,23 @@ export default defineAgent({
     const elevenApiKey =
       process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
     const openaiApiKeyForTts = process.env.OPENAI_API_KEY?.trim() || '';
-    let ttsMode: 'elevenlabs' | 'openai';
+    const deepgramApiKeyForTts = process.env.DEEPGRAM_API_KEY?.trim() || '';
+    let ttsMode: 'elevenlabs' | 'openai' | 'deepgram';
     if (ttsProviderRaw === 'openai') {
       ttsMode = 'openai';
     } else if (ttsProviderRaw === 'elevenlabs') {
       ttsMode = 'elevenlabs';
+    } else if (ttsProviderRaw === 'deepgram') {
+      ttsMode = 'deepgram';
     } else if (elevenApiKey) {
       ttsMode = 'elevenlabs';
     } else if (openaiApiKeyForTts) {
       ttsMode = 'openai';
+    } else if (deepgramApiKeyForTts) {
+      ttsMode = 'deepgram';
     } else {
       console.error(
-        'No TTS credentials: set SALON_TTS_PROVIDER=openai with OPENAI_API_KEY, or set ELEVENLABS_API_KEY (and optional SALON_TTS_PROVIDER=elevenlabs).',
+        'No TTS credentials: set SALON_TTS_PROVIDER to one of openai|elevenlabs|deepgram with the matching API key.',
       );
       ctx.shutdown('missing_tts_credentials');
       return;
@@ -485,6 +490,20 @@ export default defineAgent({
       ctx.shutdown('missing_elevenlabs_key');
       return;
     }
+    if (ttsMode === 'deepgram' && !deepgramApiKeyForTts) {
+      console.error(
+        'SALON_TTS_PROVIDER=deepgram requires DEEPGRAM_API_KEY in the worker environment.',
+      );
+      ctx.shutdown('missing_deepgram_key');
+      return;
+    }
+
+    // Default to Aura-2 Angus (Irish masculine) — matches/beats the ElevenLabs
+    // Angus voice we've been using on the phone line. Override with
+    // SALON_TTS_DEEPGRAM_MODEL if you want a different Aura voice (e.g.
+    // aura-2-andromeda-en for female, aura-asteria-en for Aura-1 fallback).
+    const deepgramTtsModel =
+      process.env.SALON_TTS_DEEPGRAM_MODEL?.trim() || 'aura-2-angus-en';
 
     const elevenVoiceId =
       process.env.ELEVEN_VOICE_ID?.trim() || 'C92s6vssSLlabgIln1iY';
@@ -622,7 +641,7 @@ export default defineAgent({
     console.info('[agent] pipeline providers', {
       stt: useDirectDeepgramStt ? `deepgram-direct:nova-3` : inferenceSttModel,
       llm: useDirectOpenAiLlm ? `openai-direct:${directOpenAiLlmModel}` : inferenceLlmModel,
-      tts: ttsMode,
+      tts: ttsMode === 'deepgram' ? `deepgram:${deepgramTtsModel}` : ttsMode,
     });
 
     const session = new voice.AgentSession<SalonAgentUserData>({
@@ -638,17 +657,22 @@ export default defineAgent({
               speed: Number.isFinite(openaiTtsSpeed) ? openaiTtsSpeed : 1,
               ...(openaiTtsInstructions ? { instructions: openaiTtsInstructions } : {}),
             })
-          : new elevenlabs.TTS({
-              apiKey: elevenApiKey,
-              voiceId: elevenVoiceId,
-              model: elevenModel,
-              streamingLatency: Number.isFinite(elevenStreamingLatency) ? elevenStreamingLatency : 4,
-              voiceSettings: {
-                stability: Number.isFinite(elevenVoiceStability) ? elevenVoiceStability : 0.48,
-                similarity_boost: Number.isFinite(elevenVoiceSimilarity) ? elevenVoiceSimilarity : 0.82,
-                style: Number.isFinite(elevenVoiceStyle) ? elevenVoiceStyle : 0.35,
-              },
-            }),
+          : ttsMode === 'deepgram'
+            ? new deepgram.TTS({
+                apiKey: deepgramApiKeyForTts,
+                model: deepgramTtsModel,
+              })
+            : new elevenlabs.TTS({
+                apiKey: elevenApiKey,
+                voiceId: elevenVoiceId,
+                model: elevenModel,
+                streamingLatency: Number.isFinite(elevenStreamingLatency) ? elevenStreamingLatency : 4,
+                voiceSettings: {
+                  stability: Number.isFinite(elevenVoiceStability) ? elevenVoiceStability : 0.48,
+                  similarity_boost: Number.isFinite(elevenVoiceSimilarity) ? elevenVoiceSimilarity : 0.82,
+                  style: Number.isFinite(elevenVoiceStyle) ? elevenVoiceStyle : 0.35,
+                },
+              }),
       userData: sessionUserData,
       preemptiveGeneration: true,
       maxToolSteps: 5,
@@ -992,7 +1016,12 @@ export default defineAgent({
           aiSummary = pp.aiSummary ? redactPii(pp.aiSummary) : null;
           didPostprocess = true;
         }
-        const ttsModelForCost = ttsMode === 'openai' ? String(openaiTtsModel) : String(elevenModel);
+        const ttsModelForCost =
+          ttsMode === 'openai'
+            ? String(openaiTtsModel)
+            : ttsMode === 'deepgram'
+              ? deepgramTtsModel
+              : String(elevenModel);
         const costEstimate = estimateCallCostUsd({
           durationSeconds,
           smsSegmentsSent: ud.sessionFlags.smsSent,
