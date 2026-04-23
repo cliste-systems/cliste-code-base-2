@@ -512,8 +512,8 @@ export default defineAgent({
     }
 
     // 48 kHz linear16 is supported by Deepgram and gives the resampler more
-    // bandwidth before PSTN/narrowband — closer to what you hear in the browser
-    // demo than 24 kHz. ElevenLabs uses pcm_22050; override if needed.
+    // bandwidth before PSTN/narrowband than 24 kHz. (Deepgram allows
+    // 8000–48000 for linear16; ElevenLabs is on a different codec path.)
     const deepgramTtsSampleRate = Number.parseInt(
       process.env.SALON_TTS_DEEPGRAM_SAMPLE_RATE ?? '48000',
       10,
