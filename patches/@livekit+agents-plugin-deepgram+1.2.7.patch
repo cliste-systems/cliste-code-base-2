@@ -1,0 +1,20 @@
+diff --git a/node_modules/@livekit/agents-plugin-deepgram/dist/tts.js b/node_modules/@livekit/agents-plugin-deepgram/dist/tts.js
+index 65110ba..39a08e6 100644
+--- a/node_modules/@livekit/agents-plugin-deepgram/dist/tts.js
++++ b/node_modules/@livekit/agents-plugin-deepgram/dist/tts.js
+@@ -72,6 +72,7 @@ class ChunkedStream extends tts.ChunkedStream {
+     url.searchParams.append("sample_rate", this.opts.sampleRate.toString());
+     url.searchParams.append("model", this.opts.model);
+     url.searchParams.append("encoding", this.opts.encoding);
++    url.searchParams.append("container", "none");
+     await new Promise((resolve, reject) => {
+       let settled = false;
+       const settle = (fn) => {
+@@ -202,6 +203,7 @@ class SynthesizeStream extends tts.SynthesizeStream {
+     url.searchParams.append("sample_rate", this.opts.sampleRate.toString());
+     url.searchParams.append("model", this.opts.model);
+     url.searchParams.append("encoding", this.opts.encoding);
++    url.searchParams.append("container", "none");
+     const ws = new WebSocket(url, {
+       headers: {
+         [AUTHORIZATION_HEADER]: `Token ${this.opts.apiKey}`

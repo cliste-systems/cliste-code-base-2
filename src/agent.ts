@@ -511,8 +511,11 @@ export default defineAgent({
       deepgramTtsModel = 'aura-angus-en';
     }
 
+    // 48 kHz linear16 is supported by Deepgram and gives the resampler more
+    // bandwidth before PSTN/narrowband — closer to what you hear in the browser
+    // demo than 24 kHz. ElevenLabs uses pcm_22050; override if needed.
     const deepgramTtsSampleRate = Number.parseInt(
-      process.env.SALON_TTS_DEEPGRAM_SAMPLE_RATE ?? '24000',
+      process.env.SALON_TTS_DEEPGRAM_SAMPLE_RATE ?? '48000',
       10,
     );
     const deepgramTtsEncoding =
@@ -661,7 +664,10 @@ export default defineAgent({
     console.info('[agent] pipeline providers', {
       stt: useDirectDeepgramStt ? `deepgram-direct:nova-3` : inferenceSttModel,
       llm: useDirectOpenAiLlm ? `openai-direct:${directOpenAiLlmModel}` : inferenceLlmModel,
-      tts: ttsMode === 'deepgram' ? `deepgram:${deepgramTtsModel}` : ttsMode,
+      tts:
+        ttsMode === 'deepgram'
+          ? `deepgram:${deepgramTtsModel}@${deepgramTtsSampleRate}Hz`
+          : ttsMode,
     });
 
     const session = new voice.AgentSession<SalonAgentUserData>({
@@ -682,7 +688,7 @@ export default defineAgent({
                 apiKey: deepgramApiKeyForTts,
                 model: deepgramTtsModel,
                 encoding: deepgramTtsEncoding,
-                sampleRate: Number.isFinite(deepgramTtsSampleRate) ? deepgramTtsSampleRate : 24_000,
+                sampleRate: Number.isFinite(deepgramTtsSampleRate) ? deepgramTtsSampleRate : 48_000,
                 // Match plugin defaults but flush shorter clauses like ElevenLabs streaming.
                 sentenceTokenizer: new tokenize.basic.SentenceTokenizer({
                   minSentenceLength: 8,
