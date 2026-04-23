@@ -471,7 +471,17 @@ export default defineAgent({
     } else if (ttsProviderRaw === 'elevenlabs') {
       ttsMode = 'elevenlabs';
     } else if (ttsProviderRaw === 'deepgram') {
-      ttsMode = 'deepgram';
+      const forceDeepgramTts =
+        process.env.SALON_TTS_FORCE_DEEPGRAM?.trim().toLowerCase() === 'true' ||
+        process.env.SALON_TTS_FORCE_DEEPGRAM === '1';
+      if (!forceDeepgramTts && elevenApiKey) {
+        console.warn(
+          '[agent] SALON_TTS_PROVIDER=deepgram but ElevenLabs key is present — using ElevenLabs receptionist TTS. For Deepgram speech set SALON_TTS_FORCE_DEEPGRAM=1 or remove ELEVENLABS_API_KEY.',
+        );
+        ttsMode = 'elevenlabs';
+      } else {
+        ttsMode = 'deepgram';
+      }
     } else if (elevenApiKey) {
       ttsMode = 'elevenlabs';
     } else if (openaiApiKeyForTts) {

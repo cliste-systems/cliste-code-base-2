@@ -35,6 +35,12 @@ function digitsOnly(s: string): string {
   return s.replace(/\D/g, '');
 }
 
+/** True when `s` looks like a deliverable SMS destination (E.164, 8–15 digits after +). */
+export function isE164SmsTarget(s: string): boolean {
+  const t = s.trim();
+  return /^\+[1-9]\d{6,14}$/.test(t);
+}
+
 /** Group digits in 3-3-4 (or close) for spoken read-back; keeps it natural for TTS. */
 function groupDigits(digits: string): string[] {
   if (digits.length <= 4) {

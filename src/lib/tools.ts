@@ -29,6 +29,7 @@ import { maskPhone } from './gdpr.js';
 import { matchServicesFromUtterance } from './service_menu_match.js';
 import { stripeIsConfigured } from './stripe.js';
 import { getSalonServices, getSupabaseClient } from './supabase.js';
+import { isE164SmsTarget } from './phone_classify.js';
 import { formatSlotTimeSpoken } from './time_speech.js';
 
 /** Mutated during the call; read on session close for call_logs.outcome. */
@@ -554,7 +555,7 @@ export class SalonTools {
 
       const raw = phone.trim();
       const line = ud.callerPhone.trim();
-      const customerPhone = normalizePhoneE164(
+      let customerPhone = normalizePhoneE164(
         raw && raw !== 'unknown' ? raw : line,
       );
       if (!customerPhone || customerPhone === 'unknown') {
@@ -563,6 +564,23 @@ export class SalonTools {
           message:
             'Could not determine a mobile for the text. Ask them to confirm the number for SMS (use the line they are calling from if that is their mobile).',
         };
+      }
+      if (!isE164SmsTarget(customerPhone)) {
+        const fb = process.env.CLISTE_FALLBACK_CONFIRMATION_SMS_TO?.trim();
+        const fallback = fb ? normalizePhoneE164(fb) : '';
+        if (fallback && isE164SmsTarget(fallback)) {
+          console.warn(
+            '[bookAppointment] caller/tool phone not E.164 — sending confirmation to CLISTE_FALLBACK_CONFIRMATION_SMS_TO (dev/playground)',
+            { had: maskPhone(customerPhone), to: maskPhone(fallback) },
+          );
+          customerPhone = fallback;
+        } else {
+          return {
+            ok: false,
+            message:
+              'The number for the confirmation text is not a valid mobile (e.g. browser test calls have no phone). Ask them for an SMS-capable mobile in international or Irish format, or set CLISTE_FALLBACK_CONFIRMATION_SMS_TO in dev.',
+          };
+        }
       }
 
       const { bookingReference, id: appointmentId } = await insertAppointment({
