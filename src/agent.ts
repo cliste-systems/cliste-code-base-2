@@ -12,6 +12,7 @@ import {
   cli,
   defineAgent,
   inference,
+  tokenize,
   voice,
 } from '@livekit/agents';
 import type { RemoteParticipant } from '@livekit/rtc-node';
@@ -465,15 +466,12 @@ export default defineAgent({
       ttsMode = 'elevenlabs';
     } else if (ttsProviderRaw === 'deepgram') {
       ttsMode = 'deepgram';
-    } else if (deepgramApiKeyForTts) {
-      // TEST: prefer Deepgram Aura-2 Angus whenever DEEPGRAM_API_KEY is present,
-      // so we don't need to fiddle with SALON_TTS_PROVIDER in Railway.
-      // To force ElevenLabs back on, set SALON_TTS_PROVIDER=elevenlabs.
-      ttsMode = 'deepgram';
     } else if (elevenApiKey) {
       ttsMode = 'elevenlabs';
     } else if (openaiApiKeyForTts) {
       ttsMode = 'openai';
+    } else if (deepgramApiKeyForTts) {
+      ttsMode = 'deepgram';
     } else {
       console.error(
         'No TTS credentials: set SALON_TTS_PROVIDER to one of openai|elevenlabs|deepgram with the matching API key.',
@@ -501,12 +499,31 @@ export default defineAgent({
       return;
     }
 
-    // Default to Aura-2 Angus (Irish masculine) — matches/beats the ElevenLabs
-    // Angus voice we've been using on the phone line. Override with
-    // SALON_TTS_DEEPGRAM_MODEL if you want a different Aura voice (e.g.
-    // aura-2-andromeda-en for female, aura-asteria-en for Aura-1 fallback).
-    const deepgramTtsModel =
-      process.env.SALON_TTS_DEEPGRAM_MODEL?.trim() || 'aura-2-angus-en';
+    // Irish "Angus" in Deepgram's public API is Aura-1 `aura-angus-en` (en-ie).
+    // There is no `aura-2-angus-en` in Deepgram's model list — that id makes
+    // /v1/speak return an error and callers hear dead air. Override with
+    // SALON_TTS_DEEPGRAM_MODEL (e.g. aura-2-draco-en for British Aura-2).
+    let deepgramTtsModel = process.env.SALON_TTS_DEEPGRAM_MODEL?.trim() || 'aura-angus-en';
+    if (deepgramTtsModel === 'aura-2-angus-en') {
+      console.warn(
+        '[agent] SALON_TTS_DEEPGRAM_MODEL=aura-2-angus-en is not a valid Deepgram voice; using aura-angus-en (Irish).',
+      );
+      deepgramTtsModel = 'aura-angus-en';
+    }
+
+    const deepgramTtsSampleRate = Number.parseInt(
+      process.env.SALON_TTS_DEEPGRAM_SAMPLE_RATE ?? '24000',
+      10,
+    );
+    const deepgramTtsEncoding =
+      (process.env.SALON_TTS_DEEPGRAM_ENCODING?.trim() || 'linear16') as
+        | 'linear16'
+        | 'mulaw'
+        | 'alaw'
+        | 'mp3'
+        | 'opus'
+        | 'flac'
+        | 'aac';
 
     const elevenVoiceId =
       process.env.ELEVEN_VOICE_ID?.trim() || 'C92s6vssSLlabgIln1iY';
@@ -664,6 +681,13 @@ export default defineAgent({
             ? new deepgram.TTS({
                 apiKey: deepgramApiKeyForTts,
                 model: deepgramTtsModel,
+                encoding: deepgramTtsEncoding,
+                sampleRate: Number.isFinite(deepgramTtsSampleRate) ? deepgramTtsSampleRate : 24_000,
+                // Match plugin defaults but flush shorter clauses like ElevenLabs streaming.
+                sentenceTokenizer: new tokenize.basic.SentenceTokenizer({
+                  minSentenceLength: 8,
+                  streamContextLength: 10,
+                }),
               })
             : new elevenlabs.TTS({
                 apiKey: elevenApiKey,
