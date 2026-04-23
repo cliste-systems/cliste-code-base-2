@@ -459,23 +459,6 @@ export default defineAgent({
       );
     }
 
-    // LLM provider selection. Mirror of the STT toggle above. `inference`
-    // (default) routes chat completions through agent-gateway.livekit.cloud
-    // — which uses LiveKit's own OpenAI quota ("MaxGatewayCredits"). That
-    // quota hit 0 on 2026-04-22 and every LLM call 429'd mid-call → agent
-    // heard the caller but couldn't form a reply → caller hung up. Flip
-    // `SALON_LLM_PROVIDER=openai` (requires OPENAI_API_KEY) to bypass the
-    // gateway and bill directly against your OpenAI account, which has a
-    // separate quota and failure domain.
-    const llmProviderRaw = process.env.SALON_LLM_PROVIDER?.trim().toLowerCase() || '';
-    const useDirectOpenAiLlm =
-      llmProviderRaw === 'openai' && !!process.env.OPENAI_API_KEY?.trim();
-    if (llmProviderRaw === 'openai' && !process.env.OPENAI_API_KEY?.trim()) {
-      console.warn(
-        '[agent] SALON_LLM_PROVIDER=openai requested but OPENAI_API_KEY is missing; falling back to LiveKit inference LLM.',
-      );
-    }
-
     const ttsProviderRaw = process.env.SALON_TTS_PROVIDER?.trim().toLowerCase() || '';
     const elevenApiKey =
       process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
@@ -643,54 +626,26 @@ export default defineAgent({
     const sttTurnDetectionSignal: 'stt' | 'vad' =
       useDirectDeepgramStt || sttIsDeepgram ? 'stt' : 'vad';
 
-    // Two LLM builds — mirror of the STT duality above:
-    //  (a) LiveKit inference (default) — via agent-gateway, single vendor bill.
-    //  (b) Direct OpenAI — opt-in via SALON_LLM_PROVIDER=openai. Strips the
-    //      `openai/` vendor prefix from the model name (e.g. `openai/gpt-4o-mini`
-    //      → `gpt-4o-mini`). Uses OPENAI_API_KEY directly so a gateway quota
-    //      exhaustion can't kill the reply pipeline.
-    const llmTemperature = Number.parseFloat(process.env.LIVEKIT_LLM_TEMPERATURE ?? '0.45');
-    const llmMaxCompletionTokens = Number.parseInt(
-      process.env.LIVEKIT_LLM_MAX_TOKENS ?? '220',
-      10,
-    );
-    const directOpenAiLlmModel = inferenceLlmModel.replace(/^openai\//, '');
-    const llmInstance = useDirectOpenAiLlm
-      ? new openai.LLM({
-          apiKey: process.env.OPENAI_API_KEY?.trim() ?? '',
-          model: directOpenAiLlmModel,
-          temperature: llmTemperature,
-          maxCompletionTokens: llmMaxCompletionTokens,
-        })
-      : new inference.LLM({
-          model: inferenceLlmModel as inference.LLMModels,
-          modelOptions: {
-            // Lower temp (was 0.68) = tighter, less-waffly replies. Voice agents
-            // sound better with small lexical variation, not paragraph-level.
-            temperature: llmTemperature,
-            // Tighter cap (was 300). With the slimmer system prompt the model
-            // no longer needs headroom to quote long rules — caps responses at
-            // ~3 short sentences, which is where the prompt already wants it.
-            max_completion_tokens: llmMaxCompletionTokens,
-            // Do not set reasoning_effort here — it is for OpenAI reasoning models (o1/o3), not gpt-4o-mini,
-            // and can cause chat completion errors → no assistant text → silent call.
-          },
-        });
-
-    const activeLlmLabel = useDirectOpenAiLlm
-      ? `openai-direct:${directOpenAiLlmModel}`
-      : inferenceLlmModel;
-
-    console.info('[agent] pipeline providers', {
-      stt: activeSttLabel,
-      llm: activeLlmLabel,
-      tts: ttsMode,
-    });
-
     const session = new voice.AgentSession<SalonAgentUserData>({
       stt: sttInstance,
       vad: ctx.proc.userData.vad as silero.VAD,
-      llm: llmInstance,
+      llm: new inference.LLM({
+        model: inferenceLlmModel as inference.LLMModels,
+        modelOptions: {
+          // Lower temp (was 0.68) = tighter, less-waffly replies. Voice agents
+          // sound better with small lexical variation, not paragraph-level.
+          temperature: Number.parseFloat(process.env.LIVEKIT_LLM_TEMPERATURE ?? '0.45'),
+          // Tighter cap (was 300). With the slimmer system prompt the model
+          // no longer needs headroom to quote long rules — caps responses at
+          // ~3 short sentences, which is where the prompt already wants it.
+          max_completion_tokens: Number.parseInt(
+            process.env.LIVEKIT_LLM_MAX_TOKENS ?? '220',
+            10,
+          ),
+          // Do not set reasoning_effort here — it is for OpenAI reasoning models (o1/o3), not gpt-4o-mini,
+          // and can cause chat completion errors → no assistant text → silent call.
+        },
+      }),
       tts:
         ttsMode === 'openai'
           ? new openai.TTS({
@@ -837,7 +792,7 @@ export default defineAgent({
             bookingUrl: salon.fresha_url ?? null,
             stage,
             errorMessage: msg.slice(0, 500),
-            modelLabel: label ?? (stage === 'llm' ? activeLlmLabel : activeSttLabel),
+            modelLabel: label ?? activeSttLabel,
             retryable: null,
           });
         } catch (e) {
