@@ -47,7 +47,7 @@ function formatCallerLineBlock(callerLine: CallerLineInfo): string {
     return `Caller line: Irish landline ${callerLine.display} — cannot receive SMS. At the phone step, say "I can see you're on ${callerLine.display} but that looks like a landline so it can't get our text — what mobile would suit for the confirmation?" and use the mobile they give.`;
   }
   if (callerLine.kind === 'international') {
-    return `Caller line: international ${callerLine.display} (E.164 ${callerLine.e164}). Say "I have you on ${callerLine.display} — is that a mobile I can text the confirmation to?" If yes, pass that number to bookAppointment; if no, ask once for an SMS-capable mobile.`;
+    return `Caller line: international ${callerLine.display} (E.164 ${callerLine.e164}). Say "I have you on ${callerLine.display} — is that a mobile I can text the confirmation to?" If yes, pass that number to bookAppointment; if no, ask once for an SMS-capable mobile. If reading digits aloud, use once: "${callerLine.spoken}" — same rules as Irish (no "hundred", no hyphens, no double read-back).`;
   }
   return `Caller line: Irish mobile ${callerLine.display} (E.164 ${callerLine.e164}). Confirm in ONE short line: "I'll text the confirmation to ${callerLine.display} — is that the best number?" If yes, pass that exact number to bookAppointment and move on. If you read the number aloud, use **this exact phrase once** (commas = short pause): "${callerLine.spoken}". **Never** paraphrase, **never** repeat it twice, **never** say "hundred" for digit groups, **never** use hyphens between digits — that confuses TTS. NEVER "plus three five three".`;
 }
