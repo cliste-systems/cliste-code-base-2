@@ -63,13 +63,9 @@ export async function finishUsageRecord(input: {
   if (!input.usageId) {
     return;
   }
-  // Stripe metered billing is typically priced per minute; round UP to the
-  // next whole minute so a 61-second call bills as 2 minutes (matching
-  // Twilio + LiveKit conventions).
-  const minutes = Math.max(
-    0,
-    Math.ceil(Math.max(0, input.durationSeconds) / 60),
-  );
+  // Bill actual talk time in minutes (2dp) — no per-call round-up.
+  const seconds = Math.max(0, input.durationSeconds);
+  const minutes = Math.round((seconds / 60) * 100) / 100;
   try {
     const supabase = getSupabaseClient();
     const { error } = await supabase
@@ -117,8 +113,8 @@ export function currentBillingPeriodStart(
  * already over their plan quota — the metering row alone tracks billing
  * but does NOT cap costs without this gate.
  *
- * Counts BOTH closed records (minutes_billable) AND open ones (rounded up
- * from `started_at` → now) so a long in-flight call still counts toward
+ * Counts BOTH closed records (minutes_billable) AND open ones (estimated from
+ * `started_at` → now) so a long in-flight call still counts toward
  * the cap. Returns null on DB error so callers can fail-open if metering
  * is broken (better to let the call through than to drop legitimate
  * traffic if Supabase is having a moment).
@@ -172,7 +168,7 @@ export async function sumUsageMinutesThisPeriod(input: {
         });
         continue;
       }
-      const estimated = Math.max(0, Math.ceil(ageMs / 60_000));
+      const estimated = Math.max(0, Math.round((ageMs / 60_000) * 100) / 100);
       total += Math.min(estimated, MAX_OPEN_MINUTES_PER_ROW);
     }
     return total;
