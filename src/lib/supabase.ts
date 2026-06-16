@@ -2,8 +2,8 @@ import { type SupabaseClient, createClient } from '@supabase/supabase-js';
 
 import { cached } from './cache.js';
 
-/** Read-mostly salon config / catalogue cache window. Dashboard edits surface within this. */
-const SALON_CACHE_TTL_MS = Number.parseInt(
+/** Read-mostly org config cache window. Dashboard edits surface within this. */
+const ORG_CACHE_TTL_MS = Number.parseInt(
   process.env.CLISTE_SALON_CACHE_TTL_MS ?? '60000',
   10,
 );
@@ -26,21 +26,35 @@ export function getSupabaseClient(): SupabaseClient {
   return getSupabase();
 }
 
-export type SalonConfig = {
+/** Full org slice for inbound calls — aligned with code-base-1 PROMPT_ORG_COLUMNS + runtime fields. */
+export type OrgCallConfig = {
   id: string;
+  account_id: string | null;
   name: string;
   slug: string | null;
+  niche: string | null;
   tier: string;
+  status: string | null;
+  is_active: boolean;
+  account_status: string | null;
   business_hours: unknown;
   custom_prompt: string | null;
   greeting: string | null;
+  assistant_display_name: string | null;
+  agent_voice_id: string | null;
+  agent_business_type: string | null;
+  agent_opening_hours: string | null;
+  routing_links: unknown;
+  fallback_number: string | null;
+  call_routing_mode: string | null;
   fresha_url: string | null;
   phone_number: string | null;
-  /** Cliste platform subscription tier (starter/pro/business/enterprise). Used for metering. */
-  plan_tier?: string | null;
-  /** First day of the salon's current Stripe billing period (YYYY-MM-DD). */
-  billing_period_start?: string | null;
+  plan_tier: string | null;
+  billing_period_start: string | null;
 };
+
+/** @deprecated Use OrgCallConfig */
+export type SalonConfig = OrgCallConfig;
 
 export type SalonServiceRow = {
   id: string;
@@ -50,8 +64,39 @@ export type SalonServiceRow = {
   duration_minutes: number | null;
 };
 
-const orgSelect =
-  'id, name, slug, tier, business_hours, custom_prompt, greeting, fresha_url, phone_number, plan_tier, billing_period_start';
+export type BusinessFileRow = {
+  id: string;
+  file_name: string;
+  mime_type: string | null;
+  storage_path: string;
+  send_enabled: boolean;
+};
+
+const ORG_SELECT = `
+  id,
+  account_id,
+  name,
+  slug,
+  niche,
+  tier,
+  status,
+  is_active,
+  business_hours,
+  custom_prompt,
+  greeting,
+  assistant_display_name,
+  agent_voice_id,
+  agent_business_type,
+  agent_opening_hours,
+  routing_links,
+  fallback_number,
+  call_routing_mode,
+  fresha_url,
+  phone_number,
+  plan_tier,
+  billing_period_start,
+  accounts ( status )
+`;
 
 function phoneLookupVariants(phone: string): string[] {
   const t = phone.trim();
@@ -79,83 +124,203 @@ function phoneLookupVariants(phone: string): string[] {
   return [...variants];
 }
 
-export async function getSalonConfigBySlug(slug: string): Promise<SalonConfig | null> {
+function mapOrgRow(data: Record<string, unknown>): OrgCallConfig {
+  const accounts = data.accounts as { status?: string } | { status?: string }[] | null;
+  const accountStatus = Array.isArray(accounts)
+    ? accounts[0]?.status ?? null
+    : accounts?.status ?? null;
+
+  return {
+    id: String(data.id ?? ''),
+    account_id: data.account_id ? String(data.account_id) : null,
+    name: String(data.name ?? ''),
+    slug: data.slug ? String(data.slug) : null,
+    niche: data.niche ? String(data.niche) : null,
+    tier: String(data.tier ?? ''),
+    status: data.status ? String(data.status) : null,
+    is_active: data.is_active !== false,
+    account_status: accountStatus,
+    business_hours: data.business_hours,
+    custom_prompt: data.custom_prompt ? String(data.custom_prompt) : null,
+    greeting: data.greeting ? String(data.greeting) : null,
+    assistant_display_name: data.assistant_display_name
+      ? String(data.assistant_display_name)
+      : null,
+    agent_voice_id: data.agent_voice_id ? String(data.agent_voice_id) : null,
+    agent_business_type: data.agent_business_type
+      ? String(data.agent_business_type)
+      : null,
+    agent_opening_hours: data.agent_opening_hours
+      ? String(data.agent_opening_hours)
+      : null,
+    routing_links: data.routing_links,
+    fallback_number: data.fallback_number ? String(data.fallback_number) : null,
+    call_routing_mode: data.call_routing_mode
+      ? String(data.call_routing_mode)
+      : null,
+    fresha_url: data.fresha_url ? String(data.fresha_url) : null,
+    phone_number: data.phone_number ? String(data.phone_number) : null,
+    plan_tier: data.plan_tier ? String(data.plan_tier) : null,
+    billing_period_start: data.billing_period_start
+      ? String(data.billing_period_start)
+      : null,
+  };
+}
+
+async function fetchOrgBySlug(slug: string): Promise<OrgCallConfig | null> {
   const s = slug.trim();
-  if (!s) {
-    return null;
-  }
+  if (!s) return null;
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from('organizations')
-    .select(orgSelect)
+    .select(ORG_SELECT)
     .eq('slug', s)
     .maybeSingle();
 
-  if (error) {
-    throw error;
-  }
-  if (data) {
-    return data as SalonConfig;
-  }
+  if (error) throw error;
+  if (data) return mapOrgRow(data as Record<string, unknown>);
 
   const { data: ci, error: e2 } = await supabase
     .from('organizations')
-    .select(orgSelect)
+    .select(ORG_SELECT)
     .ilike('slug', s)
     .maybeSingle();
 
-  if (e2) {
-    throw e2;
-  }
-  return ci as SalonConfig | null;
+  if (e2) throw e2;
+  return ci ? mapOrgRow(ci as Record<string, unknown>) : null;
 }
 
-export async function getSalonForCall(input: { slug?: string; phone?: string }): Promise<SalonConfig | null> {
+async function fetchOrgByPhoneOnOrg(phone: string): Promise<OrgCallConfig | null> {
+  const supabase = getSupabase();
+  for (const variant of phoneLookupVariants(phone)) {
+    const { data, error } = await supabase
+      .from('organizations')
+      .select(ORG_SELECT)
+      .eq('phone_number', variant)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (data) return mapOrgRow(data as Record<string, unknown>);
+  }
+  return null;
+}
+
+async function fetchOrgByPhonePool(phone: string): Promise<OrgCallConfig | null> {
+  const supabase = getSupabase();
+  for (const variant of phoneLookupVariants(phone)) {
+    const { data: phoneRow, error: phoneErr } = await supabase
+      .from('phone_numbers')
+      .select('organization_id')
+      .eq('e164', variant)
+      .eq('status', 'assigned')
+      .maybeSingle();
+
+    if (phoneErr) throw phoneErr;
+    if (!phoneRow?.organization_id) continue;
+
+    const { data, error } = await supabase
+      .from('organizations')
+      .select(ORG_SELECT)
+      .eq('id', phoneRow.organization_id)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (data) return mapOrgRow(data as Record<string, unknown>);
+  }
+  return null;
+}
+
+export async function getOrgForCall(input: {
+  slug?: string;
+  phone?: string;
+}): Promise<OrgCallConfig | null> {
   const slug = input.slug?.trim();
   const phone = input.phone?.trim();
-  // Cache key includes both inputs so a slug-vs-phone mismatch can't return
-  // the wrong salon. Salon rows themselves contain no per-call PII.
-  const cacheKey = `salon:${slug ?? ''}:${phone ?? ''}`;
-  return cached(cacheKey, SALON_CACHE_TTL_MS, async () => {
+  const cacheKey = `org:${slug ?? ''}:${phone ?? ''}`;
+  return cached(cacheKey, ORG_CACHE_TTL_MS, async () => {
     if (slug) {
-      const bySlug = await getSalonConfigBySlug(slug);
-      if (bySlug) {
-        return bySlug;
-      }
+      const bySlug = await fetchOrgBySlug(slug);
+      if (bySlug) return bySlug;
     }
-    if (!phone) {
-      return null;
-    }
-    const supabase = getSupabase();
-    for (const variant of phoneLookupVariants(phone)) {
-      const { data, error } = await supabase
-        .from('organizations')
-        .select(orgSelect)
-        .eq('phone_number', variant)
-        .maybeSingle();
-
-      if (error) {
-        throw error;
-      }
-      if (data) {
-        return data as SalonConfig;
-      }
-    }
-    return null;
+    if (!phone) return null;
+    const byOrgPhone = await fetchOrgByPhoneOnOrg(phone);
+    if (byOrgPhone) return byOrgPhone;
+    return fetchOrgByPhonePool(phone);
   });
 }
 
+/** @deprecated Use getOrgForCall */
+export const getSalonForCall = getOrgForCall;
+
+export async function getSalonConfigBySlug(slug: string): Promise<OrgCallConfig | null> {
+  return fetchOrgBySlug(slug);
+}
+
 export async function getSalonServices(organizationId: string): Promise<SalonServiceRow[]> {
-  return cached(`services:${organizationId}`, SALON_CACHE_TTL_MS, async () => {
+  return cached(`services:${organizationId}`, ORG_CACHE_TTL_MS, async () => {
     const supabase = getSupabase();
     const { data, error } = await supabase
       .from('services')
       .select('id, name, description, price, duration_minutes')
       .eq('organization_id', organizationId);
 
-    if (error) {
-      throw error;
-    }
+    if (error) throw error;
     return (data ?? []) as SalonServiceRow[];
   });
+}
+
+export async function getSendableBusinessFiles(
+  organizationId: string,
+): Promise<BusinessFileRow[]> {
+  return cached(`bizfiles:${organizationId}`, ORG_CACHE_TTL_MS, async () => {
+    const supabase = getSupabase();
+    const { data, error } = await supabase
+      .from('business_files')
+      .select('id, file_name, mime_type, storage_path, send_enabled')
+      .eq('organization_id', organizationId)
+      .eq('send_enabled', true);
+
+    if (error) throw error;
+    return (data ?? []) as BusinessFileRow[];
+  });
+}
+
+export async function createBusinessFileSignedUrl(
+  storagePath: string,
+  expiresInSeconds = 3600,
+): Promise<string | null> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.storage
+    .from('business-files')
+    .createSignedUrl(storagePath, expiresInSeconds);
+  if (error || !data?.signedUrl) return null;
+  return data.signedUrl;
+}
+
+/** Legacy salon booking path: structured services table + native/connect tier. */
+export function shouldUseSalonBookingMode(
+  org: OrgCallConfig,
+  serviceCount: number,
+): boolean {
+  if (serviceCount <= 0) return false;
+  const tier = String(org.tier ?? '').toLowerCase();
+  return tier === 'native' || tier === 'connect';
+}
+
+export function resolveOrgTimeZone(org: OrgCallConfig): string {
+  const raw = org.business_hours;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const tz = (raw as Record<string, unknown>).timezone;
+    if (typeof tz === 'string' && tz.trim()) {
+      return tz.trim();
+    }
+  }
+  return process.env.SALON_TIMEZONE?.trim() || 'Europe/Dublin';
+}
+
+export function resolveOrgVoiceId(org: OrgCallConfig): string | null {
+  const id = org.agent_voice_id?.trim();
+  if (id) return id;
+  const envId = process.env.ELEVEN_VOICE_ID?.trim();
+  return envId || null;
 }

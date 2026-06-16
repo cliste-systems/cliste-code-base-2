@@ -13,7 +13,6 @@ import {
   checkSlotAvailable,
   findServiceForOrg,
   insertAppointment,
-  linkAppointmentToCallLog,
   setAppointmentConfirmationSmsSentAt,
   listUpcomingAppointmentsForCustomer,
   rescheduleAppointmentForCustomer,
@@ -48,6 +47,8 @@ export type SessionCallFlags = {
 export type SalonAgentUserData = {
   organizationId: string;
   salonName: string;
+  /** Dialed Cliste number — used for voice webhooks. */
+  calledNumber: string;
   bookingLinkUrl: string | null;
   /** Caller line (E.164 best-effort); used for Action Inbox tickets. */
   callerPhone: string;
@@ -149,9 +150,14 @@ export function assistantTextSoundsLikeGoodbye(text: string): boolean {
  * Plays hang-up tone (if available) and removes the SIP participant. Shared by the endPhoneCall tool
  * and the agent output guard when the model says “end phone call” in speech.
  */
+export type EndCallUserData = {
+  sessionFlags: { endPhoneCallUsed: boolean };
+  endCallTarget?: { roomName: string; callerIdentity: string };
+};
+
 export async function disconnectSalonCallerLeg(
-  session: voice.AgentSession<SalonAgentUserData>,
-  ud: SalonAgentUserData,
+  session: voice.AgentSession<EndCallUserData>,
+  ud: EndCallUserData,
   beforeAudio: () => Promise<void>,
 ): Promise<{ ok: boolean; message: string }> {
   if (ud.sessionFlags.endPhoneCallUsed) {
@@ -1014,6 +1020,7 @@ export class SalonTools {
       }
       await insertActionTicket({
         organizationId: ud.organizationId,
+        calledNumber: ud.calledNumber,
         callerNumber: phone,
         summary: text,
         engineeringPriority: 'urgent',

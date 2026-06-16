@@ -29,13 +29,3 @@ export async function cached<T>(
   store.set(key, { value, expiresAt: now + Math.max(0, ttlMs) });
   return value;
 }
-
-/** Force-evict a key (for tests, or after a known dashboard update). */
-export function invalidate(key: string): void {
-  store.delete(key);
-}
-
-/** Drop everything (used by retention/erase scripts). */
-export function clearAllCachedEntries(): void {
-  store.clear();
-}

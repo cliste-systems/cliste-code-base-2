@@ -24,27 +24,11 @@ import 'dotenv/config';
 
 import { createClient } from '@supabase/supabase-js';
 
+import { normalizeCustomerPhoneE164 } from '../src/lib/booking_reference.js';
+
 function usage(): never {
   console.error('Usage: tsx scripts/gdpr-erase.ts <phone> [--dry-run]');
   process.exit(2);
-}
-
-function normalisePhone(raw: string): string {
-  const t = raw.trim();
-  if (t.startsWith('+')) {
-    return t;
-  }
-  const d = t.replace(/\D/g, '');
-  if (d.startsWith('353') && d.length >= 11) {
-    return `+${d}`;
-  }
-  if (d.startsWith('0') && (d.length === 10 || d.length === 11)) {
-    return `+353${d.slice(1)}`;
-  }
-  if (d.length >= 10) {
-    return `+${d}`;
-  }
-  return t;
 }
 
 /** Phone-number variants we will match against — covers both stored formats. */
@@ -65,7 +49,7 @@ async function main() {
   }
   const phone = args[0]!;
   const dryRun = args.includes('--dry-run');
-  const e164 = normalisePhone(phone);
+  const e164 = normalizeCustomerPhoneE164(phone);
   const variants = lookupVariants(e164);
 
   const url = process.env.SUPABASE_URL?.trim();

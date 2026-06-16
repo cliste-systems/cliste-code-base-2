@@ -3,7 +3,7 @@
  *
  * Covers typical Cliste voice stack:
  * - LiveKit Cloud (room / participant / agent minutes — single blended rate by default)
- * - Speech-to-text (Deepgram-style; set to 0 if fully bundled in LiveKit)
+ * - Speech-to-text via LiveKit Inference (set to 0 if fully bundled in LiveKit)
  * - LLM (OpenAI-style pricing for voice-turn + tool calls; rough token model)
  * - TTS (ElevenLabs — default flat USD/min; optional per‑character model if USD/min is 0)
  * - Twilio SIP voice + SMS segments sent on the call
@@ -78,7 +78,7 @@ export function estimateCallCostUsd(input: {
   const livekitPerMin = envFloat('CALL_COST_LIVEKIT_USD_PER_MIN', 0.01);
   const livekit = durationMin * livekitPerMin;
 
-  /* STT (often Deepgram via LiveKit Inference). Set fraction or CALL_COST_STT_USD_PER_MIN=0 if bundled in LK. */
+  /* STT via LiveKit Inference. Set fraction or CALL_COST_STT_USD_PER_MIN=0 if bundled in LK. */
   const sttFraction = envFloat('CALL_COST_STT_BILLED_FRACTION_OF_WALL', 0.5);
   const sttPerMin = envFloat('CALL_COST_STT_USD_PER_MIN', 0.006);
   const stt = durationMin * sttFraction * sttPerMin;

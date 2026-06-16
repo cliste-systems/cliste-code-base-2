@@ -1,6 +1,5 @@
 import 'dotenv/config';
 
-import * as deepgram from '@livekit/agents-plugin-deepgram';
 import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 import * as lkTurn from '@livekit/agents-plugin-livekit';
 import * as openai from '@livekit/agents-plugin-openai';
@@ -12,7 +11,6 @@ import {
   cli,
   defineAgent,
   inference,
-  tokenize,
   voice,
 } from '@livekit/agents';
 import type { RemoteParticipant } from '@livekit/rtc-node';
@@ -34,9 +32,25 @@ import {
   formatSalonPhoneForCustomerSms,
   type CallerLineInfo,
 } from './lib/phone_classify.js';
+import { buildCaraCallPrompt } from './lib/cara_prompt.js';
+import { CaraTools } from './lib/cara_tools.js';
+import { assertOrgCallable } from './lib/org_gate.js';
+import {
+  canonicalCallOutcome,
+  postCallComplete,
+  voiceWebhooksConfigured,
+} from './lib/voice_api.js';
 import { buildSalonSystemPrompt } from './lib/prompt.js';
 import { stripeIsConfigured } from './lib/stripe.js';
-import { getSalonForCall, getSalonServices, type SalonServiceRow } from './lib/supabase.js';
+import {
+  getOrgForCall,
+  getSalonServices,
+  getSendableBusinessFiles,
+  resolveOrgTimeZone,
+  resolveOrgVoiceId,
+  shouldUseSalonBookingMode,
+  type SalonServiceRow,
+} from './lib/supabase.js';
 import {
   SalonTools,
   assistantTextSoundsLikeFakeHangup,
@@ -44,6 +58,7 @@ import {
   disconnectSalonCallerLeg,
   type SalonAgentUserData,
 } from './lib/tools.js';
+import type { CaraAgentUserData } from './lib/cara_tools.js';
 import {
   currentBillingPeriodStart,
   finishUsageRecord,
@@ -225,32 +240,61 @@ export default defineAgent({
     const participant = await ctx.waitForParticipant();
     const routing = resolveSalonRouting(ctx.job, participant);
 
-    const salon = await getSalonForCall({
+    const org = await getOrgForCall({
       ...(routing.slug ? { slug: routing.slug } : {}),
       ...(routing.phone ? { phone: routing.phone } : {}),
     });
-    if (!salon) {
+    if (!org) {
       console.error('No organization found for routing', routing);
       ctx.shutdown('unknown_organization');
       return;
     }
 
-    console.info('Salon loaded', {
+    const gate = assertOrgCallable(org);
+    if (!gate.ok) {
+      console.warn('[agent] org not callable', { orgId: org.id, reason: gate.reason });
+      try {
+        const lkHost = process.env.LIVEKIT_URL?.trim();
+        const lkKey = process.env.LIVEKIT_API_KEY?.trim();
+        const lkSecret = process.env.LIVEKIT_API_SECRET?.trim();
+        const roomName =
+          (typeof ctx.room.name === 'string' && ctx.room.name.trim()) || '';
+        if (lkHost && lkKey && lkSecret && roomName && participant.identity) {
+          const httpsHost = lkHost.replace(/^wss?:\/\//, 'https://');
+          const client = new RoomServiceClient(httpsHost, lkKey, lkSecret);
+          await client.removeParticipant(roomName, participant.identity);
+        }
+      } catch (err) {
+        console.error('[agent] org-gate disconnect failed', err);
+      }
+      return;
+    }
+
+    const salon = org;
+    const services = await getSalonServices(salon.id);
+    const businessFiles = await getSendableBusinessFiles(salon.id);
+    const useSalonBookingMode = shouldUseSalonBookingMode(salon, services.length);
+    const caraTools = new CaraTools();
+    const routingLinks = CaraTools.parseLinks(salon.routing_links);
+
+    console.info('Organization loaded', {
       id: salon.id,
       slug: salon.slug,
       name: salon.name,
       phone: salon.phone_number,
+      niche: salon.niche,
+      mode: useSalonBookingMode ? 'salon_booking' : 'cara',
       promptChars: salon.custom_prompt?.length ?? 0,
       greetingSet: Boolean(salon.greeting?.trim()),
+      routeCount: routingLinks.length,
     });
 
-    const services = await getSalonServices(salon.id);
     const servicesList = formatServicesList(services);
     const custom = salon.custom_prompt?.trim() || 'Be professional, concise, and helpful.';
 
     const now = new Date();
     const nowUtcIso = now.toISOString();
-    const bookingTz = process.env.SALON_TIMEZONE?.trim() || 'UTC';
+    const bookingTz = resolveOrgTimeZone(salon);
     let todaySalonTz = nowUtcIso;
     try {
       todaySalonTz = now.toLocaleDateString('en-GB', {
@@ -291,24 +335,35 @@ export default defineAgent({
       );
     }
 
-    const systemPrompt = buildSalonSystemPrompt({
-      salonName: salon.name,
-      salonTier: salon.tier,
-      ownerInstructions: custom,
-      hoursBlock,
-      servicesList,
-      callerLine,
-      bookingTz,
-      nowUtcIso,
-      todaySalonTz,
-      exampleIso,
-      isNativePlan,
-      stripeAvailable,
-    });
+    const systemPrompt = useSalonBookingMode
+      ? buildSalonSystemPrompt({
+          salonName: salon.name,
+          salonTier: salon.tier,
+          ownerInstructions: custom,
+          hoursBlock,
+          servicesList,
+          callerLine,
+          bookingTz,
+          nowUtcIso,
+          todaySalonTz,
+          exampleIso,
+          isNativePlan,
+          stripeAvailable,
+        })
+      : buildCaraCallPrompt({
+          businessName: salon.name,
+          customPrompt: custom,
+          callerLine,
+          bookingTimeZone: bookingTz,
+          nowUtcIso,
+          todayLocal: todaySalonTz,
+        });
 
-    // (legacy inline mega-prompt removed — see buildSalonSystemPrompt in lib/prompt.ts)
+    // (legacy inline mega-prompt removed — see buildSalonSystemPrompt / buildCaraCallPrompt)
 
     const salonTools = new SalonTools();
+    const calledNumber =
+      routing.phone?.trim() || salon.phone_number?.trim() || '';
     const callStartedAt = Date.now();
     const callerNumber = earlyCallerNumberRaw;
     const roomName =
@@ -410,52 +465,64 @@ export default defineAgent({
       billingPeriodStart,
     });
 
-    const sessionUserData: SalonAgentUserData = {
-      organizationId: salon.id,
-      salonName: salon.name,
-      bookingLinkUrl: salon.fresha_url ?? null,
-      callerPhone: callerNumber,
-      sessionFlags: {
-        appointmentBooked: false,
-        linkSent: false,
-        actionTicketCreated: false,
-        smsSent: 0,
-        endPhoneCallUsed: false,
-        paymentLinksSent: 0,
-      },
-      nativePlan: isNativePlan,
-      businessHours: salon.business_hours,
-      bookingTimeZone: bookingTz,
-      lastBookedAppointmentId: null,
-      salonCallbackPhoneDisplay: formatSalonPhoneForCustomerSms(salon.phone_number),
-      lastBookedCustomerFirstName: null,
-      ...(roomName && participant.identity
-        ? {
-            endCallTarget: {
-              roomName,
-              callerIdentity: participant.identity,
-            },
-          }
-        : {}),
-    };
+    const endCallTarget =
+      roomName && participant.identity
+        ? { roomName, callerIdentity: participant.identity }
+        : undefined;
 
-    /** Default flux-general (reliable on phone lines); override e.g. deepgram/nova-3:en for Cloud parity. */
+    const sessionUserData: SalonAgentUserData | CaraAgentUserData = useSalonBookingMode
+      ? {
+          organizationId: salon.id,
+          salonName: salon.name,
+          calledNumber,
+          bookingLinkUrl: salon.fresha_url ?? null,
+          callerPhone: callerNumber,
+          sessionFlags: {
+            appointmentBooked: false,
+            linkSent: false,
+            actionTicketCreated: false,
+            smsSent: 0,
+            endPhoneCallUsed: false,
+            paymentLinksSent: 0,
+          },
+          nativePlan: isNativePlan,
+          businessHours: salon.business_hours,
+          bookingTimeZone: bookingTz,
+          lastBookedAppointmentId: null,
+          salonCallbackPhoneDisplay: formatSalonPhoneForCustomerSms(salon.phone_number),
+          lastBookedCustomerFirstName: null,
+          ...(endCallTarget ? { endCallTarget } : {}),
+        }
+      : {
+          organizationId: salon.id,
+          businessName: salon.name,
+          calledNumber,
+          callerPhone: callerNumber,
+          routingLinks,
+          businessFiles,
+          fallbackNumber: salon.fallback_number,
+          callRoutingMode: salon.call_routing_mode,
+          sessionFlags: {
+            linkSent: false,
+            actionTicketCreated: false,
+            callbackRequested: false,
+            smsSent: 0,
+            endPhoneCallUsed: false,
+          },
+          disclosureConfirmed: false,
+          ...(endCallTarget ? { endCallTarget } : {}),
+        };
+
+    /** Default AssemblyAI streaming STT (reliable on SIP). Override via LIVEKIT_INFERENCE_STT_MODEL. */
     const inferenceSttModel =
-      process.env.LIVEKIT_INFERENCE_STT_MODEL?.trim() || 'deepgram/flux-general';
+      process.env.LIVEKIT_INFERENCE_STT_MODEL?.trim() || 'assemblyai/universal-streaming';
     const inferenceSttLanguage = process.env.LIVEKIT_INFERENCE_STT_LANGUAGE?.trim() || 'en';
     const inferenceLlmModel =
       process.env.LIVEKIT_INFERENCE_LLM_MODEL?.trim() || 'openai/gpt-4o-mini';
-    const sttPrimaryIsFlux = inferenceSttModel.toLowerCase().includes('flux');
-    const sttIsDeepgram = inferenceSttModel.toLowerCase().includes('deepgram');
 
-    // Bypass LiveKit's inference gateway for STT and/or LLM. The gateway is
-    // a single point of failure (its STT WebSocket has dropped, and its
-    // LLM credit quota has hit zero in production). These toggles let each
-    // tenant route directly to Deepgram and OpenAI instead, on independent
-    // failure domains. Default off — same wire-path as before unless flipped.
-    const useDirectDeepgramStt =
-      process.env.SALON_STT_PROVIDER?.trim().toLowerCase() === 'deepgram' &&
-      !!process.env.DEEPGRAM_API_KEY?.trim();
+    // Bypass LiveKit's inference gateway for LLM. The gateway is a single
+    // point of failure (its LLM credit quota has hit zero in production).
+    // This toggle routes directly to OpenAI on an independent failure domain.
     const useDirectOpenAiLlm =
       process.env.SALON_LLM_PROVIDER?.trim().toLowerCase() === 'openai' &&
       !!process.env.OPENAI_API_KEY?.trim();
@@ -464,33 +531,18 @@ export default defineAgent({
     const elevenApiKey =
       process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
     const openaiApiKeyForTts = process.env.OPENAI_API_KEY?.trim() || '';
-    const deepgramApiKeyForTts = process.env.DEEPGRAM_API_KEY?.trim() || '';
-    let ttsMode: 'elevenlabs' | 'openai' | 'deepgram';
+    let ttsMode: 'elevenlabs' | 'openai';
     if (ttsProviderRaw === 'openai') {
       ttsMode = 'openai';
     } else if (ttsProviderRaw === 'elevenlabs') {
       ttsMode = 'elevenlabs';
-    } else if (ttsProviderRaw === 'deepgram') {
-      const forceDeepgramTts =
-        process.env.SALON_TTS_FORCE_DEEPGRAM?.trim().toLowerCase() === 'true' ||
-        process.env.SALON_TTS_FORCE_DEEPGRAM === '1';
-      if (!forceDeepgramTts && elevenApiKey) {
-        console.warn(
-          '[agent] SALON_TTS_PROVIDER=deepgram but ElevenLabs key is present — using ElevenLabs receptionist TTS. For Deepgram speech set SALON_TTS_FORCE_DEEPGRAM=1 or remove ELEVENLABS_API_KEY.',
-        );
-        ttsMode = 'elevenlabs';
-      } else {
-        ttsMode = 'deepgram';
-      }
     } else if (elevenApiKey) {
       ttsMode = 'elevenlabs';
     } else if (openaiApiKeyForTts) {
       ttsMode = 'openai';
-    } else if (deepgramApiKeyForTts) {
-      ttsMode = 'deepgram';
     } else {
       console.error(
-        'No TTS credentials: set SALON_TTS_PROVIDER to one of openai|elevenlabs|deepgram with the matching API key.',
+        'No TTS credentials: set SALON_TTS_PROVIDER to openai|elevenlabs with the matching API key.',
       );
       ctx.shutdown('missing_tts_credentials');
       return;
@@ -507,45 +559,10 @@ export default defineAgent({
       ctx.shutdown('missing_elevenlabs_key');
       return;
     }
-    if (ttsMode === 'deepgram' && !deepgramApiKeyForTts) {
-      console.error(
-        'SALON_TTS_PROVIDER=deepgram requires DEEPGRAM_API_KEY in the worker environment.',
-      );
-      ctx.shutdown('missing_deepgram_key');
-      return;
-    }
-
-    // Irish "Angus" in Deepgram's public API is Aura-1 `aura-angus-en` (en-ie).
-    // There is no `aura-2-angus-en` in Deepgram's model list — that id makes
-    // /v1/speak return an error and callers hear dead air. Override with
-    // SALON_TTS_DEEPGRAM_MODEL (e.g. aura-2-draco-en for British Aura-2).
-    let deepgramTtsModel = process.env.SALON_TTS_DEEPGRAM_MODEL?.trim() || 'aura-angus-en';
-    if (deepgramTtsModel === 'aura-2-angus-en') {
-      console.warn(
-        '[agent] SALON_TTS_DEEPGRAM_MODEL=aura-2-angus-en is not a valid Deepgram voice; using aura-angus-en (Irish).',
-      );
-      deepgramTtsModel = 'aura-angus-en';
-    }
-
-    // 48 kHz linear16 is supported by Deepgram and gives the resampler more
-    // bandwidth before PSTN/narrowband than 24 kHz. (Deepgram allows
-    // 8000–48000 for linear16; ElevenLabs is on a different codec path.)
-    const deepgramTtsSampleRate = Number.parseInt(
-      process.env.SALON_TTS_DEEPGRAM_SAMPLE_RATE ?? '48000',
-      10,
-    );
-    const deepgramTtsEncoding =
-      (process.env.SALON_TTS_DEEPGRAM_ENCODING?.trim() || 'linear16') as
-        | 'linear16'
-        | 'mulaw'
-        | 'alaw'
-        | 'mp3'
-        | 'opus'
-        | 'flac'
-        | 'aac';
-
     const elevenVoiceId =
-      process.env.ELEVEN_VOICE_ID?.trim() || 'C92s6vssSLlabgIln1iY';
+      resolveOrgVoiceId(salon) ||
+      process.env.ELEVEN_VOICE_ID?.trim() ||
+      'C92s6vssSLlabgIln1iY';
     // eleven_flash_v2_5 is ElevenLabs' real-time agent model (~75ms inference
     // vs ~250ms for turbo_v2_5), recommended for voice agents. Also avoids
     // the tail-streaming artefact turbo produced on short "goodbye!" lines
@@ -632,39 +649,27 @@ export default defineAgent({
       ...new Set([...envExtra, ...salonNameTokens, ...menuTokens]),
     ].slice(0, 100);
 
-    const sttEndpointingMs =
-      Number.parseInt(process.env.LIVEKIT_STT_ENDPOINTING_MS ?? '60', 10) || 60;
     const llmTemperature = Number.parseFloat(process.env.LIVEKIT_LLM_TEMPERATURE ?? '0.45');
     const llmMaxCompletionTokens = Number.parseInt(
       process.env.LIVEKIT_LLM_MAX_TOKENS ?? '220',
       10,
     );
 
-    const sttInstance: inference.STT<inference.STTModels> | deepgram.STT = useDirectDeepgramStt
-      ? new deepgram.STT({
-          apiKey: process.env.DEEPGRAM_API_KEY?.trim() ?? '',
-          model: process.env.SALON_STT_DEEPGRAM_MODEL?.trim() || 'nova-3',
-          language: inferenceSttLanguage,
-          interimResults: true,
-          punctuate: true,
-          smartFormat: false,
-          endpointing: sttEndpointingMs,
-          fillerWords: true,
-          ...(sttKeyterms.length > 0 ? { keyterm: sttKeyterms } : {}),
-        } as unknown as Partial<deepgram.STTOptions>)
-      : new inference.STT({
-          model: inferenceSttModel,
-          language: inferenceSttLanguage,
-          modelOptions: {
-            smart_format: false,
-            punctuate: true,
-            interim_results: true,
-            endpointing: sttEndpointingMs,
-            filler_words: true,
-            ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
-          },
-          ...(sttPrimaryIsFlux ? { fallback: 'deepgram/nova-3:en-GB' } : {}),
-        });
+    const sttModelLower = inferenceSttModel.toLowerCase();
+    const sttModelOptions = sttModelLower.includes('assemblyai')
+      ? {
+          ...(sttKeyterms.length > 0 ? { keyterms_prompt: sttKeyterms } : {}),
+        }
+      : {
+          interim_results: true,
+          ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
+        };
+
+    const sttInstance = new inference.STT({
+      model: inferenceSttModel,
+      language: inferenceSttLanguage,
+      modelOptions: sttModelOptions,
+    });
 
     const directOpenAiLlmModel = inferenceLlmModel.replace(/^openai\//, '');
     const llmInstance = useDirectOpenAiLlm
@@ -683,15 +688,12 @@ export default defineAgent({
         });
 
     console.info('[agent] pipeline providers', {
-      stt: useDirectDeepgramStt ? `deepgram-direct:nova-3` : inferenceSttModel,
+      stt: inferenceSttModel,
       llm: useDirectOpenAiLlm ? `openai-direct:${directOpenAiLlmModel}` : inferenceLlmModel,
-      tts:
-        ttsMode === 'deepgram'
-          ? `deepgram:${deepgramTtsModel}@${deepgramTtsSampleRate}Hz`
-          : ttsMode,
+      tts: ttsMode,
     });
 
-    const session = new voice.AgentSession<SalonAgentUserData>({
+    const session = new voice.AgentSession<SalonAgentUserData | CaraAgentUserData>({
       stt: sttInstance,
       vad: ctx.proc.userData.vad as silero.VAD,
       llm: llmInstance,
@@ -704,19 +706,7 @@ export default defineAgent({
               speed: Number.isFinite(openaiTtsSpeed) ? openaiTtsSpeed : 1,
               ...(openaiTtsInstructions ? { instructions: openaiTtsInstructions } : {}),
             })
-          : ttsMode === 'deepgram'
-            ? new deepgram.TTS({
-                apiKey: deepgramApiKeyForTts,
-                model: deepgramTtsModel,
-                encoding: deepgramTtsEncoding,
-                sampleRate: Number.isFinite(deepgramTtsSampleRate) ? deepgramTtsSampleRate : 48_000,
-                // Match plugin defaults but flush shorter clauses like ElevenLabs streaming.
-                sentenceTokenizer: new tokenize.basic.SentenceTokenizer({
-                  minSentenceLength: 8,
-                  streamContextLength: 10,
-                }),
-              })
-            : new elevenlabs.TTS({
+          : new elevenlabs.TTS({
                 apiKey: elevenApiKey,
                 voiceId: elevenVoiceId,
                 model: elevenModel,
@@ -735,9 +725,9 @@ export default defineAgent({
         // inference per turn) predicts end-of-utterance from language
         // context — noticeably faster + more accurate than VAD silence alone,
         // especially when callers pause mid-sentence. Falls back to STT EOU
-        // cues on Deepgram if the detector is disabled in env or failed to
-        // initialise (e.g. model files not downloaded yet).
-        turnDetection: turnDetectorInstance ?? (useDirectDeepgramStt || sttIsDeepgram ? 'stt' : 'vad'),
+        // cues from inference STT if the detector is disabled in env or failed
+        // to initialise (e.g. model files not downloaded yet).
+        turnDetection: turnDetectorInstance ?? 'stt',
         endpointing: {
           mode: endpointMode,
           minDelay: Number.isFinite(endpointMinMs) ? endpointMinMs : 200,
@@ -938,10 +928,14 @@ export default defineAgent({
       if (!text) {
         return;
       }
+      const flags = session.userData.sessionFlags;
+      const appointmentBooked =
+        'appointmentBooked' in flags && Boolean(flags.appointmentBooked);
       if (
+        useSalonBookingMode &&
         role === 'user' &&
-        session.userData.sessionFlags.appointmentBooked &&
-        !session.userData.sessionFlags.endPhoneCallUsed &&
+        appointmentBooked &&
+        !flags.endPhoneCallUsed &&
         callerSoundsDone(text)
       ) {
         clearPostBookingGoodbyeTimers();
@@ -952,7 +946,10 @@ export default defineAgent({
           if (ud.sessionFlags.endPhoneCallUsed) return;
           if (session.agentState === 'speaking') return;
           try {
-            const fn = session.userData.lastBookedCustomerFirstName;
+            const fn =
+              'lastBookedCustomerFirstName' in session.userData
+                ? session.userData.lastBookedCustomerFirstName
+                : null;
             const nameLine = fn
               ? `Use their name "${fn}" — e.g. "${fn}, thanks for ringing — see you then!" `
               : '';
@@ -1006,9 +1003,9 @@ export default defineAgent({
       if (
         role === 'assistant' &&
         !session.userData.sessionFlags.endPhoneCallUsed &&
-        (session.userData.sessionFlags.appointmentBooked ||
-          session.userData.sessionFlags.linkSent ||
-          session.userData.sessionFlags.actionTicketCreated) &&
+        (appointmentBooked ||
+          flags.linkSent ||
+          flags.actionTicketCreated) &&
         assistantTextSoundsLikeGoodbye(text)
       ) {
         clearPostBookingGoodbyeTimers();
@@ -1085,16 +1082,17 @@ export default defineAgent({
           return;
         }
         const durationSeconds = Math.max(0, Math.round((Date.now() - callStartedAt) / 1000));
-        let outcome = 'handled';
-        if (ud.sessionFlags.appointmentBooked) {
-          outcome = 'appointment_booked';
-        } else if (ud.sessionFlags.linkSent) {
-          outcome = 'link_sent';
-        } else if (ud.sessionFlags.actionTicketCreated) {
-          outcome = 'action_required';
-        } else if (ud.sessionFlags.endPhoneCallUsed) {
-          outcome = 'call_ended_by_agent';
-        }
+        let outcome = canonicalCallOutcome({
+          appointmentBooked:
+            'appointmentBooked' in ud.sessionFlags &&
+            Boolean(ud.sessionFlags.appointmentBooked),
+          linkSent: ud.sessionFlags.linkSent,
+          actionTicketCreated: ud.sessionFlags.actionTicketCreated,
+          callbackRequested:
+            'callbackRequested' in ud.sessionFlags &&
+            Boolean(ud.sessionFlags.callbackRequested),
+          endPhoneCallUsed: ud.sessionFlags.endPhoneCallUsed,
+        });
         const verbatimRaw = mergeTranscriptLines(transcriptParts);
         // GDPR data minimisation: strip likely card-numbers / CVVs / IBAN / PPS
         // from the transcript BEFORE we hand it to the post-process LLM
@@ -1118,11 +1116,7 @@ export default defineAgent({
           didPostprocess = true;
         }
         const ttsModelForCost =
-          ttsMode === 'openai'
-            ? String(openaiTtsModel)
-            : ttsMode === 'deepgram'
-              ? deepgramTtsModel
-              : String(elevenModel);
+          ttsMode === 'openai' ? String(openaiTtsModel) : String(elevenModel);
         const costEstimate = estimateCallCostUsd({
           durationSeconds,
           smsSegmentsSent: ud.sessionFlags.smsSent,
@@ -1132,17 +1126,56 @@ export default defineAgent({
           llmModel: inferenceLlmModel,
           ttsModel: ttsModelForCost,
         });
-        const callLogId = await insertCallLog({
-          organizationId: ud.organizationId,
-          callerNumber,
-          durationSeconds,
-          outcome,
-          transcript: verbatim,
-          transcriptReview,
-          aiSummary,
-          costEstimate,
-        });
-        if (callLogId && ud.lastBookedAppointmentId) {
+        const disclosureConfirmed =
+          'disclosureConfirmed' in ud ? ud.disclosureConfirmed : false;
+
+        let callLogId: string | null = null;
+        if (voiceWebhooksConfigured() && calledNumber) {
+          const webhookResult = await postCallComplete({
+            called_number: calledNumber,
+            call_sid: callSidAttr,
+            room_name: roomName || null,
+            caller_number: callerNumber,
+            duration_seconds: durationSeconds,
+            outcome,
+            transcript: verbatim,
+            transcript_review: transcriptReview,
+            ai_summary: aiSummary,
+            disclosure_confirmed:
+              disclosureConfirmed || Boolean(salon.greeting?.trim()),
+          });
+          if (!webhookResult.ok) {
+            console.error('[agent] call-complete webhook failed', webhookResult.error);
+            callLogId = await insertCallLog({
+              organizationId: ud.organizationId,
+              callerNumber,
+              durationSeconds,
+              outcome,
+              transcript: verbatim,
+              transcriptReview,
+              aiSummary,
+              costEstimate,
+            });
+          } else {
+            callLogId = webhookResult.callLogId ?? null;
+          }
+        } else {
+          callLogId = await insertCallLog({
+            organizationId: ud.organizationId,
+            callerNumber,
+            durationSeconds,
+            outcome,
+            transcript: verbatim,
+            transcriptReview,
+            aiSummary,
+            costEstimate,
+          });
+        }
+        if (
+          callLogId &&
+          'lastBookedAppointmentId' in ud &&
+          ud.lastBookedAppointmentId
+        ) {
           await linkAppointmentToCallLog(ud.lastBookedAppointmentId, callLogId);
         }
         // Close out the metering row the nightly Stripe-sync cron reads.
@@ -1156,10 +1189,12 @@ export default defineAgent({
     });
 
     /** Strips spoken tool-name junk from the LLM text stream before TTS so callers never hear it. */
-    class SalonReceptionAgent extends voice.Agent<SalonAgentUserData> {
+    class SalonReceptionAgent extends voice.Agent<SalonAgentUserData | CaraAgentUserData> {
       override async ttsNode(
         text: ReadableStream<string>,
-        modelSettings: Parameters<voice.Agent<SalonAgentUserData>['ttsNode']>[1],
+        modelSettings: Parameters<
+          voice.Agent<SalonAgentUserData | CaraAgentUserData>['ttsNode']
+        >[1],
       ) {
         return voice.Agent.default.ttsNode(
           this,
@@ -1171,7 +1206,9 @@ export default defineAgent({
 
     const agent = new SalonReceptionAgent({
       instructions: systemPrompt,
-      tools: salonTools.fncCtx(!isNativePlan, stripeAvailable),
+      tools: useSalonBookingMode
+        ? salonTools.fncCtx(!isNativePlan, stripeAvailable)
+        : caraTools.toolContext(),
     });
 
     await session.start({ agent, room: ctx.room });
@@ -1186,17 +1223,23 @@ export default defineAgent({
     const fixedGreeting = salon.greeting?.trim();
     if (fixedGreeting) {
       session.say(fixedGreeting);
-      if (aiDisclosure) {
-        // A separate `say` so the salon's greeting plays in their voice and
-        // the disclosure is a clearly-distinct second sentence.
+      if (useSalonBookingMode && aiDisclosure) {
+        // Salon legacy path: separate disclosure line after custom greeting.
         session.say(aiDisclosure);
+      } else if (!useSalonBookingMode && 'disclosureConfirmed' in session.userData) {
+        session.userData.disclosureConfirmed = true;
       }
     } else {
       await session.generateReply({
-        instructions: `The caller just connected; they have not spoken yet. You speak first. Say ONE opening only, following this pattern exactly in spirit:
+        instructions: useSalonBookingMode
+          ? `The caller just connected; they have not spoken yet. You speak first. Say ONE opening only, following this pattern exactly in spirit:
 "Hi, thanks for calling ${salon.name} — how can I help you today?"
-You may add ONE short clause (e.g. that you can help with bookings and services). Max 35 words. Use the salon name ${salon.name}.${aiDisclosure ? ` Then add EXACTLY this sentence on a new breath, no paraphrasing: "${aiDisclosure}"` : ' Never mention AI or robots.'} Match tone from owner instructions if any.`,
+You may add ONE short clause (e.g. that you can help with bookings and services). Max 35 words. Use the salon name ${salon.name}.${aiDisclosure ? ` Then add EXACTLY this sentence on a new breath, no paraphrasing: "${aiDisclosure}"` : ' Never mention AI or robots.'} Match tone from owner instructions if any.`
+          : `The caller just connected. Speak first with ONE short greeting for ${salon.name}. Max 35 words. Include the AI and call-recording notice exactly as specified in your instructions.`,
       });
+      if (!useSalonBookingMode && 'disclosureConfirmed' in session.userData) {
+        session.userData.disclosureConfirmed = true;
+      }
     }
   },
 });

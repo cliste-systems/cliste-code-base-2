@@ -119,18 +119,3 @@ export function maskPhone(raw: string | null | undefined): string {
   }
   return `*** ${last4}`;
 }
-
-/** Convenience for objects logged at info level (e.g. {customerPhone, …}). */
-export function withMaskedPhone<T extends Record<string, unknown>>(
-  obj: T,
-  keys: ReadonlyArray<keyof T> = ['customerPhone', 'callerPhone', 'phone', 'to', 'from'] as ReadonlyArray<keyof T>,
-): T {
-  const out: Record<string, unknown> = { ...obj };
-  for (const k of keys) {
-    const v = out[k as string];
-    if (typeof v === 'string') {
-      out[k as string] = maskPhone(v);
-    }
-  }
-  return out as T;
-}

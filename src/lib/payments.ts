@@ -382,41 +382,6 @@ export function paymentLinkOnlySmsBody(input: {
   return `${input.salonName}: pay ${price} for your ${input.serviceName} (ref ${input.bookingReference}): ${input.paymentUrl}`;
 }
 
-/**
- * Short post-payment "you're all set" SMS, sent from the main app's Stripe
- * webhook after `payment_intent.succeeded`. This is *in addition to* the
- * booking SMS that already went out at booking time — separates the
- * "pay here" text from the "thanks, payment received" receipt.
- */
-export function paymentReceiptSmsBody(input: {
-  customerName: string;
-  salonName: string;
-  serviceName: string;
-  start: Date;
-  bookingReference: string;
-  amountCents: number;
-  currency: string;
-  timeZone: string;
-}): string {
-  const first = input.customerName.trim().split(/\s+/)[0] || 'there';
-  let when: string;
-  try {
-    when = input.start.toLocaleString('en-IE', {
-      timeZone: input.timeZone,
-      weekday: 'short',
-      day: 'numeric',
-      month: 'short',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-  } catch {
-    when = input.start.toLocaleString('en-IE', { hour12: true });
-  }
-  const price = formatMoney(input.amountCents, input.currency);
-  return `${input.salonName}: payment of ${price} received — see you ${when} (ref ${input.bookingReference}). Thanks ${first}!`;
-}
-
 function formatMoney(cents: number, currency: string): string {
   try {
     return new Intl.NumberFormat('en-IE', {
