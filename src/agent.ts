@@ -563,26 +563,16 @@ export default defineAgent({
       resolveOrgVoiceId(salon) ||
       process.env.ELEVEN_VOICE_ID?.trim() ||
       'C92s6vssSLlabgIln1iY';
-    // eleven_flash_v2_5 is ElevenLabs' real-time agent model (~75ms inference
-    // vs ~250ms for turbo_v2_5), recommended for voice agents. Also avoids
-    // the tail-streaming artefact turbo produced on short "goodbye!" lines
-    // that callers heard as a drawn-out "aaaaaa".
+    // eleven_v3 — expressive receptionist tone on voice C92s6vssSLlabgIln1iY.
+    // Higher latency than flash_v2_5; override ELEVEN_TTS_MODEL for A/B tests.
     const elevenModel =
-      (process.env.ELEVEN_TTS_MODEL?.trim() || 'eleven_flash_v2_5') as elevenlabs.TTSModels;
+      (process.env.ELEVEN_TTS_MODEL?.trim() || 'eleven_v3') as elevenlabs.TTSModels;
     const elevenStreamingLatency = Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '4', 10);
-    // Voice-prosody tuning. Prior defaults (stability=0.55, style=0.25) were
-    // making the voice sound *shouty* on phone audio and occasionally glitch
-    // on confirmations (callers reported a "glitch" when their name was
-    // echoed back). Root cause: nonzero `style` on flash_v2_5 overshoots and
-    // exaggerates pitch; too-low stability lets the model re-emote line by
-    // line, producing inconsistent volume. New defaults:
-    //  - stability 0.72  → calmer, more consistent across turns
-    //  - similarity 0.85 → preserves the Irish voice clone
-    //  - style     0.00  → eliminates the "exaggeration" that caused shouting
+    // v3 "Creative" preset: low stability + max style exaggeration.
     // Override any of these via env without redeploying code.
-    const elevenVoiceStability = Number.parseFloat(process.env.ELEVEN_VOICE_STABILITY ?? '0.72');
-    const elevenVoiceSimilarity = Number.parseFloat(process.env.ELEVEN_VOICE_SIMILARITY ?? '0.85');
-    const elevenVoiceStyle = Number.parseFloat(process.env.ELEVEN_VOICE_STYLE ?? '0');
+    const elevenVoiceStability = Number.parseFloat(process.env.ELEVEN_VOICE_STABILITY ?? '0');
+    const elevenVoiceSimilarity = Number.parseFloat(process.env.ELEVEN_VOICE_SIMILARITY ?? '0.75');
+    const elevenVoiceStyle = Number.parseFloat(process.env.ELEVEN_VOICE_STYLE ?? '1');
 
     const openaiTtsModel =
       (process.env.OPENAI_TTS_MODEL?.trim() || 'gpt-4o-mini-tts') as openai.TTSModels | string;
@@ -712,9 +702,9 @@ export default defineAgent({
                 model: elevenModel,
                 streamingLatency: Number.isFinite(elevenStreamingLatency) ? elevenStreamingLatency : 4,
                 voiceSettings: {
-                  stability: Number.isFinite(elevenVoiceStability) ? elevenVoiceStability : 0.48,
-                  similarity_boost: Number.isFinite(elevenVoiceSimilarity) ? elevenVoiceSimilarity : 0.82,
-                  style: Number.isFinite(elevenVoiceStyle) ? elevenVoiceStyle : 0.35,
+                  stability: Number.isFinite(elevenVoiceStability) ? elevenVoiceStability : 0,
+                  similarity_boost: Number.isFinite(elevenVoiceSimilarity) ? elevenVoiceSimilarity : 0.75,
+                  style: Number.isFinite(elevenVoiceStyle) ? elevenVoiceStyle : 1,
                 },
               }),
       userData: sessionUserData,
