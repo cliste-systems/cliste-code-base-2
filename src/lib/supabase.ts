@@ -1,4 +1,5 @@
 import { type SupabaseClient, createClient } from '@supabase/supabase-js';
+import ws from 'ws';
 
 import { cached } from './cache.js';
 
@@ -17,7 +18,9 @@ function getSupabase(): SupabaseClient {
     throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
   }
   if (!client) {
-    client = createClient(supabaseUrl, supabaseServiceKey);
+    client = createClient(supabaseUrl, supabaseServiceKey, {
+      realtime: { transport: ws as any },
+    });
   }
   return client;
 }
