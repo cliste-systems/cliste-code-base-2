@@ -522,11 +522,38 @@ export default defineAgent({
       process.env.LIVEKIT_SILENCE_RECOVERY_MAX_PER_CALL ?? '5',
       10,
     );
+    const responseFillerMs = Number.parseInt(process.env.LIVEKIT_RESPONSE_FILLER_MS ?? '1500', 10);
+    const responseFillerMaxPerCall = Number.parseInt(
+      process.env.LIVEKIT_RESPONSE_FILLER_MAX_PER_CALL ?? '3',
+      10,
+    );
+    const deadAirMs = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MS ?? '7000', 10);
+    const deadAirCloseMs = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_CLOSE_MS ?? '8000', 10);
+    const deadAirMaxPrompts = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MAX_PROMPTS ?? '2', 10);
     let silenceRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
     let silenceRecoveryCount = 0;
     let fakeHangupGuardTimer: ReturnType<typeof setTimeout> | null = null;
     let fillerNoToolGuardTimer: ReturnType<typeof setTimeout> | null = null;
     let goodbyeForceTimer: ReturnType<typeof setTimeout> | null = null;
+    let responseFillerTimer: ReturnType<typeof setTimeout> | null = null;
+    let responseFillerCount = 0;
+    let deadAirTimer: ReturnType<typeof setTimeout> | null = null;
+    let deadAirCloseTimer: ReturnType<typeof setTimeout> | null = null;
+    let deadAirPromptCount = 0;
+
+    const RESPONSE_FILLER_PHRASES = [
+      'Bear with me one second.',
+      'Just a moment.',
+      'Let me see.',
+    ] as const;
+
+    const isCallEnding = () => session.userData.sessionFlags.endPhoneCallUsed;
+
+    const gracefulDisconnect = () => {
+      void disconnectCallerLeg(session, session.userData, async () => {
+        await new Promise((r) => setTimeout(r, 650));
+      });
+    };
 
     const clearSilenceRecoveryTimer = () => {
       if (silenceRecoveryTimer) {
@@ -551,6 +578,70 @@ export default defineAgent({
         clearTimeout(goodbyeForceTimer);
         goodbyeForceTimer = null;
       }
+    };
+    const clearResponseFillerTimer = () => {
+      if (responseFillerTimer) {
+        clearTimeout(responseFillerTimer);
+        responseFillerTimer = null;
+      }
+    };
+    const clearDeadAirTimers = () => {
+      if (deadAirTimer) {
+        clearTimeout(deadAirTimer);
+        deadAirTimer = null;
+      }
+      if (deadAirCloseTimer) {
+        clearTimeout(deadAirCloseTimer);
+        deadAirCloseTimer = null;
+      }
+    };
+
+    const scheduleResponseFiller = () => {
+      clearResponseFillerTimer();
+      responseFillerTimer = setTimeout(() => {
+        responseFillerTimer = null;
+        try {
+          if (isCallEnding()) return;
+          if (session.agentState === 'speaking' || session.userState === 'speaking') return;
+          if (responseFillerCount >= responseFillerMaxPerCall) return;
+          responseFillerCount += 1;
+          const phrase =
+            RESPONSE_FILLER_PHRASES[Math.floor(Math.random() * RESPONSE_FILLER_PHRASES.length)]!;
+          session.say(phrase);
+        } catch (e) {
+          console.error('[AgentSession] response filler failed', e);
+        }
+      }, responseFillerMs);
+    };
+
+    const resetDeadAirTimer = () => {
+      clearDeadAirTimers();
+      if (isCallEnding()) return;
+      deadAirTimer = setTimeout(() => {
+        deadAirTimer = null;
+        try {
+          if (isCallEnding()) return;
+          if (session.agentState !== 'listening' || session.userState === 'speaking') return;
+          if (deadAirPromptCount >= deadAirMaxPrompts) {
+            gracefulDisconnect();
+            return;
+          }
+          deadAirPromptCount += 1;
+          session.say('Sorry — are you still there?');
+          deadAirCloseTimer = setTimeout(() => {
+            deadAirCloseTimer = null;
+            try {
+              if (isCallEnding()) return;
+              if (session.agentState !== 'listening' || session.userState === 'speaking') return;
+              gracefulDisconnect();
+            } catch (e) {
+              console.error('[AgentSession] dead-air close failed', e);
+            }
+          }, deadAirCloseMs);
+        } catch (e) {
+          console.error('[AgentSession] dead-air prompt failed', e);
+        }
+      }, deadAirMs);
     };
 
     const assistantTextSoundsLikeFiller = (t: string): boolean => {
@@ -582,13 +673,27 @@ export default defineAgent({
     };
 
     session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
+      resetDeadAirTimer();
       if (ev.newState === 'speaking') {
         clearSilenceRecoveryTimer();
         clearFillerNoToolGuardTimer();
+        clearResponseFillerTimer();
+      } else if (ev.newState === 'listening') {
+        scheduleResponseFiller();
+      }
+    });
+
+    session.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
+      if (ev.newState === 'speaking') {
+        clearResponseFillerTimer();
+      } else if (ev.newState === 'thinking') {
+        scheduleResponseFiller();
       }
     });
 
     session.on(voice.AgentSessionEventTypes.SpeechCreated, (ev) => {
+      clearResponseFillerTimer();
+      resetDeadAirTimer();
       ev.speechHandle.addDoneCallback((sh) => {
         if (sh.interrupted) scheduleSilenceRecoveryAfterCutoff();
       });
@@ -598,6 +703,7 @@ export default defineAgent({
     let transcriptSeq = 0;
 
     session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
+      resetDeadAirTimer();
       const { item } = ev;
       if (item.type !== 'message') return;
       const { role } = item;
@@ -660,6 +766,7 @@ export default defineAgent({
 
     session.on(voice.AgentSessionEventTypes.FunctionToolsExecuted, (ev) => {
       clearFillerNoToolGuardTimer();
+      resetDeadAirTimer();
       for (const [call, out] of voice.zipFunctionCallsAndOutputs(ev)) {
         transcriptParts.push({
           at: call.createdAt ?? ev.createdAt,
@@ -685,6 +792,8 @@ export default defineAgent({
       clearFakeHangupGuardTimer();
       clearFillerNoToolGuardTimer();
       clearGoodbyeForceTimer();
+      clearResponseFillerTimer();
+      clearDeadAirTimers();
       try {
         const ud = session.userData;
         if (!ud?.organizationId) return;
@@ -793,6 +902,7 @@ export default defineAgent({
     });
 
     await session.start({ agent, room: ctx.room });
+    resetDeadAirTimer();
 
     if (greetingText) {
       session.say(greetingText);

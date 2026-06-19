@@ -1,7 +1,7 @@
 import { redactPii } from './gdpr.js';
 
-const WEBHOOK_FETCH_TIMEOUT_MS = Number.parseInt(
-  process.env.CLISTE_VOICE_WEBHOOK_TIMEOUT_MS ?? '15000',
+const HTTP_FETCH_TIMEOUT_MS = Number.parseInt(
+  process.env.CLISTE_VOICE_HTTP_TIMEOUT_MS ?? '6000',
   10,
 );
 
@@ -77,6 +77,16 @@ function capTranscriptField(value: string | null | undefined): string | null | u
   return `${t.slice(0, MAX_WEBHOOK_TRANSCRIPT_CHARS)}\n\n[Transcript truncated for webhook.]`;
 }
 
+function isFetchTimeoutError(err: unknown): boolean {
+  if (err instanceof Error && err.name === 'AbortError') return true;
+  return err instanceof DOMException && err.name === 'AbortError';
+}
+
+function webhookFetchError(err: unknown): string {
+  if (isFetchTimeoutError(err)) return 'timeout';
+  return err instanceof Error ? err.message : String(err);
+}
+
 async function postVoiceWebhook<T>(
   path: string,
   payload: unknown,
@@ -86,19 +96,25 @@ async function postVoiceWebhook<T>(
     throw new Error('voice webhooks not configured');
   }
 
-  const timeoutMs = Number.isFinite(WEBHOOK_FETCH_TIMEOUT_MS)
-    ? Math.min(Math.max(WEBHOOK_FETCH_TIMEOUT_MS, 3000), 60_000)
-    : 15_000;
+  const timeoutMs = Number.isFinite(HTTP_FETCH_TIMEOUT_MS)
+    ? Math.min(Math.max(HTTP_FETCH_TIMEOUT_MS, 1000), 60_000)
+    : 6000;
 
-  const res = await fetch(`${base}${path}`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
 
-  const body = (await res.json().catch(() => ({}))) as T;
-  return { res, body };
+    const body = (await res.json().catch(() => ({}))) as T;
+    return { res, body };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function postCallComplete(
@@ -129,8 +145,7 @@ export async function postCallComplete(
     const callLogId = body.call_log_id?.trim();
     return callLogId ? { ok: true, callLogId } : { ok: true };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: msg };
+    return { ok: false, error: webhookFetchError(err) };
   }
 }
 
@@ -156,8 +171,7 @@ export async function postActionTicket(
 
     return { ok: true };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: msg };
+    return { ok: false, error: webhookFetchError(err) };
   }
 }
 
@@ -180,8 +194,7 @@ export async function postSendSms(
 
     return { ok: true };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: msg };
+    return { ok: false, error: webhookFetchError(err) };
   }
 }
 
@@ -212,8 +225,7 @@ export async function postSendCallerEmail(
 
     return { ok: true };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: msg };
+    return { ok: false, error: webhookFetchError(err) };
   }
 }
 
@@ -263,8 +275,7 @@ export async function postSearchBusinessFile(
       matches: Array.isArray(body.matches) ? body.matches : [],
     };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, matches: [], error: msg };
+    return { ok: false, matches: [], error: webhookFetchError(err) };
   }
 }
 
