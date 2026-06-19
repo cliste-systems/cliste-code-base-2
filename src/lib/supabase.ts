@@ -1,6 +1,15 @@
+import { createRequire } from 'node:module';
 import { type SupabaseClient, createClient } from '@supabase/supabase-js';
 
 import { cached } from './cache.js';
+
+const require = createRequire(import.meta.url);
+
+/** Node 20 on Railway has no native WebSocket; Supabase realtime-js requires one at init. */
+function ensureNodeWebSocket(): void {
+  if (typeof globalThis.WebSocket !== 'undefined') return;
+  globalThis.WebSocket = require('ws');
+}
 
 /** Read-mostly org config cache window. Dashboard edits surface within this. */
 const ORG_CACHE_TTL_MS = Number.parseInt(
@@ -17,6 +26,7 @@ function getSupabase(): SupabaseClient {
     throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
   }
   if (!client) {
+    ensureNodeWebSocket();
     client = createClient(supabaseUrl, supabaseServiceKey);
   }
   return client;
