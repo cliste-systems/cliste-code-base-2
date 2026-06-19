@@ -22,6 +22,7 @@ export type RoutingLink = {
   active: boolean;
   keywords?: string | null;
   description?: string | null;
+  linkDelivery?: 'sms' | 'email' | 'both' | null;
 };
 
 const ROUTING_TARGET_VALUES = new Set<string>([
@@ -69,6 +70,15 @@ export function parseRoutingLinks(raw: unknown): RoutingLink[] {
         : presetId
           ? `preset_${presetId}`
           : `route_${out.length}`;
+    const description =
+      typeof entry.description === 'string' ? entry.description.trim() : null;
+    const linkDeliveryRaw = entry.linkDelivery;
+    const linkDelivery =
+      linkDeliveryRaw === 'sms' ||
+      linkDeliveryRaw === 'email' ||
+      linkDeliveryRaw === 'both'
+        ? linkDeliveryRaw
+        : null;
     if (!label && !intent && !url && !businessFileId) continue;
     out.push({
       id,
@@ -81,8 +91,8 @@ export function parseRoutingLinks(raw: unknown): RoutingLink[] {
       active,
       keywords:
         typeof entry.keywords === 'string' ? entry.keywords.trim() : null,
-      description:
-        typeof entry.description === 'string' ? entry.description.trim() : null,
+      description,
+      ...(linkDelivery ? { linkDelivery } : {}),
     });
   }
   return out;
@@ -103,4 +113,24 @@ export function activeRoutes(links: RoutingLink[]): RoutingLink[] {
 
 export function fallbackRoute(links: RoutingLink[]): RoutingLink | null {
   return links.find((r) => r.active && isFallbackRoute(r)) ?? null;
+}
+
+export function isLocationRoute(link: RoutingLink): boolean {
+  if (link.presetId === 'location') return true;
+  const blob = `${link.intent} ${link.label} ${link.keywords ?? ''}`.toLowerCase();
+  return blob.includes('direction') || blob.includes('where are you');
+}
+
+export function isBookingRoute(link: RoutingLink): boolean {
+  if (link.presetId === 'booking-inquiry') return true;
+  const blob = `${link.intent} ${link.label} ${link.keywords ?? ''}`.toLowerCase();
+  return blob.includes('book') && blob.includes('appointment');
+}
+
+export function routeUsesCallerLinkDelivery(link: RoutingLink): boolean {
+  return (
+    link.targetType === 'link' &&
+    Boolean(link.linkDelivery) &&
+    (isLocationRoute(link) || isBookingRoute(link))
+  );
 }

@@ -1,5 +1,5 @@
 /**
- * Ring-time integration smoke test — org load → gate → prompt mode → routing parse.
+ * Ring-time integration smoke test — org load → gate → Cara prompt → routing parse.
  *
  * Usage:
  *   RING_SMOKE_SLUG=my-business npx tsx scripts/ring-time-smoke.ts
@@ -11,14 +11,11 @@ import { buildCaraCallPrompt } from '../src/lib/cara_prompt.js';
 import { CaraTools } from '../src/lib/cara_tools.js';
 import { classifyCallerLine } from '../src/lib/phone_classify.js';
 import { assertOrgCallable } from '../src/lib/org_gate.js';
-import { buildSalonSystemPrompt } from '../src/lib/prompt.js';
 import {
   getOrgForCall,
-  getSalonServices,
   getSendableBusinessFiles,
   resolveOrgTimeZone,
   resolveOrgVoiceId,
-  shouldUseSalonBookingMode,
 } from '../src/lib/supabase.js';
 import { activeRoutes, fallbackRoute } from '../src/lib/routing_links.js';
 
@@ -53,15 +50,13 @@ async function main(): Promise<void> {
   }
   ok('org gate passed');
 
-  const services = await getSalonServices(org.id);
   const businessFiles = await getSendableBusinessFiles(org.id);
   const routingLinks = CaraTools.parseLinks(org.routing_links);
-  const useSalonBookingMode = shouldUseSalonBookingMode(org, services.length);
   const bookingTz = resolveOrgTimeZone(org);
   const voiceId = resolveOrgVoiceId(org);
 
   ok(
-    `mode=${useSalonBookingMode ? 'salon_booking' : 'cara'} services=${services.length} routes=${activeRoutes(routingLinks).length} files=${businessFiles.length}`,
+    `mode=cara routes=${activeRoutes(routingLinks).length} files=${businessFiles.length}`,
   );
   ok(`timezone=${bookingTz} voiceId=${voiceId ?? '(env fallback)'}`);
 
@@ -74,29 +69,14 @@ async function main(): Promise<void> {
   const callerLine = classifyCallerLine(phone ?? '+353871234567');
   const todayLocal = now.toLocaleDateString('en-GB', { timeZone: bookingTz });
 
-  const prompt = useSalonBookingMode
-    ? buildSalonSystemPrompt({
-        salonName: org.name,
-        salonTier: org.tier,
-        ownerInstructions: org.custom_prompt.trim(),
-        hoursBlock: '(smoke test)',
-        servicesList: services.map((s) => s.name).join(', ') || '(none)',
-        callerLine,
-        bookingTz,
-        nowUtcIso: now.toISOString(),
-        todaySalonTz: todayLocal,
-        exampleIso: `${now.getUTCFullYear()}-04-15T15:00:00.000Z`,
-        isNativePlan: String(org.tier ?? '').toLowerCase() === 'native',
-        stripeAvailable: false,
-      })
-    : buildCaraCallPrompt({
-        businessName: org.name,
-        customPrompt: org.custom_prompt.trim(),
-        callerLine,
-        bookingTimeZone: bookingTz,
-        nowUtcIso: now.toISOString(),
-        todayLocal,
-      });
+  const prompt = buildCaraCallPrompt({
+    businessName: org.name,
+    customPrompt: org.custom_prompt.trim(),
+    callerLine,
+    bookingTimeZone: bookingTz,
+    nowUtcIso: now.toISOString(),
+    todayLocal,
+  });
 
   if (prompt.length < 200) {
     fail('system prompt unexpectedly short');
@@ -112,7 +92,7 @@ async function main(): Promise<void> {
 
   const caraTools = new CaraTools();
   const toolNames = Object.keys(caraTools.toolContext());
-  if (!useSalonBookingMode && toolNames.length < 5) {
+  if (toolNames.length < 5) {
     fail(`expected Cara tools, got: ${toolNames.join(', ')}`);
   }
   ok(`cara tools: ${toolNames.join(', ')}`);

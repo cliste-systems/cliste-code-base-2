@@ -1,12 +1,13 @@
 /**
- * Smoke-test LiveKit, Supabase, Twilio, and TTS credentials (ElevenLabs or OpenAI per SALON_TTS_PROVIDER).
- * Run: npx tsx scripts/verify-integrations.ts
+ * Smoke-test LiveKit, Supabase, voice webhooks, and ElevenLabs TTS (required).
+ * Run: npm run verify
  */
 import 'dotenv/config';
 
 import { createClient } from '@supabase/supabase-js';
-import twilio from 'twilio';
 import { RoomServiceClient } from 'livekit-server-sdk';
+import { isElevenV3Model } from '../src/lib/elevenlabs-v3-http-tts.js';
+import { voiceWebhooksConfigured } from '../src/lib/voice_api.js';
 
 function httpsHost(): string {
   const u = process.env.LIVEKIT_URL;
@@ -16,31 +17,9 @@ function httpsHost(): string {
   return u.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
 }
 
-/** Mirrors `src/agent.ts` TTS selection for smoke tests. */
-function resolveTtsModeForVerify(): 'openai' | 'elevenlabs' | null {
-  const raw = process.env.SALON_TTS_PROVIDER?.trim().toLowerCase() || '';
-  const eleven =
-    process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
-  const oai = process.env.OPENAI_API_KEY?.trim() || '';
-  if (raw === 'openai') {
-    return 'openai';
-  }
-  if (raw === 'elevenlabs') {
-    return 'elevenlabs';
-  }
-  if (eleven) {
-    return 'elevenlabs';
-  }
-  if (oai) {
-    return 'openai';
-  }
-  return null;
-}
-
 async function main(): Promise<void> {
   const failures: string[] = [];
 
-  // Supabase
   try {
     const url = process.env.SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -49,9 +28,7 @@ async function main(): Promise<void> {
     }
     const supabase = createClient(url, key);
     const { error } = await supabase.from('organizations').select('id').limit(1);
-    if (error) {
-      throw error;
-    }
+    if (error) throw error;
     console.log('✓ Supabase: connected (organizations readable)');
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -59,23 +36,14 @@ async function main(): Promise<void> {
     console.error('✗ Supabase:', msg);
   }
 
-  // Twilio
-  try {
-    const sid = process.env.TWILIO_ACCOUNT_SID;
-    const token = process.env.TWILIO_AUTH_TOKEN;
-    if (!sid || !token) {
-      throw new Error('TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN missing');
-    }
-    const client = twilio(sid, token);
-    const account = await client.api.accounts(sid).fetch();
-    console.log('✓ Twilio: account', account.status, `(${account.friendlyName ?? sid})`);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    failures.push(`Twilio: ${msg}`);
-    console.error('✗ Twilio:', msg);
+  if (voiceWebhooksConfigured()) {
+    console.log('✓ Voice webhooks: CLISTE_APP_URL + CLISTE_VOICE_WEBHOOK_SECRET set');
+  } else {
+    const msg = 'Voice webhooks not configured (CLISTE_APP_URL + CLISTE_VOICE_WEBHOOK_SECRET)';
+    failures.push(msg);
+    console.error('✗', msg);
   }
 
-  // LiveKit API (same keys as the worker)
   try {
     const key = process.env.LIVEKIT_API_KEY;
     const secret = process.env.LIVEKIT_API_SECRET;
@@ -91,92 +59,78 @@ async function main(): Promise<void> {
     console.error('✗ LiveKit:', msg);
   }
 
-  // TTS (ElevenLabs or OpenAI — same rules as the worker)
-  const ttsMode = resolveTtsModeForVerify();
-  if (ttsMode === 'openai') {
-    try {
-      const key = process.env.OPENAI_API_KEY?.trim();
-      if (!key) {
-        throw new Error('OPENAI_API_KEY missing (SALON_TTS_PROVIDER=openai)');
-      }
-      const res = await fetch('https://api.openai.com/v1/models', {
-        headers: { Authorization: `Bearer ${key}` },
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`${res.status} ${t.slice(0, 200)}`);
-      }
-      console.log('✓ OpenAI: API key accepted (TTS uses OPENAI_TTS_* / default gpt-4o-mini-tts + coral)');
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      failures.push(`OpenAI TTS: ${msg}`);
-      console.error('✗ OpenAI TTS:', msg);
-    }
-  } else if (ttsMode === 'elevenlabs') {
-    try {
-      const apiKey =
-        process.env.ELEVEN_API_KEY?.trim() ||
-        process.env.ELEVENLABS_API_KEY?.trim();
-      if (!apiKey) {
-        throw new Error('ELEVENLABS_API_KEY or ELEVEN_API_KEY missing');
-      }
-      const res = await fetch('https://api.elevenlabs.io/v1/voices?page_size=1', {
-        headers: { 'xi-api-key': apiKey },
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`${res.status} ${t.slice(0, 200)}`);
-      }
-      console.log('✓ ElevenLabs: API key valid (voices/TTS)');
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      failures.push(`ElevenLabs: ${msg}`);
-      console.error('✗ ElevenLabs:', msg);
-    }
-  } else {
-    const msg =
-      'No TTS: set SALON_TTS_PROVIDER=openai with OPENAI_API_KEY, or set ELEVENLABS_API_KEY';
-    failures.push(msg);
-    console.error('✗ TTS:', msg);
-  }
-
-  // Salon routing sanity (optional)
   try {
-    const url = process.env.SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (url && key) {
-      const supabase = createClient(url, key);
-      const slug = process.env.DEFAULT_SALON_SLUG?.trim();
-      const phone = process.env.DEFAULT_SALON_PHONE?.trim();
-      if (slug) {
-        const { data, error } = await supabase
-          .from('organizations')
-          .select('id, slug, phone_number')
-          .eq('slug', slug)
-          .maybeSingle();
-        if (error) {
-          throw error;
-        }
-        if (data) {
-          console.log('✓ Salon slug', slug, '→ org id', data.id);
-          if (phone && data.phone_number !== phone) {
-            const { error: upErr } = await supabase
-              .from('organizations')
-              .update({ phone_number: phone })
-              .eq('id', data.id);
-            if (upErr) {
-              console.warn('⚠ Could not sync phone_number:', upErr.message);
-            } else {
-              console.log('✓ Updated organizations.phone_number →', phone, '(SIP/dialed-number routing)');
-            }
-          }
-        } else {
-          console.warn('⚠ No organization with slug', slug);
-        }
+    const apiKey =
+      process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim();
+    if (!apiKey) {
+      throw new Error('ELEVENLABS_API_KEY or ELEVEN_API_KEY missing (ElevenLabs-only TTS)');
+    }
+    const res = await fetch('https://api.elevenlabs.io/v1/voices?page_size=1', {
+      headers: { 'xi-api-key': apiKey },
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`${res.status} ${t.slice(0, 200)}`);
+    }
+    const model = process.env.ELEVEN_TTS_MODEL?.trim() || 'eleven_flash_v2_5';
+    const voice = process.env.ELEVEN_VOICE_ID?.trim() || 'C92s6vssSLlabgIln1iY';
+    const encoding = process.env.ELEVEN_TTS_ENCODING?.trim() || 'pcm_24000';
+    const baseUrl =
+      (process.env.ELEVENLABS_BASE_URL?.trim() || 'https://api.elevenlabs.io/v1').replace(
+        /\/$/,
+        '',
+      );
+
+    if (isElevenV3Model(model)) {
+      const streamUrl =
+        `${baseUrl}/text-to-speech/${voice}/stream` +
+        `?model_id=${encodeURIComponent(model)}` +
+        `&output_format=${encodeURIComponent(encoding)}`;
+      const streamRes = await fetch(streamUrl, {
+        method: 'POST',
+        headers: {
+          'xi-api-key': apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: 'Hello', model_id: model }),
+      });
+      if (!streamRes.ok) {
+        const t = await streamRes.text();
+        throw new Error(`v3 HTTP stream ${streamRes.status}: ${t.slice(0, 200)}`);
       }
+      console.log(`✓ ElevenLabs: v3 HTTP stream OK (${model}, ${encoding})`);
+    } else {
+      const wsUrl =
+        `wss://api.elevenlabs.io/v1/text-to-speech/${voice}/multi-stream-input` +
+        `?model_id=${encodeURIComponent(model)}&output_format=${encodeURIComponent(encoding)}` +
+        '&enable_ssml_parsing=false&enable_logging=true&inactivity_timeout=60&apply_text_normalization=auto';
+      const ws = await import('ws').then((m) => m.default);
+      await new Promise<void>((resolve, reject) => {
+        const socket = new ws(wsUrl, { headers: { 'xi-api-key': apiKey } });
+        const timer = setTimeout(() => {
+          socket.terminate();
+          reject(new Error(`WebSocket open timed out (${model})`));
+        }, 8000);
+        socket.once('open', () => {
+          clearTimeout(timer);
+          socket.close();
+          resolve();
+        });
+        socket.once('unexpected-response', (_req: unknown, res: { statusCode?: number }) => {
+          clearTimeout(timer);
+          reject(new Error(`WebSocket rejected model ${model}: HTTP ${res.statusCode}`));
+        });
+        socket.once('error', (err: Error) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
+      console.log(`✓ ElevenLabs: WebSocket OK (${model}, ${encoding})`);
     }
   } catch (e) {
-    console.warn('⚠ Salon check:', e instanceof Error ? e.message : e);
+    const msg = e instanceof Error ? e.message : String(e);
+    failures.push(`ElevenLabs: ${msg}`);
+    console.error('✗ ElevenLabs:', msg);
   }
 
   if (failures.length > 0) {

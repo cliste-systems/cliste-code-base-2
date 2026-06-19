@@ -1,7 +1,7 @@
 {
   "name": "cliste-code-base-2",
   "version": "1.0.0",
-  "description": "LiveKit voice agent — salon receptionist + Supabase booking",
+  "description": "LiveKit Cara voice worker — routing links, webhooks, ElevenLabs TTS",
   "engines": {
     "node": ">=20"
   },
@@ -12,7 +12,6 @@
     "dev:trace": "tsx watch src/agent.ts dev --log-level trace",
     "connect": "tsx src/agent.ts connect",
     "dispatch": "tsx scripts/dispatch.ts",
-    "sip:wire-us": "tsx scripts/sip-wire-us-number.ts",
     "verify": "tsx scripts/verify-integrations.ts",
     "test:ring-smoke": "tsx scripts/ring-time-smoke.ts",
     "report:costs": "tsx scripts/report-daily-costs.ts",
@@ -27,6 +26,7 @@
   "license": "ISC",
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "@types/ws": "^8.18.1",
     "knip": "^5.62.0",
     "typescript": "^6.0.2"
   },
@@ -36,15 +36,11 @@
     "@livekit/agents-plugin-livekit": "^1.2.7",
     "@livekit/agents-plugin-openai": "^1.2.7",
     "@livekit/agents-plugin-silero": "^1.2.7",
-    "@livekit/protocol": "^1.45.1",
     "@livekit/rtc-node": "^0.13.24",
     "@supabase/supabase-js": "^2.101.1",
     "dotenv": "^17.3.1",
-    "fuse.js": "^7.2.0",
     "livekit-server-sdk": "^2.15.0",
-    "stripe": "22.0.2",
     "tsx": "^4.21.0",
-    "twilio": "^5.13.1",
     "ws": "^8.21.0",
     "zod": "^4.3.6"
   },

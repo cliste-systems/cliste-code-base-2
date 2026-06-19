@@ -24,7 +24,7 @@ import 'dotenv/config';
 
 import { createClient } from '@supabase/supabase-js';
 
-import { normalizeCustomerPhoneE164 } from '../src/lib/booking_reference.js';
+import { normalizePhoneE164 } from '../src/lib/phone_normalize.js';
 
 function usage(): never {
   console.error('Usage: tsx scripts/gdpr-erase.ts <phone> [--dry-run]');
@@ -49,7 +49,7 @@ async function main() {
   }
   const phone = args[0]!;
   const dryRun = args.includes('--dry-run');
-  const e164 = normalizeCustomerPhoneE164(phone);
+  const e164 = normalizePhoneE164(phone);
   const variants = lookupVariants(e164);
 
   const url = process.env.SUPABASE_URL?.trim();

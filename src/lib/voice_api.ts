@@ -1,5 +1,13 @@
 import { redactPii } from './gdpr.js';
 
+const WEBHOOK_FETCH_TIMEOUT_MS = Number.parseInt(
+  process.env.CLISTE_VOICE_WEBHOOK_TIMEOUT_MS ?? '15000',
+  10,
+);
+
+/** Cap transcript size before POST to dashboard webhook. */
+export const MAX_WEBHOOK_TRANSCRIPT_CHARS = 100_000;
+
 export type CallCompletePayload = {
   called_number: string;
   call_sid: string | null;
@@ -27,11 +35,17 @@ export type ActionTicketPayload = {
   summary: string;
 };
 
+export type SendSmsPayload = {
+  called_number: string;
+  to: string;
+  body: string;
+  caller_consented: boolean;
+  skip_business_prefix?: boolean;
+  purpose?: string;
+};
+
 function appBaseUrl(): string | null {
-  const url =
-    process.env.CLISTE_APP_URL?.trim() ||
-    process.env.CLISTE_BOOKING_SITE_URL?.trim() ||
-    '';
+  const url = process.env.CLISTE_APP_URL?.trim() || '';
   if (!url) return null;
   return url.replace(/\/$/, '');
 }
@@ -55,69 +69,207 @@ export function voiceWebhooksConfigured(): boolean {
   return Boolean(appBaseUrl() && voiceSecret());
 }
 
-export async function postCallComplete(
-  payload: CallCompletePayload,
-): Promise<{ ok: boolean; callLogId?: string; error?: string }> {
+function capTranscriptField(value: string | null | undefined): string | null | undefined {
+  if (value == null) return value;
+  const t = value.trim();
+  if (!t) return null;
+  if (t.length <= MAX_WEBHOOK_TRANSCRIPT_CHARS) return t;
+  return `${t.slice(0, MAX_WEBHOOK_TRANSCRIPT_CHARS)}\n\n[Transcript truncated for webhook.]`;
+}
+
+async function postVoiceWebhook<T>(
+  path: string,
+  payload: unknown,
+): Promise<{ res: Response; body: T }> {
   const base = appBaseUrl();
   if (!base || !voiceSecret()) {
-    return { ok: false, error: 'voice webhooks not configured' };
+    throw new Error('voice webhooks not configured');
   }
 
-  const res = await fetch(`${base}/api/voice/call-complete`, {
+  const timeoutMs = Number.isFinite(WEBHOOK_FETCH_TIMEOUT_MS)
+    ? Math.min(Math.max(WEBHOOK_FETCH_TIMEOUT_MS, 3000), 60_000)
+    : 15_000;
+
+  const res = await fetch(`${base}${path}`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
-  const body = (await res.json().catch(() => ({}))) as {
-    ok?: boolean;
-    call_log_id?: string;
-    error?: string;
-  };
+  const body = (await res.json().catch(() => ({}))) as T;
+  return { res, body };
+}
 
-  if (!res.ok) {
-    return {
-      ok: false,
-      error: body.error ?? `HTTP ${res.status}`,
-    };
+export async function postCallComplete(
+  payload: CallCompletePayload,
+): Promise<{ ok: boolean; callLogId?: string; error?: string }> {
+  if (!voiceWebhooksConfigured()) {
+    return { ok: false, error: 'voice webhooks not configured' };
   }
 
-  const callLogId = body.call_log_id?.trim();
-  return callLogId ? { ok: true, callLogId } : { ok: true };
+  try {
+    const { res, body } = await postVoiceWebhook<{
+      ok?: boolean;
+      call_log_id?: string;
+      error?: string;
+    }>('/api/voice/call-complete', {
+      ...payload,
+      transcript: capTranscriptField(payload.transcript ?? null),
+      transcript_review: capTranscriptField(payload.transcript_review ?? null),
+    });
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: body.error ?? `HTTP ${res.status}`,
+      };
+    }
+
+    const callLogId = body.call_log_id?.trim();
+    return callLogId ? { ok: true, callLogId } : { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg };
+  }
 }
 
 export async function postActionTicket(
   payload: ActionTicketPayload,
 ): Promise<{ ok: boolean; error?: string }> {
-  const base = appBaseUrl();
-  if (!base || !voiceSecret()) {
+  if (!voiceWebhooksConfigured()) {
     return { ok: false, error: 'voice webhooks not configured' };
   }
 
-  const res = await fetch(`${base}/api/voice/action-ticket`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({
-      ...payload,
-      summary: redactPii(payload.summary).trim(),
-    }),
-  });
+  try {
+    const { res, body } = await postVoiceWebhook<{ ok?: boolean; error?: string }>(
+      '/api/voice/action-ticket',
+      {
+        ...payload,
+        summary: redactPii(payload.summary).trim(),
+      },
+    );
 
-  const body = (await res.json().catch(() => ({}))) as {
-    ok?: boolean;
-    error?: string;
-  };
+    if (!res.ok) {
+      return { ok: false, error: body.error ?? `HTTP ${res.status}` };
+    }
 
-  if (!res.ok) {
-    return { ok: false, error: body.error ?? `HTTP ${res.status}` };
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg };
   }
-
-  return { ok: true };
 }
 
-/** Map legacy worker outcomes to canonical contract values. */
+export async function postSendSms(
+  payload: SendSmsPayload,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!voiceWebhooksConfigured()) {
+    return { ok: false, error: 'voice webhooks not configured' };
+  }
+
+  try {
+    const { res, body } = await postVoiceWebhook<{ ok?: boolean; error?: string }>(
+      '/api/voice/send-sms',
+      payload,
+    );
+
+    if (!res.ok) {
+      return { ok: false, error: body.error ?? `HTTP ${res.status}` };
+    }
+
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg };
+  }
+}
+
+export type SendCallerEmailPayload = {
+  called_number: string;
+  to: string;
+  subject: string;
+  body: string;
+  caller_consented: boolean;
+};
+
+export async function postSendCallerEmail(
+  payload: SendCallerEmailPayload,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!voiceWebhooksConfigured()) {
+    return { ok: false, error: 'voice webhooks not configured' };
+  }
+
+  try {
+    const { res, body } = await postVoiceWebhook<{ ok?: boolean; error?: string }>(
+      '/api/voice/send-caller-email',
+      payload,
+    );
+
+    if (!res.ok) {
+      return { ok: false, error: body.error ?? `HTTP ${res.status}` };
+    }
+
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg };
+  }
+}
+
+export type SearchBusinessFilePayload = {
+  called_number: string;
+  query: string;
+  file_id?: string;
+  document_kind?: string;
+};
+
+export type SearchBusinessFileMatch = {
+  file_id: string;
+  file_name: string;
+  document_kind: string | null;
+  excerpts: Array<{
+    text: string;
+    score: number;
+    start_line: number;
+    end_line: number;
+  }>;
+};
+
+export async function postSearchBusinessFile(
+  payload: SearchBusinessFilePayload,
+): Promise<{ ok: boolean; matches: SearchBusinessFileMatch[]; error?: string }> {
+  if (!voiceWebhooksConfigured()) {
+    return { ok: false, matches: [], error: 'voice webhooks not configured' };
+  }
+
+  try {
+    const { res, body } = await postVoiceWebhook<{
+      ok?: boolean;
+      matches?: SearchBusinessFileMatch[];
+      error?: string;
+    }>('/api/voice/search-business-file', payload);
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        matches: [],
+        error: body.error ?? `HTTP ${res.status}`,
+      };
+    }
+
+    return {
+      ok: true,
+      matches: Array.isArray(body.matches) ? body.matches : [],
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, matches: [], error: msg };
+  }
+}
+
+/** Map session flags to canonical contract values. */
 export function canonicalCallOutcome(flags: {
-  appointmentBooked?: boolean;
   linkSent?: boolean;
   actionTicketCreated?: boolean;
   callbackRequested?: boolean;
@@ -132,6 +284,5 @@ export function canonicalCallOutcome(flags: {
   if (flags.linkSent) return 'link_sent';
   if (flags.callbackRequested) return 'callback_requested';
   if (flags.actionTicketCreated) return 'action_created';
-  if (flags.appointmentBooked) return 'answered';
   return 'answered';
 }

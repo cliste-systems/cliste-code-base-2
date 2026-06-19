@@ -9,17 +9,27 @@ import { maskPhone } from './gdpr.js';
 import { isE164SmsTarget } from './phone_classify.js';
 import {
   fallbackRoute,
+  isBookingRoute,
+  isLocationRoute,
   parseRoutingLinks,
   routeTrigger,
+  routeUsesCallerLinkDelivery,
   type RoutingLink,
 } from './routing_links.js';
 import {
   createBusinessFileSignedUrl,
   type BusinessFileRow,
 } from './supabase.js';
-import { normalizePhoneE164, sendSms } from './sms.js';
 import { insertActionTicket } from './action_tickets.js';
-import { disconnectSalonCallerLeg, type EndCallUserData } from './tools.js';
+import { disconnectCallerLeg, type EndCallUserData } from './end_call.js';
+import { normalizePhoneE164 } from './phone_normalize.js';
+import {
+  postSendCallerEmail,
+  postSearchBusinessFile,
+  postSendSms,
+  voiceWebhooksConfigured,
+  type SearchBusinessFilePayload,
+} from './voice_api.js';
 
 export type CaraSessionFlags = {
   linkSent: boolean;
@@ -54,6 +64,30 @@ function readCaraUserData(ctx: { userData: unknown }): CaraAgentUserData {
 function findRouteById(links: RoutingLink[], routeId: string): RoutingLink | null {
   const id = routeId.trim();
   return links.find((r) => r.id === id) ?? null;
+}
+
+async function sendCallerSms(
+  ud: CaraAgentUserData,
+  to: string,
+  body: string,
+): Promise<{ ok: boolean; detail: string }> {
+  if (!voiceWebhooksConfigured()) {
+    return { ok: false, detail: 'SMS is not configured on this worker.' };
+  }
+  if (!ud.calledNumber.trim()) {
+    return { ok: false, detail: 'Missing dialed number for SMS routing.' };
+  }
+  const result = await postSendSms({
+    called_number: ud.calledNumber,
+    to,
+    body,
+    caller_consented: true,
+    skip_business_prefix: true,
+  });
+  if (!result.ok) {
+    return { ok: false, detail: result.error ?? 'SMS send failed.' };
+  }
+  return { ok: true, detail: 'Sent.' };
 }
 
 async function createCallbackViaWebhook(
@@ -112,7 +146,7 @@ export class CaraTools {
         };
       }
       const body = `${ud.businessName}: ${route.url.trim()}`;
-      const sms = await sendSms(to, body);
+      const sms = await sendCallerSms(ud, to, body);
       if (!sms.ok) {
         return {
           ok: false,
@@ -129,6 +163,132 @@ export class CaraTools {
       return {
         ok: true,
         message: `Link sent for "${routeTrigger(route)}". Confirm it was received.`,
+      };
+    },
+  });
+
+  readonly sendDirectionsLink = llm.tool({
+    description:
+      'For booking or directions routes with text/email delivery configured. For directions, say the address first. Then ask how they want the link and send by SMS and/or email per the route setup.',
+    parameters: z.object({
+      routeId: z.string().min(1).describe('The routing_links id for the route'),
+      channel: z
+        .enum(['sms', 'email'])
+        .describe('How to send the maps link — match the route and what the caller chose'),
+      mobilePhone: z
+        .string()
+        .optional()
+        .describe('SMS-capable mobile. Omit to use caller line when it can receive texts.'),
+      emailAddress: z
+        .string()
+        .optional()
+        .describe('Caller email — required for email channel; ask on landlines.'),
+      callerConsented: z
+        .boolean()
+        .describe('True after the caller agreed to receive the link this way on the call'),
+    }),
+    execute: async (
+      { routeId, channel, mobilePhone, emailAddress, callerConsented },
+      { ctx },
+    ) => {
+      const ud = readCaraUserData(ctx);
+      const route = findRouteById(ud.routingLinks, routeId);
+      if (!route || !routeUsesCallerLinkDelivery(route) || !route.url.trim()) {
+        return {
+          ok: false,
+          message:
+            'Route not found or link delivery is not configured. Use sendRoutingLink for simple link routes, or take a message.',
+        };
+      }
+      if (!callerConsented) {
+        return {
+          ok: false,
+          message: 'Ask the caller if you may send the link, then retry with callerConsented true.',
+        };
+      }
+
+      const delivery = route.linkDelivery ?? 'sms';
+      if (delivery !== 'both' && delivery !== channel) {
+        return {
+          ok: false,
+          message: `This route is set to ${delivery} only — use channel "${delivery}".`,
+        };
+      }
+
+      const linkUrl = route.url.trim();
+      const messages: string[] = [];
+      const smsPrefix = isLocationRoute(route)
+        ? `${ud.businessName} — directions: `
+        : `${ud.businessName}: `;
+
+      if (channel === 'sms') {
+        let to = mobilePhone?.trim()
+          ? normalizePhoneE164(mobilePhone)
+          : normalizePhoneE164(ud.callerPhone);
+        if (!isE164SmsTarget(to)) {
+          return {
+            ok: false,
+            message:
+              'This line cannot receive texts. Ask for a mobile number, or offer email instead.',
+          };
+        }
+        const body = `${smsPrefix}${linkUrl}`;
+        const sms = await sendCallerSms(ud, to, body);
+        if (!sms.ok) {
+          return {
+            ok: false,
+            message: `${sms.detail} Read the link aloud: ${linkUrl}`,
+          };
+        }
+        ud.sessionFlags.linkSent = true;
+        ud.sessionFlags.smsSent += 1;
+        messages.push(isLocationRoute(route) ? 'Maps link sent by text.' : 'Booking link sent by text.');
+      }
+
+      if (channel === 'email') {
+        const toEmail = emailAddress?.trim().toLowerCase() ?? '';
+        if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
+          return {
+            ok: false,
+            message: 'Ask for their email address, spell it back, then retry.',
+          };
+        }
+        if (!voiceWebhooksConfigured()) {
+          return {
+            ok: false,
+            message: `Email is not available — read the link aloud: ${linkUrl}`,
+          };
+        }
+        const subject = isLocationRoute(route) ? 'Directions' : 'Booking link';
+        const body = isLocationRoute(route)
+          ? `Here are directions to ${ud.businessName}:\n\n${linkUrl}`
+          : `Here is your booking link for ${ud.businessName}:\n\n${linkUrl}`;
+        const mail = await postSendCallerEmail({
+          called_number: ud.calledNumber,
+          to: toEmail,
+          subject,
+          body,
+          caller_consented: true,
+        });
+        if (!mail.ok) {
+          return {
+            ok: false,
+            message: `${mail.error ?? 'Email failed'} — read the link aloud: ${linkUrl}`,
+          };
+        }
+        ud.sessionFlags.linkSent = true;
+        messages.push(`Link emailed to ${toEmail}.`);
+      }
+
+      console.log('sendDirectionsLink', {
+        orgId: ud.organizationId,
+        routeId,
+        channel,
+      });
+
+      return {
+        ok: true,
+        message: messages.join(' ') || 'Link sent.',
       };
     },
   });
@@ -173,7 +333,7 @@ export class CaraTools {
         };
       }
       const body = `${ud.businessName} — ${file.file_name}: ${signed}`;
-      const sms = await sendSms(to, body);
+      const sms = await sendCallerSms(ud, to, body);
       if (!sms.ok) {
         return {
           ok: false,
@@ -285,7 +445,7 @@ export class CaraTools {
         };
       }
       const body = `${ud.businessName}: WhatsApp us — ${route.url.trim()}`;
-      const sms = await sendSms(to, body);
+      const sms = await sendCallerSms(ud, to, body);
       if (!sms.ok) {
         return createCallbackViaWebhook(
           ud,
@@ -301,13 +461,92 @@ export class CaraTools {
     },
   });
 
+  readonly searchBusinessFile = llm.tool({
+    description:
+      'Look up a specific item, service, or price in uploaded business files (menus, price lists, brochures). Use when the caller asks about something in an uploaded document — quote only the matching excerpt, never read the whole file aloud.',
+    parameters: z.object({
+      query: z
+        .string()
+        .min(2)
+        .max(500)
+        .describe('What to search for — e.g. "gel manicure price" or "children haircut"'),
+      fileId: z
+        .string()
+        .uuid()
+        .optional()
+        .describe('Optional business_files id when you know which file to search'),
+      documentKind: z
+        .enum([
+          'price_list',
+          'menu',
+          'brochure',
+          'stock_sheet',
+          'service_sheet',
+          'faq_doc',
+          'other',
+        ])
+        .optional()
+        .describe('Optional document type filter'),
+    }),
+    execute: async ({ query, fileId, documentKind }, { ctx }) => {
+      const ud = readCaraUserData(ctx);
+      if (!voiceWebhooksConfigured()) {
+        return {
+          ok: false,
+          message:
+            'File lookup is not available on this call. Answer from your instructions only, or take a message.',
+        };
+      }
+
+      const payload: SearchBusinessFilePayload = {
+        called_number: ud.calledNumber,
+        query: query.trim(),
+      };
+      if (fileId) payload.file_id = fileId;
+      if (documentKind) payload.document_kind = documentKind;
+
+      const result = await postSearchBusinessFile(payload);
+
+      if (!result.ok) {
+        return {
+          ok: false,
+          message:
+            result.error ??
+            'Could not search uploaded files right now. Take a message or offer to text the file if a send-file route exists.',
+        };
+      }
+
+      if (result.matches.length === 0) {
+        return {
+          ok: true,
+          message:
+            'No matching excerpt found in uploaded files. Say you do not have that detail to hand — offer to text the file if available, or take a message for the team.',
+          matches: [],
+        };
+      }
+
+      const formatted = result.matches
+        .map((match) => {
+          const excerpts = match.excerpts.map((excerpt) => excerpt.text.trim()).join('\n');
+          return `${match.file_name}:\n${excerpts}`;
+        })
+        .join('\n\n');
+
+      return {
+        ok: true,
+        message: `Use only these excerpts to answer — do not read unrelated lines aloud:\n\n${formatted}`,
+        matches: result.matches,
+      };
+    },
+  });
+
   readonly endPhoneCall = llm.tool({
     description:
       'End the call after a short goodbye. Invoke in the same turn as your farewell — never say the tool name aloud.',
     parameters: z.object({}),
     execute: async (_args, { ctx }) => {
       const ud = readCaraUserData(ctx);
-      return disconnectSalonCallerLeg(
+      return disconnectCallerLeg(
         ctx.session as voice.AgentSession<EndCallUserData>,
         ud,
         async () => {
@@ -324,7 +563,9 @@ export class CaraTools {
   toolContext() {
     return {
       sendRoutingLink: this.sendRoutingLink,
+      sendDirectionsLink: this.sendDirectionsLink,
       sendRoutingFile: this.sendRoutingFile,
+      searchBusinessFile: this.searchBusinessFile,
       sendRoutingEmail: this.sendRoutingEmail,
       sendRoutingWhatsApp: this.sendRoutingWhatsApp,
       takeCallbackMessage: this.takeCallbackMessage,

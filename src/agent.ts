@@ -14,51 +14,42 @@ import {
   voice,
 } from '@livekit/agents';
 import type { RemoteParticipant } from '@livekit/rtc-node';
+import { RoomServiceClient } from 'livekit-server-sdk';
 import { fileURLToPath } from 'node:url';
 
-import { stripForbiddenTtsPhrasesStreaming } from './lib/tts_text_sanitize.js';
-import {
-  assertAiDisclosureSafeForBoot,
-  resolveAiDisclosure,
-} from './lib/ai_disclosure.js';
-import { linkAppointmentToCallLog } from './lib/booking.js';
-import { formatBusinessHoursForPrompt } from './lib/business_hours.js';
+import { buildCaraCallPrompt } from './lib/cara_prompt.js';
+import { CaraTools, type CaraAgentUserData } from './lib/cara_tools.js';
 import { estimateCallCostUsd } from './lib/call_cost_estimate.js';
 import { postprocessCallTranscript } from './lib/call_postprocess.js';
 import { insertCallLog } from './lib/call_logs.js';
-import { maskPhone, redactPii } from './lib/gdpr.js';
 import {
-  classifyCallerLine,
-  formatSalonPhoneForCustomerSms,
-  type CallerLineInfo,
-} from './lib/phone_classify.js';
-import { buildCaraCallPrompt } from './lib/cara_prompt.js';
-import { CaraTools } from './lib/cara_tools.js';
+  assistantTextSoundsLikeFakeHangup,
+  assistantTextSoundsLikeGoodbye,
+  disconnectCallerLeg,
+} from './lib/end_call.js';
+import { createElevenLabsTts } from './lib/elevenlabs-v3-http-tts.js';
+import { greetingIncludesAiDisclosure } from './lib/greeting_compliance.js';
+import { maskPhone, redactPii } from './lib/gdpr.js';
 import { assertOrgCallable } from './lib/org_gate.js';
+import {
+  callerE164ForBlocklist,
+  checkCallerBlocklist,
+  rejectBlockedCaller,
+  stableCallSidFallback,
+} from './lib/caller_blocklist.js';
+import { classifyCallerLine, type CallerLineInfo } from './lib/phone_classify.js';
+import {
+  getOrgForCall,
+  getSendableBusinessFiles,
+  resolveOrgTimeZone,
+  resolveOrgVoiceId,
+} from './lib/supabase.js';
+import { stripForbiddenTtsPhrasesStreaming } from './lib/tts_text_sanitize.js';
 import {
   canonicalCallOutcome,
   postCallComplete,
   voiceWebhooksConfigured,
 } from './lib/voice_api.js';
-import { buildSalonSystemPrompt } from './lib/prompt.js';
-import { stripeIsConfigured } from './lib/stripe.js';
-import {
-  getOrgForCall,
-  getSalonServices,
-  getSendableBusinessFiles,
-  resolveOrgTimeZone,
-  resolveOrgVoiceId,
-  shouldUseSalonBookingMode,
-  type SalonServiceRow,
-} from './lib/supabase.js';
-import {
-  SalonTools,
-  assistantTextSoundsLikeFakeHangup,
-  assistantTextSoundsLikeGoodbye,
-  disconnectSalonCallerLeg,
-  type SalonAgentUserData,
-} from './lib/tools.js';
-import type { CaraAgentUserData } from './lib/cara_tools.js';
 import {
   currentBillingPeriodStart,
   finishUsageRecord,
@@ -67,11 +58,8 @@ import {
   startUsageRecord,
   sumUsageMinutesThisPeriod,
 } from './lib/usage.js';
-import { RoomServiceClient } from 'livekit-server-sdk';
 
 const DEFAULT_TEST_PHONE = '+15551234567';
-
-/** Stored in call_logs.transcript; cap size for DB and UI. */
 const MAX_TRANSCRIPT_CHARS = 120_000;
 const MAX_TOOL_SNIPPET_CHARS = 800;
 
@@ -79,17 +67,12 @@ type TranscriptLine = { at: number; seq: number; line: string };
 
 function truncateForTranscript(s: string, max: number): string {
   const t = s.trim();
-  if (t.length <= max) {
-    return t;
-  }
-  const head = Math.max(0, max - 24);
-  return `${t.slice(0, head)}… [truncated]`;
+  if (t.length <= max) return t;
+  return `${t.slice(0, Math.max(0, max - 24))}… [truncated]`;
 }
 
 function mergeTranscriptLines(parts: TranscriptLine[]): string | null {
-  if (parts.length === 0) {
-    return null;
-  }
+  if (parts.length === 0) return null;
   const sorted = [...parts].sort((a, b) => a.at - b.at || a.seq - b.seq);
   let text = sorted.map((p) => p.line).join('\n\n');
   if (text.length > MAX_TRANSCRIPT_CHARS) {
@@ -101,26 +84,17 @@ function mergeTranscriptLines(parts: TranscriptLine[]): string | null {
 type RoutingHint = { slug?: string; phone?: string };
 
 function parseMetadataRouting(metadata: string): RoutingHint {
-  if (!metadata.trim()) {
-    return {};
-  }
+  if (!metadata.trim()) return {};
   try {
     const p = JSON.parse(metadata) as Record<string, unknown>;
     const slugRaw = p.organization_slug ?? p.salon_slug ?? p.slug;
     const slug = typeof slugRaw === 'string' ? slugRaw.trim() : undefined;
     const phoneRaw =
-      p.phone_number ??
-      p.dialedNumber ??
-      p.trunkPhoneNumber ??
-      p.trunk_phone_number;
+      p.phone_number ?? p.dialedNumber ?? p.trunkPhoneNumber ?? p.trunk_phone_number;
     const phone = typeof phoneRaw === 'string' ? phoneRaw.trim() : undefined;
     const hint: RoutingHint = {};
-    if (slug) {
-      hint.slug = slug;
-    }
-    if (phone) {
-      hint.phone = phone;
-    }
+    if (slug) hint.slug = slug;
+    if (phone) hint.phone = phone;
     return hint;
   } catch {
     return {};
@@ -139,16 +113,12 @@ function routingFromParticipantAttributes(attrs: Record<string, string>): Routin
   const sip = attrs['sip.trunkPhoneNumber'] ?? attrs['sip.trunk_phone_number'];
   const phone = sip?.trim();
   const hint: RoutingHint = {};
-  if (slug) {
-    hint.slug = slug;
-  }
-  if (phone) {
-    hint.phone = phone;
-  }
+  if (slug) hint.slug = slug;
+  if (phone) hint.phone = phone;
   return hint;
 }
 
-function resolveSalonRouting(job: JobContext['job'], participant: RemoteParticipant): RoutingHint {
+function resolveOrgRouting(job: JobContext['job'], participant: RemoteParticipant): RoutingHint {
   const jobM = parseMetadataRouting(job.metadata ?? '');
   const roomM = job.room?.metadata ? parseMetadataRouting(job.room.metadata) : {};
   const part = routingFromParticipantAttributes(participant.attributes);
@@ -157,6 +127,7 @@ function resolveSalonRouting(job: JobContext['job'], participant: RemoteParticip
     jobM.slug ??
     roomM.slug ??
     part.slug ??
+    process.env.DEFAULT_ORG_SLUG?.trim() ??
     process.env.DEFAULT_SALON_SLUG?.trim() ??
     undefined;
 
@@ -164,25 +135,21 @@ function resolveSalonRouting(job: JobContext['job'], participant: RemoteParticip
     part.phone ??
     jobM.phone ??
     roomM.phone ??
+    process.env.DEFAULT_ORG_PHONE?.trim() ??
     process.env.DEFAULT_SALON_PHONE?.trim() ??
     DEFAULT_TEST_PHONE;
 
   const hint: RoutingHint = {};
-  if (slug) {
-    hint.slug = slug;
-  }
+  if (slug) hint.slug = slug;
   hint.phone = phone;
   return hint;
 }
 
-/** Best-effort E.164 or display string for call_logs.caller_number (NOT NULL). */
 function callerNumberFromParticipant(participant: RemoteParticipant): string {
   const id = (participant.identity ?? '').trim();
   if (id.toLowerCase().startsWith('sip_')) {
     const rest = id.slice(4).trim();
-    if (rest.startsWith('+')) {
-      return rest;
-    }
+    if (rest.startsWith('+')) return rest;
     const digits = rest.replace(/\D/g, '');
     return digits ? `+${digits}` : rest || 'unknown';
   }
@@ -193,41 +160,32 @@ function callerNumberFromParticipant(participant: RemoteParticipant): string {
     attrs['sip.trunk_phone_number'] ??
     '';
   const t = sip.trim();
-  if (t.startsWith('+')) {
-    return t;
-  }
+  if (t.startsWith('+')) return t;
   const d = t.replace(/\D/g, '');
-  if (d.length >= 10) {
-    return `+${d}`;
-  }
+  if (d.length >= 10) return `+${d}`;
   const fromIdentity = id.replace(/\D/g, '');
-  if (fromIdentity.length >= 10) {
-    return `+${fromIdentity}`;
-  }
+  if (fromIdentity.length >= 10) return `+${fromIdentity}`;
   return id || 'unknown';
 }
 
-function formatServicesList(services: SalonServiceRow[]): string {
-  if (services.length === 0) {
-    return '(no services listed)';
-  }
-  return services
-    .map((row) => {
-      const name = typeof row.name === 'string' ? row.name : 'Service';
-      const parts = [name];
-      if (typeof row.description === 'string' && row.description) {
-        parts.push(row.description);
-      }
-      if (row.price != null) {
-        const pv =
-          typeof row.price === 'number' ? String(row.price) : String(row.price).trim();
-        if (pv) {
-          parts.push(`price: ${pv} euros`);
-        }
-      }
-      return parts.join(' — ');
-    })
-    .join('; ');
+function resolveCalledNumber(
+  routingPhone: string | undefined,
+  orgPhone: string | null | undefined,
+): string {
+  return routingPhone?.trim() || orgPhone?.trim() || '';
+}
+
+async function disconnectParticipant(
+  roomName: string,
+  identity: string,
+): Promise<void> {
+  const lkHost = process.env.LIVEKIT_URL?.trim();
+  const lkKey = process.env.LIVEKIT_API_KEY?.trim();
+  const lkSecret = process.env.LIVEKIT_API_SECRET?.trim();
+  if (!lkHost || !lkKey || !lkSecret || !roomName || !identity) return;
+  const httpsHost = lkHost.replace(/^wss?:\/\//, 'https://');
+  const client = new RoomServiceClient(httpsHost, lkKey, lkSecret);
+  await client.removeParticipant(roomName, identity);
 }
 
 export default defineAgent({
@@ -236,16 +194,18 @@ export default defineAgent({
   },
   entry: async (ctx: JobContext) => {
     await ctx.connect();
-
     const participant = await ctx.waitForParticipant();
-    const routing = resolveSalonRouting(ctx.job, participant);
+    const routing = resolveOrgRouting(ctx.job, participant);
 
     const org = await getOrgForCall({
       ...(routing.slug ? { slug: routing.slug } : {}),
       ...(routing.phone ? { phone: routing.phone } : {}),
     });
     if (!org) {
-      console.error('No organization found for routing', routing);
+      console.error('[agent] no organization for routing', {
+        slug: routing.slug,
+        phone: maskPhone(routing.phone),
+      });
       ctx.shutdown('unknown_organization');
       return;
     }
@@ -254,15 +214,10 @@ export default defineAgent({
     if (!gate.ok) {
       console.warn('[agent] org not callable', { orgId: org.id, reason: gate.reason });
       try {
-        const lkHost = process.env.LIVEKIT_URL?.trim();
-        const lkKey = process.env.LIVEKIT_API_KEY?.trim();
-        const lkSecret = process.env.LIVEKIT_API_SECRET?.trim();
         const roomName =
           (typeof ctx.room.name === 'string' && ctx.room.name.trim()) || '';
-        if (lkHost && lkKey && lkSecret && roomName && participant.identity) {
-          const httpsHost = lkHost.replace(/^wss?:\/\//, 'https://');
-          const client = new RoomServiceClient(httpsHost, lkKey, lkSecret);
-          await client.removeParticipant(roomName, participant.identity);
+        if (roomName && participant.identity) {
+          await disconnectParticipant(roomName, participant.identity);
         }
       } catch (err) {
         console.error('[agent] org-gate disconnect failed', err);
@@ -270,34 +225,58 @@ export default defineAgent({
       return;
     }
 
-    const salon = org;
-    const services = await getSalonServices(salon.id);
-    const businessFiles = await getSendableBusinessFiles(salon.id);
-    const useSalonBookingMode = shouldUseSalonBookingMode(salon, services.length);
-    const caraTools = new CaraTools();
-    const routingLinks = CaraTools.parseLinks(salon.routing_links);
+    const callerNumberRaw = callerNumberFromParticipant(participant);
+    const callerE164 = callerE164ForBlocklist(callerNumberRaw);
+    const calledNumber = resolveCalledNumber(routing.phone, org.phone_number);
+    const blockResult = await checkCallerBlocklist({
+      organizationId: org.id,
+      callerE164,
+      blockAnonymous: org.block_anonymous_callers,
+    });
+    if (blockResult === 'blocked' || blockResult === 'lookup_failed') {
+      if (blockResult === 'lookup_failed') {
+        console.error('[agent] blocklist lookup failed — rejecting caller (fail closed)', {
+          orgId: org.id,
+        });
+      } else {
+        console.info('[agent] blocklist gate — rejecting caller', {
+          orgId: org.id,
+          callerE164: maskPhone(callerE164),
+        });
+      }
+      await rejectBlockedCaller({
+        ctx,
+        participant,
+        org,
+        callerNumberRaw,
+        callerE164,
+        calledNumber,
+      });
+      return;
+    }
 
-    console.info('Organization loaded', {
-      id: salon.id,
-      slug: salon.slug,
-      name: salon.name,
-      phone: salon.phone_number,
-      niche: salon.niche,
-      mode: useSalonBookingMode ? 'salon_booking' : 'cara',
-      promptChars: salon.custom_prompt?.length ?? 0,
-      greetingSet: Boolean(salon.greeting?.trim()),
+    const businessFiles = await getSendableBusinessFiles(org.id);
+    const caraTools = new CaraTools();
+    const routingLinks = CaraTools.parseLinks(org.routing_links);
+
+    console.info('[agent] organization loaded', {
+      id: org.id,
+      slug: org.slug,
+      name: org.name,
+      phone: maskPhone(org.phone_number),
+      niche: org.niche,
+      promptChars: org.custom_prompt?.length ?? 0,
+      greetingSet: Boolean(org.greeting?.trim()),
       routeCount: routingLinks.length,
     });
 
-    const servicesList = formatServicesList(services);
-    const custom = salon.custom_prompt?.trim() || 'Be professional, concise, and helpful.';
-
+    const custom = org.custom_prompt?.trim() || 'Be professional, concise, and helpful.';
     const now = new Date();
     const nowUtcIso = now.toISOString();
-    const bookingTz = resolveOrgTimeZone(salon);
-    let todaySalonTz = nowUtcIso;
+    const bookingTz = resolveOrgTimeZone(org);
+    let todayLocal = nowUtcIso;
     try {
-      todaySalonTz = now.toLocaleDateString('en-GB', {
+      todayLocal = now.toLocaleDateString('en-GB', {
         timeZone: bookingTz,
         weekday: 'long',
         year: 'numeric',
@@ -305,111 +284,36 @@ export default defineAgent({
         day: 'numeric',
       });
     } catch {
-      /* invalid SALON_TIMEZONE */
+      /* invalid timezone */
     }
-    const exampleYear = now.getUTCFullYear();
-    const exampleIso = `${exampleYear}-04-15T15:00:00.000Z`;
 
-    const hoursBlock = formatBusinessHoursForPrompt(salon.business_hours, bookingTz);
-
-    const isNativePlan = String(salon.tier ?? '').toLowerCase() === 'native';
-
-    // Classify the calling line up-front so the prompt can carry the number +
-    // a one-liner steering the agent (skip asking when it's a mobile, ask once
-    // for an SMS-capable mobile when it's a landline, etc.). Saves 1–2 turns.
-    const earlyCallerNumberRaw = callerNumberFromParticipant(participant);
-    const callerLine: CallerLineInfo = classifyCallerLine(earlyCallerNumberRaw);
-    console.info('Caller line classified', {
-      raw: maskPhone(earlyCallerNumberRaw),
-      e164: maskPhone(callerLine.e164),
-      kind: callerLine.kind,
-      canReceiveSms: callerLine.canReceiveSms,
+    const callerLine: CallerLineInfo = classifyCallerLine(callerNumberRaw);
+    const systemPrompt = buildCaraCallPrompt({
+      businessName: org.name,
+      customPrompt: custom,
+      callerLine,
+      bookingTimeZone: bookingTz,
+      nowUtcIso,
+      todayLocal,
     });
 
-    // Only surface the pay-online branch when STRIPE_SECRET_KEY is present.
-    // Keeps the agent from apologising on-call that online payment isn't set up.
-    const stripeAvailable = stripeIsConfigured();
-    if (!stripeAvailable) {
-      console.warn(
-        '[agent] STRIPE_SECRET_KEY not set — pay-online flow disabled this call. Set it in Railway env to enable.',
-      );
-    }
-
-    const systemPrompt = useSalonBookingMode
-      ? buildSalonSystemPrompt({
-          salonName: salon.name,
-          salonTier: salon.tier,
-          ownerInstructions: custom,
-          hoursBlock,
-          servicesList,
-          callerLine,
-          bookingTz,
-          nowUtcIso,
-          todaySalonTz,
-          exampleIso,
-          isNativePlan,
-          stripeAvailable,
-        })
-      : buildCaraCallPrompt({
-          businessName: salon.name,
-          customPrompt: custom,
-          callerLine,
-          bookingTimeZone: bookingTz,
-          nowUtcIso,
-          todayLocal: todaySalonTz,
-        });
-
-    // (legacy inline mega-prompt removed — see buildSalonSystemPrompt / buildCaraCallPrompt)
-
-    const salonTools = new SalonTools();
-    const calledNumber =
-      routing.phone?.trim() || salon.phone_number?.trim() || '';
     const callStartedAt = Date.now();
-    const callerNumber = earlyCallerNumberRaw;
     const roomName =
       (typeof ctx.room.name === 'string' && ctx.room.name.trim()) ||
       (ctx.job.room && typeof (ctx.job.room as { name?: string }).name === 'string'
         ? String((ctx.job.room as { name: string }).name).trim()
         : '') ||
       '';
+    const callSidAttr = stableCallSidFallback(participant, roomName);
 
-    // Kick off the per-call metering row BEFORE the caller even says hello so
-    // crashes mid-call still show up in the dashboard's usage meter. Failures
-    // are swallowed inside startUsageRecord — metering must never take a live
-    // call off the line.
-    const callSidAttr =
-      (participant.attributes?.['sip.callID'] ??
-        participant.attributes?.['sip.callId'] ??
-        participant.attributes?.['sip.call_id'] ??
-        '') || null;
-    const billingPeriodStart = currentBillingPeriodStart(salon.billing_period_start ?? null);
-    const planQuota = planQuotaMinutes(salon.plan_tier);
+    const billingPeriodStart = currentBillingPeriodStart(org.billing_period_start ?? null);
+    const planQuota = planQuotaMinutes(org.plan_tier);
 
-    // QUOTA GATE — refuse new calls when the salon is already past their
-    // plan's included minutes by more than the burst allowance. Without
-    // this, an over-cap salon can drive unbounded STT/LLM/TTS spend; the
-    // metering row alone tracks billing but does NOT cap costs.
-    //
-    // Behaviour:
-    //  - planQuota === null (enterprise / unknown tier) → no cap, log only.
-    //  - usage lookup fails → fail OPEN (allow the call). Better to bill
-    //    one over-cap call than drop legitimate traffic if Supabase is down.
-    //  - over (quota + burst) → say a short message and disconnect the
-    //    caller leg; do NOT start the full agent session.
-    //
-    // Burst allowance defaults to 10% of quota with a floor of 5 minutes,
-    // overridable via env so support can lift caps temporarily without a
-    // deploy.
-    const burstPctRaw = Number.parseFloat(
-      process.env.CLISTE_QUOTA_BURST_PCT ?? '10',
-    );
-    const burstFloor = Number.parseInt(
-      process.env.CLISTE_QUOTA_BURST_FLOOR_MIN ?? '5',
-      10,
-    );
+    const burstPctRaw = Number.parseFloat(process.env.CLISTE_QUOTA_BURST_PCT ?? '10');
+    const burstFloor = Number.parseInt(process.env.CLISTE_QUOTA_BURST_FLOOR_MIN ?? '5', 10);
     if (typeof planQuota === 'number' && planQuota > 0) {
       const used = await sumUsageMinutesThisPeriod({
-        organizationId: salon.id,
+        organizationId: org.id,
         billingPeriodStart,
       });
       if (used != null) {
@@ -418,37 +322,18 @@ export default defineAgent({
           Number.isFinite(burstFloor) ? burstFloor : 5,
           Math.ceil((planQuota * burstPct) / 100),
         );
-        const hardCap = planQuota + burstAllowance;
-        if (used >= hardCap) {
-          console.warn(
-            '[agent] over-quota: refusing call',
-            JSON.stringify({
-              orgId: salon.id,
-              planTier: salon.plan_tier,
-              planQuota,
-              hardCap,
-              used,
-              billingPeriodStart,
-            }),
-          );
-          // Best-effort: speak a single short line via the LiveKit room then
-          // remove the SIP participant. Avoid starting AgentSession (full
-          // STT+LLM+TTS pipeline) so we don't burn another minute on the
-          // very thing we're capping.
+        if (used >= planQuota + burstAllowance) {
+          console.warn('[agent] over-quota — refusing call', {
+            orgId: org.id,
+            planQuota,
+            used,
+          });
           try {
-            const lkHost = process.env.LIVEKIT_URL?.trim();
-            const lkKey = process.env.LIVEKIT_API_KEY?.trim();
-            const lkSecret = process.env.LIVEKIT_API_SECRET?.trim();
-            if (lkHost && lkKey && lkSecret && roomName && participant.identity) {
-              const httpsHost = lkHost.replace(/^wss?:\/\//, 'https://');
-              const client = new RoomServiceClient(httpsHost, lkKey, lkSecret);
-              await client.removeParticipant(roomName, participant.identity);
+            if (roomName && participant.identity) {
+              await disconnectParticipant(roomName, participant.identity);
             }
           } catch (err) {
-            console.error(
-              '[agent] over-quota disconnect failed',
-              err instanceof Error ? err.message : err,
-            );
+            console.error('[agent] over-quota disconnect failed', err);
           }
           return;
         }
@@ -456,12 +341,12 @@ export default defineAgent({
     }
 
     const usageRecordIdPromise = startUsageRecord({
-      organizationId: salon.id,
-      planTier: salon.plan_tier ?? null,
+      organizationId: org.id,
+      planTier: org.plan_tier ?? null,
       planQuotaMinutes: planQuota,
       callSid: callSidAttr,
       roomName: roomName || null,
-      callerNumber,
+      callerNumber: callerNumberRaw,
       billingPeriodStart,
     });
 
@@ -470,124 +355,52 @@ export default defineAgent({
         ? { roomName, callerIdentity: participant.identity }
         : undefined;
 
-    const sessionUserData: SalonAgentUserData | CaraAgentUserData = useSalonBookingMode
-      ? {
-          organizationId: salon.id,
-          salonName: salon.name,
-          calledNumber,
-          bookingLinkUrl: salon.fresha_url ?? null,
-          callerPhone: callerNumber,
-          sessionFlags: {
-            appointmentBooked: false,
-            linkSent: false,
-            actionTicketCreated: false,
-            smsSent: 0,
-            endPhoneCallUsed: false,
-            paymentLinksSent: 0,
-          },
-          nativePlan: isNativePlan,
-          businessHours: salon.business_hours,
-          bookingTimeZone: bookingTz,
-          lastBookedAppointmentId: null,
-          salonCallbackPhoneDisplay: formatSalonPhoneForCustomerSms(salon.phone_number),
-          lastBookedCustomerFirstName: null,
-          ...(endCallTarget ? { endCallTarget } : {}),
-        }
-      : {
-          organizationId: salon.id,
-          businessName: salon.name,
-          calledNumber,
-          callerPhone: callerNumber,
-          routingLinks,
-          businessFiles,
-          fallbackNumber: salon.fallback_number,
-          callRoutingMode: salon.call_routing_mode,
-          sessionFlags: {
-            linkSent: false,
-            actionTicketCreated: false,
-            callbackRequested: false,
-            smsSent: 0,
-            endPhoneCallUsed: false,
-          },
-          disclosureConfirmed: false,
-          ...(endCallTarget ? { endCallTarget } : {}),
-        };
+    const greetingText = org.greeting?.trim() ?? '';
+    const sessionUserData: CaraAgentUserData = {
+      organizationId: org.id,
+      businessName: org.name,
+      calledNumber,
+      callerPhone: callerNumberRaw,
+      routingLinks,
+      businessFiles,
+      fallbackNumber: org.fallback_number,
+      callRoutingMode: org.call_routing_mode,
+      sessionFlags: {
+        linkSent: false,
+        actionTicketCreated: false,
+        callbackRequested: false,
+        smsSent: 0,
+        endPhoneCallUsed: false,
+      },
+      disclosureConfirmed: greetingIncludesAiDisclosure(greetingText),
+      ...(endCallTarget ? { endCallTarget } : {}),
+    };
 
-    /** Default AssemblyAI streaming STT (reliable on SIP). Override via LIVEKIT_INFERENCE_STT_MODEL. */
+    const elevenApiKey =
+      process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
+    if (!elevenApiKey) {
+      console.error('[agent] ELEVENLABS_API_KEY (or ELEVEN_API_KEY) is required — ElevenLabs-only TTS');
+      ctx.shutdown('missing_elevenlabs_key');
+      return;
+    }
+
     const inferenceSttModel =
       process.env.LIVEKIT_INFERENCE_STT_MODEL?.trim() || 'assemblyai/universal-streaming';
     const inferenceSttLanguage = process.env.LIVEKIT_INFERENCE_STT_LANGUAGE?.trim() || 'en';
     const inferenceLlmModel =
       process.env.LIVEKIT_INFERENCE_LLM_MODEL?.trim() || 'openai/gpt-4o-mini';
-
-    // Bypass LiveKit's inference gateway for LLM. The gateway is a single
-    // point of failure (its LLM credit quota has hit zero in production).
-    // This toggle routes directly to OpenAI on an independent failure domain.
     const useDirectOpenAiLlm =
-      process.env.SALON_LLM_PROVIDER?.trim().toLowerCase() === 'openai' &&
+      process.env.CARA_LLM_PROVIDER?.trim().toLowerCase() === 'openai' &&
       !!process.env.OPENAI_API_KEY?.trim();
 
-    const ttsProviderRaw = process.env.SALON_TTS_PROVIDER?.trim().toLowerCase() || '';
-    const elevenApiKey =
-      process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
-    const openaiApiKeyForTts = process.env.OPENAI_API_KEY?.trim() || '';
-    let ttsMode: 'elevenlabs' | 'openai';
-    if (ttsProviderRaw === 'openai') {
-      ttsMode = 'openai';
-    } else if (ttsProviderRaw === 'elevenlabs') {
-      ttsMode = 'elevenlabs';
-    } else if (elevenApiKey) {
-      ttsMode = 'elevenlabs';
-    } else if (openaiApiKeyForTts) {
-      ttsMode = 'openai';
-    } else {
-      console.error(
-        'No TTS credentials: set SALON_TTS_PROVIDER to openai|elevenlabs with the matching API key.',
-      );
-      ctx.shutdown('missing_tts_credentials');
-      return;
-    }
-    if (ttsMode === 'openai' && !openaiApiKeyForTts) {
-      console.error('SALON_TTS_PROVIDER=openai requires OPENAI_API_KEY in the worker environment.');
-      ctx.shutdown('missing_openai_key');
-      return;
-    }
-    if (ttsMode === 'elevenlabs' && !elevenApiKey) {
-      console.error(
-        'SALON_TTS_PROVIDER=elevenlabs requires ELEVEN_API_KEY or ELEVENLABS_API_KEY (never commit keys).',
-      );
-      ctx.shutdown('missing_elevenlabs_key');
-      return;
-    }
     const elevenVoiceId =
-      resolveOrgVoiceId(salon) ||
-      process.env.ELEVEN_VOICE_ID?.trim() ||
-      'C92s6vssSLlabgIln1iY';
-    // eleven_v3 — expressive receptionist tone on voice C92s6vssSLlabgIln1iY.
-    // Higher latency than flash_v2_5; override ELEVEN_TTS_MODEL for A/B tests.
+      resolveOrgVoiceId(org) || process.env.ELEVEN_VOICE_ID?.trim() || 'C92s6vssSLlabgIln1iY';
     const elevenModel =
-      (process.env.ELEVEN_TTS_MODEL?.trim() || 'eleven_v3') as elevenlabs.TTSModels;
-    const elevenStreamingLatency = Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '4', 10);
-    // v3 "Creative" preset: low stability + max style exaggeration.
-    // Override any of these via env without redeploying code.
-    const elevenVoiceStability = Number.parseFloat(process.env.ELEVEN_VOICE_STABILITY ?? '0');
-    const elevenVoiceSimilarity = Number.parseFloat(process.env.ELEVEN_VOICE_SIMILARITY ?? '0.75');
-    const elevenVoiceStyle = Number.parseFloat(process.env.ELEVEN_VOICE_STYLE ?? '1');
+      (process.env.ELEVEN_TTS_MODEL?.trim() || 'eleven_flash_v2_5') as elevenlabs.TTSModels;
+    const elevenEncoding = process.env.ELEVEN_TTS_ENCODING?.trim() || 'pcm_24000';
+    const elevenBaseUrl =
+      process.env.ELEVENLABS_BASE_URL?.trim() || 'https://api.elevenlabs.io/v1';
 
-    const openaiTtsModel =
-      (process.env.OPENAI_TTS_MODEL?.trim() || 'gpt-4o-mini-tts') as openai.TTSModels | string;
-    const openaiTtsVoice = (process.env.OPENAI_TTS_VOICE?.trim() || 'coral') as openai.TTSVoices;
-    const openaiTtsSpeed = Number.parseFloat(process.env.OPENAI_TTS_SPEED ?? '1');
-    const openaiTtsInstructions = process.env.OPENAI_TTS_INSTRUCTIONS?.trim();
-
-    // Endpointing budget — the silence window after a caller stops speaking
-    // before the agent commits to "they're done" and starts generating.
-    // Aggressive defaults because callers flagged long gaps: minDelay 80ms
-    // fires almost immediately on clear EOU cues, maxDelay 900ms still
-    // tolerates a short mid-sentence pause but no longer budgets for full
-    // mid-spell hesitation (we instead rely on the EOU model + preemptive
-    // generation to handle that). Raise LIVEKIT_ENDPOINTING_MAX_MS if you
-    // see the agent cutting callers off mid-thought.
     const endpointMinMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '80', 10);
     const endpointMaxMs = Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '900', 10);
     const endpointMode = (process.env.LIVEKIT_ENDPOINTING_MODE?.trim() || 'dynamic') as
@@ -596,70 +409,38 @@ export default defineAgent({
     const useTurnDetector =
       (process.env.LIVEKIT_USE_TURN_DETECTOR?.trim().toLowerCase() || 'on') !== 'off';
 
-    // The EnglishModel constructor can throw synchronously if the HuggingFace
-    // model cache is empty (npm run download-files was skipped) or the
-    // onnxruntime-node build is missing for the target arch. If anything goes
-    // wrong, fall back to STT/VAD turn detection so the worker still ANSWERS
-    // calls — losing ~200ms of latency is infinitely better than dead air.
     let turnDetectorInstance: InstanceType<typeof lkTurn.turnDetector.EnglishModel> | null = null;
     if (useTurnDetector) {
       try {
         turnDetectorInstance = new lkTurn.turnDetector.EnglishModel();
       } catch (err) {
-        console.error(
-          '[agent] EOU turn-detector could not be constructed — falling back to VAD/STT',
-          err instanceof Error ? err.message : err,
-        );
-        turnDetectorInstance = null;
+        console.error('[agent] turn-detector init failed — VAD/STT fallback', err);
       }
     }
-    // Barge-in sensitivity. Previously required 500ms + 2 words to interrupt
-    // the agent, which callers experienced as "I have to talk twice for her
-    // to stop". Tighter defaults: 200ms + 1 word means one confident "no"
-    // or "wait" will cut her off. Watch for false interrupts from SIP echo;
-    // raise LIVEKIT_INTERRUPTION_MIN_MS back toward 350 if that happens.
+
     const interruptionMinMs = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_MS ?? '200', 10);
     const interruptionMinWords = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_WORDS ?? '1', 10);
     const interruptionModeRaw = process.env.LIVEKIT_INTERRUPTION_MODE?.trim().toLowerCase();
     const interruptionMode: 'adaptive' | 'vad' | undefined =
       interruptionModeRaw === 'vad' ? 'vad' : interruptionModeRaw === 'auto' ? undefined : 'adaptive';
-    const discardAudioIfUninterruptible =
-      process.env.LIVEKIT_DISCARD_AUDIO_IF_UNINTERRUPTIBLE?.trim().toLowerCase() !== 'false';
 
-    const menuTokens = services.flatMap((row) => {
-      const n = typeof row.name === 'string' ? row.name.trim() : '';
-      return n ? n.split(/[\s,/]+/).filter((w) => w.length > 1) : [];
-    });
-    const salonNameTokens = salon.name ? salon.name.split(/\s+/).filter((w) => w.length > 1) : [];
+    const orgNameTokens = org.name ? org.name.split(/\s+/).filter((w) => w.length > 1) : [];
     const envExtra =
       process.env.LIVEKIT_STT_EXTRA_KEYTERMS?.split(/[,;]+/)
         .map((s) => s.trim())
         .filter((w) => w.length > 1) ?? [];
-    const sttKeyterms = [
-      ...new Set([...envExtra, ...salonNameTokens, ...menuTokens]),
-    ].slice(0, 100);
+    const sttKeyterms = [...new Set([...envExtra, ...orgNameTokens])].slice(0, 100);
 
     const llmTemperature = Number.parseFloat(process.env.LIVEKIT_LLM_TEMPERATURE ?? '0.45');
-    const llmMaxCompletionTokens = Number.parseInt(
-      process.env.LIVEKIT_LLM_MAX_TOKENS ?? '220',
-      10,
-    );
+    const llmMaxCompletionTokens = Number.parseInt(process.env.LIVEKIT_LLM_MAX_TOKENS ?? '220', 10);
 
     const sttModelLower = inferenceSttModel.toLowerCase();
     const sttModelOptions = sttModelLower.includes('assemblyai')
-      ? {
-          ...(sttKeyterms.length > 0 ? { keyterms_prompt: sttKeyterms } : {}),
-        }
+      ? { ...(sttKeyterms.length > 0 ? { keyterms_prompt: sttKeyterms } : {}) }
       : {
           interim_results: true,
           ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
         };
-
-    const sttInstance = new inference.STT({
-      model: inferenceSttModel,
-      language: inferenceSttLanguage,
-      modelOptions: sttModelOptions,
-    });
 
     const directOpenAiLlmModel = inferenceLlmModel.replace(/^openai\//, '');
     const llmInstance = useDirectOpenAiLlm
@@ -677,55 +458,48 @@ export default defineAgent({
           },
         });
 
-    console.info('[agent] pipeline providers', {
+    console.info('[agent] pipeline', {
       stt: inferenceSttModel,
       llm: useDirectOpenAiLlm ? `openai-direct:${directOpenAiLlmModel}` : inferenceLlmModel,
-      tts: ttsMode,
+      tts: `elevenlabs:${elevenModel}`,
     });
 
-    const session = new voice.AgentSession<SalonAgentUserData | CaraAgentUserData>({
-      stt: sttInstance,
+    const session = new voice.AgentSession<CaraAgentUserData>({
+      stt: new inference.STT({
+        model: inferenceSttModel,
+        language: inferenceSttLanguage,
+        modelOptions: sttModelOptions,
+      }),
       vad: ctx.proc.userData.vad as silero.VAD,
       llm: llmInstance,
-      tts:
-        ttsMode === 'openai'
-          ? new openai.TTS({
-              apiKey: openaiApiKeyForTts,
-              model: openaiTtsModel,
-              voice: openaiTtsVoice,
-              speed: Number.isFinite(openaiTtsSpeed) ? openaiTtsSpeed : 1,
-              ...(openaiTtsInstructions ? { instructions: openaiTtsInstructions } : {}),
-            })
-          : new elevenlabs.TTS({
-                apiKey: elevenApiKey,
-                voiceId: elevenVoiceId,
-                model: elevenModel,
-                streamingLatency: Number.isFinite(elevenStreamingLatency) ? elevenStreamingLatency : 4,
-                voiceSettings: {
-                  stability: Number.isFinite(elevenVoiceStability) ? elevenVoiceStability : 0,
-                  similarity_boost: Number.isFinite(elevenVoiceSimilarity) ? elevenVoiceSimilarity : 0.75,
-                  style: Number.isFinite(elevenVoiceStyle) ? elevenVoiceStyle : 1,
-                },
-              }),
+      tts: createElevenLabsTts({
+        apiKey: elevenApiKey,
+        voiceId: elevenVoiceId,
+        model: elevenModel,
+        encoding: elevenEncoding as elevenlabs.TTSEncoding,
+        baseURL: elevenBaseUrl,
+        streamingLatency: Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '0', 10) || 0,
+        voiceSettings: {
+          stability: Number.parseFloat(process.env.ELEVEN_VOICE_STABILITY ?? '0.5') || 0.5,
+          similarity_boost: Number.parseFloat(process.env.ELEVEN_VOICE_SIMILARITY ?? '0.75') || 0.75,
+          style: Number.parseFloat(process.env.ELEVEN_VOICE_STYLE ?? '0.35') || 0.35,
+          use_speaker_boost: true,
+        },
+      }),
       userData: sessionUserData,
       preemptiveGeneration: true,
       maxToolSteps: 5,
       turnHandling: {
-        // LiveKit's open-weights EOU transformer (~500MB RAM, <100ms CPU
-        // inference per turn) predicts end-of-utterance from language
-        // context — noticeably faster + more accurate than VAD silence alone,
-        // especially when callers pause mid-sentence. Falls back to STT EOU
-        // cues from inference STT if the detector is disabled in env or failed
-        // to initialise (e.g. model files not downloaded yet).
         turnDetection: turnDetectorInstance ?? 'stt',
         endpointing: {
           mode: endpointMode,
-          minDelay: Number.isFinite(endpointMinMs) ? endpointMinMs : 200,
-          maxDelay: Number.isFinite(endpointMaxMs) ? endpointMaxMs : 2500,
+          minDelay: Number.isFinite(endpointMinMs) ? endpointMinMs : 80,
+          maxDelay: Number.isFinite(endpointMaxMs) ? endpointMaxMs : 900,
         },
         interruption: {
           mode: interruptionMode,
-          discardAudioIfUninterruptible,
+          discardAudioIfUninterruptible:
+            process.env.LIVEKIT_DISCARD_AUDIO_IF_UNINTERRUPTIBLE?.trim().toLowerCase() !== 'false',
           minDuration: Number.isFinite(interruptionMinMs) ? interruptionMinMs : 200,
           minWords: Number.isFinite(interruptionMinWords) ? interruptionMinWords : 1,
         },
@@ -740,10 +514,9 @@ export default defineAgent({
           : typeof err === 'object' && err !== null && 'message' in err
             ? String((err as { message: unknown }).message)
             : String(err);
-      console.error('[AgentSession] pipeline error', msg, err);
+      console.error('[AgentSession] pipeline error', msg);
     });
 
-    /** If assistant TTS was cut off (often before the caller heard anything), re-speak so they never get dead air. */
     const silenceRecoveryDelayMs = Number.parseInt(process.env.LIVEKIT_SILENCE_RECOVERY_MS ?? '550', 10);
     const silenceRecoveryMaxPerCall = Number.parseInt(
       process.env.LIVEKIT_SILENCE_RECOVERY_MAX_PER_CALL ?? '5',
@@ -751,98 +524,9 @@ export default defineAgent({
     );
     let silenceRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
     let silenceRecoveryCount = 0;
-    /** If the model says "end phone call" as speech, we still disconnect after a short delay (real tool may run first). */
     let fakeHangupGuardTimer: ReturnType<typeof setTimeout> | null = null;
-    /**
-     * Guard against "one moment while I check the diary…" + NO tool call.
-     * The prompt instructs her to ALWAYS pair a filler with the matching
-     * tool call in the same turn, but the LLM occasionally forgets, leaving
-     * the caller staring at silence after the filler TTS finishes. This
-     * timer fires iff a filler was spoken AND no tool executed shortly
-     * after — we then nudge her to either run the tool or actually answer.
-     */
     let fillerNoToolGuardTimer: ReturnType<typeof setTimeout> | null = null;
-    /**
-     * After a successful booking, if the caller's next utterance is a clear
-     * goodbye ("thanks", "no that's grand", "bye", etc) and the model still
-     * doesn't invoke endPhoneCall within a few seconds, force the disconnect.
-     * Stops the "I had to say bye for her to hang up" feedback.
-     */
-    let postBookingGoodbyeTimer: ReturnType<typeof setTimeout> | null = null;
-    /** If the model doesn't answer a clear "no thanks" quickly, nudge a goodbye + endPhoneCall. */
-    let postBookingGoodbyeNudgeTimer: ReturnType<typeof setTimeout> | null = null;
-    const postBookingGoodbyeMs = Number.parseInt(
-      process.env.LIVEKIT_POST_BOOKING_GOODBYE_MS ?? '2400',
-      10,
-    );
-    const postBookingGoodbyeNudgeMs = Number.parseInt(
-      process.env.LIVEKIT_POST_BOOKING_GOODBYE_NUDGE_MS ?? '280',
-      10,
-    );
-    const clearPostBookingGoodbyeTimers = () => {
-      if (postBookingGoodbyeTimer) {
-        clearTimeout(postBookingGoodbyeTimer);
-        postBookingGoodbyeTimer = null;
-      }
-      if (postBookingGoodbyeNudgeTimer) {
-        clearTimeout(postBookingGoodbyeNudgeTimer);
-        postBookingGoodbyeNudgeTimer = null;
-      }
-    };
-    const callerSoundsDone = (t: string): boolean => {
-      const s = t.toLowerCase().replace(/[^a-z0-9' ]/g, ' ').replace(/\s+/g, ' ').trim();
-      if (!s) return false;
-      const wc = s.split(' ').filter(Boolean).length;
-      if (wc > 8) return false;
-
-      if (/^(no|nope|nah)\b/.test(s) && wc <= 3) return true;
-      if (
-        /\b(nothing else|that'?s all|that is all|all set|we'?re good|no thanks|no thank you)\b/.test(s) &&
-        wc <= 8
-      ) {
-        return true;
-      }
-      if (
-        /\b(no|nope|nah)\b/.test(s) &&
-        /\b(thanks?|thank you|grand|all good|that'?s it|that'?s grand|good)\b/.test(s)
-      ) {
-        return true;
-      }
-      if (/^(bye|goodbye|cheers|talk soon|see ya|see you|grand thanks)\b/.test(s)) return true;
-      if (
-        /^(thanks|thank you|grand|perfect|brilliant|lovely|that'?s it|that'?s grand|all good|all sorted)\b/.test(
-          s,
-        ) &&
-        wc <= 5
-      ) {
-        return true;
-      }
-      return false;
-    };
-    const fillerNoToolGuardMs = Number.parseInt(
-      process.env.LIVEKIT_FILLER_NO_TOOL_MS ?? '1800',
-      10,
-    );
-    const clearFillerNoToolGuardTimer = () => {
-      if (fillerNoToolGuardTimer) {
-        clearTimeout(fillerNoToolGuardTimer);
-        fillerNoToolGuardTimer = null;
-      }
-    };
-    const assistantTextSoundsLikeFiller = (t: string): boolean => {
-      const s = t.toLowerCase();
-      // Match the exact filler openings the prompt lists. Kept narrow so
-      // ordinary sentences containing "moment" don't trip it.
-      return (
-        /\bone moment\b/.test(s) ||
-        /\blet me (have a look|check|see|pull)/.test(s) ||
-        /\bgive me a (second|sec|moment)/.test(s) ||
-        /\bbear with me\b/.test(s) ||
-        /\bpulling up\b/.test(s) ||
-        /\bpopping that in\b/.test(s) ||
-        /\blet me get that in\b/.test(s)
-      );
-    };
+    let goodbyeForceTimer: ReturnType<typeof setTimeout> | null = null;
 
     const clearSilenceRecoveryTimer = () => {
       if (silenceRecoveryTimer) {
@@ -850,39 +534,51 @@ export default defineAgent({
         silenceRecoveryTimer = null;
       }
     };
-
     const clearFakeHangupGuardTimer = () => {
       if (fakeHangupGuardTimer) {
         clearTimeout(fakeHangupGuardTimer);
         fakeHangupGuardTimer = null;
       }
     };
+    const clearFillerNoToolGuardTimer = () => {
+      if (fillerNoToolGuardTimer) {
+        clearTimeout(fillerNoToolGuardTimer);
+        fillerNoToolGuardTimer = null;
+      }
+    };
+    const clearGoodbyeForceTimer = () => {
+      if (goodbyeForceTimer) {
+        clearTimeout(goodbyeForceTimer);
+        goodbyeForceTimer = null;
+      }
+    };
+
+    const assistantTextSoundsLikeFiller = (t: string): boolean => {
+      const s = t.toLowerCase();
+      return (
+        /\bone moment\b/.test(s) ||
+        /\blet me (have a look|check|see|pull)/.test(s) ||
+        /\bgive me a (second|sec|moment)/.test(s) ||
+        /\bbear with me\b/.test(s)
+      );
+    };
 
     const scheduleSilenceRecoveryAfterCutoff = () => {
       clearSilenceRecoveryTimer();
-      const delay = Number.isFinite(silenceRecoveryDelayMs) ? silenceRecoveryDelayMs : 550;
       silenceRecoveryTimer = setTimeout(() => {
         silenceRecoveryTimer = null;
         try {
-          if (session.userState === 'speaking') {
-            return;
-          }
-          if (session.agentState !== 'listening') {
-            return;
-          }
-          const maxR = Number.isFinite(silenceRecoveryMaxPerCall) ? silenceRecoveryMaxPerCall : 5;
-          if (silenceRecoveryCount >= maxR) {
-            return;
-          }
+          if (session.userState === 'speaking' || session.agentState !== 'listening') return;
+          if (silenceRecoveryCount >= silenceRecoveryMaxPerCall) return;
           silenceRecoveryCount += 1;
           void session.generateReply({
             instructions:
-              'Your previous spoken reply was cut off or may not have played on the caller’s phone (line glitch or false interruption). Speak right away: one short warm line—sorry about that, you’re still with them—then continue helping with their last request from the conversation (booking, service, time). Use tools if needed. Do not go silent; do not ask them to repeat everything unless you have no context at all.',
+              'Your previous reply may not have played. One short warm line — sorry about that — then continue helping with their last request. Do not go silent.',
           });
         } catch (e) {
           console.error('[AgentSession] silence recovery failed', e);
         }
-      }, delay);
+      }, silenceRecoveryDelayMs);
     };
 
     session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
@@ -893,12 +589,8 @@ export default defineAgent({
     });
 
     session.on(voice.AgentSessionEventTypes.SpeechCreated, (ev) => {
-      const { speechHandle } = ev;
-      speechHandle.addDoneCallback((sh) => {
-        if (!sh.interrupted) {
-          return;
-        }
-        scheduleSilenceRecoveryAfterCutoff();
+      ev.speechHandle.addDoneCallback((sh) => {
+        if (sh.interrupted) scheduleSilenceRecoveryAfterCutoff();
       });
     });
 
@@ -907,127 +599,56 @@ export default defineAgent({
 
     session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
       const { item } = ev;
-      if (item.type !== 'message') {
-        return;
-      }
+      if (item.type !== 'message') return;
       const { role } = item;
-      if (role === 'developer' || role === 'system') {
-        return;
-      }
+      if (role === 'developer' || role === 'system') return;
       const text = item.textContent?.trim();
-      if (!text) {
-        return;
-      }
-      const flags = session.userData.sessionFlags;
-      const appointmentBooked =
-        'appointmentBooked' in flags && Boolean(flags.appointmentBooked);
-      if (
-        useSalonBookingMode &&
-        role === 'user' &&
-        appointmentBooked &&
-        !flags.endPhoneCallUsed &&
-        callerSoundsDone(text)
-      ) {
-        clearPostBookingGoodbyeTimers();
-        const nudgeMs = Number.isFinite(postBookingGoodbyeNudgeMs) ? postBookingGoodbyeNudgeMs : 280;
-        postBookingGoodbyeNudgeTimer = setTimeout(() => {
-          postBookingGoodbyeNudgeTimer = null;
-          const ud = session.userData;
-          if (ud.sessionFlags.endPhoneCallUsed) return;
-          if (session.agentState === 'speaking') return;
-          try {
-            const fn =
-              'lastBookedCustomerFirstName' in session.userData
-                ? session.userData.lastBookedCustomerFirstName
-                : null;
-            const nameLine = fn
-              ? `Use their name "${fn}" — e.g. "${fn}, thanks for ringing — see you then!" `
-              : '';
-            void session.generateReply({
-              instructions: `The caller clearly said they are finished (e.g. "no" to "anything else?", thanks, or goodbye). Reply **immediately** with ONE short warm personalised line. ${nameLine}Otherwise "Grand, talk soon!" Invoke **endPhoneCall** in the **same** turn. Do not ask another question. Do not stay silent.`,
-            });
-          } catch (e) {
-            console.error('[agent] post-booking goodbye nudge failed', e);
-          }
-        }, nudgeMs);
+      if (!text) return;
 
-        const delay = Number.isFinite(postBookingGoodbyeMs) ? postBookingGoodbyeMs : 2400;
-        postBookingGoodbyeTimer = setTimeout(() => {
-          postBookingGoodbyeTimer = null;
-          const ud = session.userData;
-          if (ud.sessionFlags.endPhoneCallUsed) return;
-          console.warn(
-            '[agent] caller said goodbye after booking but endPhoneCall did not fire — forcing disconnect',
-          );
-          void disconnectSalonCallerLeg(session, ud, async () => {
-            await new Promise((r) => setTimeout(r, 650));
-          });
-        }, delay);
-      }
+      const flags = session.userData.sessionFlags;
       if (role === 'assistant' && assistantTextSoundsLikeFiller(text)) {
         clearFillerNoToolGuardTimer();
-        const delay = Number.isFinite(fillerNoToolGuardMs) ? fillerNoToolGuardMs : 1800;
         fillerNoToolGuardTimer = setTimeout(() => {
           fillerNoToolGuardTimer = null;
           try {
-            if (session.userState === 'speaking') return;
-            if (session.agentState !== 'listening') return;
-            console.warn(
-              '[agent] assistant said a filler ("one moment…") but no tool ran — nudging follow-up',
-            );
+            if (session.userState === 'speaking' || session.agentState !== 'listening') return;
             void session.generateReply({
               instructions:
-                'You just told the caller "one moment" or similar but did not actually run a tool, so they are hearing dead air. Right now, either (a) invoke the tool you implied — usually checkAvailability with a concrete ISO, or listMyBookings, or cancelBooking — OR (b) if you cannot because you lack a detail, ask the single next question from the CALL SKELETON (service, time, name+spell, or mobile). One short sentence. Do NOT apologise for the pause; just move forward.',
+                'You said "one moment" but did not run a tool. Either invoke the right tool now or ask the single next question you need.',
             });
           } catch (e) {
             console.error('[AgentSession] filler-no-tool recovery failed', e);
           }
-        }, delay);
+        }, Number.parseInt(process.env.LIVEKIT_FILLER_NO_TOOL_MS ?? '1800', 10));
       }
-      // Agent said a clear goodbye line ("talk soon", "see you tomorrow",
-      // "thanks for ringing") but didn't invoke endPhoneCall. Force the
-      // disconnect after a short grace window so the real tool call (if
-      // it's about to land) wins. Only armed once a booking is in the bag
-      // OR an action-ticket / link-sent flag is set — otherwise we'd hang
-      // up if she casually said "have a good day" mid-conversation.
+
       if (
         role === 'assistant' &&
-        !session.userData.sessionFlags.endPhoneCallUsed &&
-        (appointmentBooked ||
-          flags.linkSent ||
-          flags.actionTicketCreated) &&
+        !flags.endPhoneCallUsed &&
+        (flags.linkSent || flags.actionTicketCreated) &&
         assistantTextSoundsLikeGoodbye(text)
       ) {
-        clearPostBookingGoodbyeTimers();
-        const delay = 1500;
-        postBookingGoodbyeTimer = setTimeout(() => {
-          postBookingGoodbyeTimer = null;
-          const ud = session.userData;
-          if (ud.sessionFlags.endPhoneCallUsed) return;
-          console.warn(
-            '[agent] assistant said goodbye but endPhoneCall did not fire — forcing disconnect',
-          );
-          void disconnectSalonCallerLeg(session, ud, async () => {
+        clearGoodbyeForceTimer();
+        goodbyeForceTimer = setTimeout(() => {
+          goodbyeForceTimer = null;
+          if (session.userData.sessionFlags.endPhoneCallUsed) return;
+          void disconnectCallerLeg(session, session.userData, async () => {
             await new Promise((r) => setTimeout(r, 650));
           });
-        }, delay);
+        }, 1500);
       }
+
       if (role === 'assistant' && assistantTextSoundsLikeFakeHangup(text)) {
         clearFakeHangupGuardTimer();
         fakeHangupGuardTimer = setTimeout(() => {
           fakeHangupGuardTimer = null;
-          const ud = session.userData;
-          if (ud.sessionFlags.endPhoneCallUsed) {
-            return;
-          }
-          console.warn(
-            '[agent] assistant output contained fake hang-up phrase; running disconnectSalonCallerLeg',
-          );
-          void disconnectSalonCallerLeg(session, ud, async () => {
+          if (session.userData.sessionFlags.endPhoneCallUsed) return;
+          void disconnectCallerLeg(session, session.userData, async () => {
             await new Promise((r) => setTimeout(r, 650));
           });
         }, 500);
       }
+
       const label = role === 'user' ? 'Caller' : 'Assistant';
       const interruptedNote = item.interrupted && role === 'assistant' ? ' [cut off]' : '';
       transcriptParts.push({
@@ -1058,37 +679,25 @@ export default defineAgent({
 
     let callLogWritten = false;
     session.on(voice.AgentSessionEventTypes.Close, async () => {
-      if (callLogWritten) {
-        return;
-      }
+      if (callLogWritten) return;
       callLogWritten = true;
       clearSilenceRecoveryTimer();
       clearFakeHangupGuardTimer();
       clearFillerNoToolGuardTimer();
-      clearPostBookingGoodbyeTimers();
+      clearGoodbyeForceTimer();
       try {
         const ud = session.userData;
-        if (!ud?.organizationId) {
-          return;
-        }
+        if (!ud?.organizationId) return;
+
         const durationSeconds = Math.max(0, Math.round((Date.now() - callStartedAt) / 1000));
-        let outcome = canonicalCallOutcome({
-          appointmentBooked:
-            'appointmentBooked' in ud.sessionFlags &&
-            Boolean(ud.sessionFlags.appointmentBooked),
+        const outcome = canonicalCallOutcome({
           linkSent: ud.sessionFlags.linkSent,
           actionTicketCreated: ud.sessionFlags.actionTicketCreated,
-          callbackRequested:
-            'callbackRequested' in ud.sessionFlags &&
-            Boolean(ud.sessionFlags.callbackRequested),
+          callbackRequested: ud.sessionFlags.callbackRequested,
           endPhoneCallUsed: ud.sessionFlags.endPhoneCallUsed,
         });
+
         const verbatimRaw = mergeTranscriptLines(transcriptParts);
-        // GDPR data minimisation: strip likely card-numbers / CVVs / IBAN / PPS
-        // from the transcript BEFORE we hand it to the post-process LLM
-        // (third-party processor) and BEFORE persisting to call_logs. Names,
-        // phones and booking refs stay because they are the legitimate
-        // purpose of the call and live alongside in `appointments`.
         const verbatim = verbatimRaw ? redactPii(verbatimRaw) : null;
         let transcriptReview: string | null = null;
         let aiSummary: string | null = null;
@@ -1096,8 +705,7 @@ export default defineAgent({
         if (verbatim) {
           const pp = await postprocessCallTranscript({
             verbatim,
-            salonName: salon.name,
-            services,
+            businessName: org.name,
             outcome,
             inferenceLlmModel,
           });
@@ -1105,8 +713,7 @@ export default defineAgent({
           aiSummary = pp.aiSummary ? redactPii(pp.aiSummary) : null;
           didPostprocess = true;
         }
-        const ttsModelForCost =
-          ttsMode === 'openai' ? String(openaiTtsModel) : String(elevenModel);
+
         const costEstimate = estimateCallCostUsd({
           durationSeconds,
           smsSegmentsSent: ud.sessionFlags.smsSent,
@@ -1114,31 +721,29 @@ export default defineAgent({
           transcriptChars: verbatim?.length ?? 0,
           sttModel: inferenceSttModel,
           llmModel: inferenceLlmModel,
-          ttsModel: ttsModelForCost,
+          ttsModel: String(elevenModel),
         });
-        const disclosureConfirmed =
-          'disclosureConfirmed' in ud ? ud.disclosureConfirmed : false;
 
-        let callLogId: string | null = null;
+        const disclosureConfirmed = ud.disclosureConfirmed;
+
         if (voiceWebhooksConfigured() && calledNumber) {
           const webhookResult = await postCallComplete({
             called_number: calledNumber,
             call_sid: callSidAttr,
             room_name: roomName || null,
-            caller_number: callerNumber,
+            caller_number: callerNumberRaw,
             duration_seconds: durationSeconds,
             outcome,
             transcript: verbatim,
             transcript_review: transcriptReview,
             ai_summary: aiSummary,
-            disclosure_confirmed:
-              disclosureConfirmed || Boolean(salon.greeting?.trim()),
+            disclosure_confirmed: disclosureConfirmed,
           });
           if (!webhookResult.ok) {
             console.error('[agent] call-complete webhook failed', webhookResult.error);
-            callLogId = await insertCallLog({
+            await insertCallLog({
               organizationId: ud.organizationId,
-              callerNumber,
+              callerNumber: callerNumberRaw,
               durationSeconds,
               outcome,
               transcript: verbatim,
@@ -1146,13 +751,11 @@ export default defineAgent({
               aiSummary,
               costEstimate,
             });
-          } else {
-            callLogId = webhookResult.callLogId ?? null;
           }
         } else {
-          callLogId = await insertCallLog({
+          await insertCallLog({
             organizationId: ud.organizationId,
-            callerNumber,
+            callerNumber: callerNumberRaw,
             durationSeconds,
             outcome,
             transcript: verbatim,
@@ -1161,14 +764,7 @@ export default defineAgent({
             costEstimate,
           });
         }
-        if (
-          callLogId &&
-          'lastBookedAppointmentId' in ud &&
-          ud.lastBookedAppointmentId
-        ) {
-          await linkAppointmentToCallLog(ud.lastBookedAppointmentId, callLogId);
-        }
-        // Close out the metering row the nightly Stripe-sync cron reads.
+
         const usageRecordId = await usageRecordIdPromise;
         if (usageRecordId) {
           await finishUsageRecord({ usageId: usageRecordId, durationSeconds });
@@ -1178,13 +774,10 @@ export default defineAgent({
       }
     });
 
-    /** Strips spoken tool-name junk from the LLM text stream before TTS so callers never hear it. */
-    class SalonReceptionAgent extends voice.Agent<SalonAgentUserData | CaraAgentUserData> {
+    class CaraVoiceAgent extends voice.Agent<CaraAgentUserData> {
       override async ttsNode(
         text: ReadableStream<string>,
-        modelSettings: Parameters<
-          voice.Agent<SalonAgentUserData | CaraAgentUserData>['ttsNode']
-        >[1],
+        modelSettings: Parameters<voice.Agent<CaraAgentUserData>['ttsNode']>[1],
       ) {
         return voice.Agent.default.ttsNode(
           this,
@@ -1194,42 +787,23 @@ export default defineAgent({
       }
     }
 
-    const agent = new SalonReceptionAgent({
+    const agent = new CaraVoiceAgent({
       instructions: systemPrompt,
-      tools: useSalonBookingMode
-        ? salonTools.fncCtx(!isNativePlan, stripeAvailable)
-        : caraTools.toolContext(),
+      tools: caraTools.toolContext(),
     });
 
     await session.start({ agent, room: ctx.room });
 
-    // GDPR Art 13(2)(f) + EU AI Act Art 50(1) — caller must be informed
-    // they are speaking to an AI before sharing personal info. Resolution
-    // is centralised in lib/ai_disclosure.ts so the same rules apply at
-    // boot (assert) and per-call. In production, "off" is refused unless
-    // an explicit override token is set; non-prod warns instead.
-    const aiDisclosure = resolveAiDisclosure().text;
-
-    const fixedGreeting = salon.greeting?.trim();
-    if (fixedGreeting) {
-      session.say(fixedGreeting);
-      if (useSalonBookingMode && aiDisclosure) {
-        // Salon legacy path: separate disclosure line after custom greeting.
-        session.say(aiDisclosure);
-      } else if (!useSalonBookingMode && 'disclosureConfirmed' in session.userData) {
+    if (greetingText) {
+      session.say(greetingText);
+      if (greetingIncludesAiDisclosure(greetingText)) {
         session.userData.disclosureConfirmed = true;
       }
     } else {
       await session.generateReply({
-        instructions: useSalonBookingMode
-          ? `The caller just connected; they have not spoken yet. You speak first. Say ONE opening only, following this pattern exactly in spirit:
-"Hi, thanks for calling ${salon.name} — how can I help you today?"
-You may add ONE short clause (e.g. that you can help with bookings and services). Max 35 words. Use the salon name ${salon.name}.${aiDisclosure ? ` Then add EXACTLY this sentence on a new breath, no paraphrasing: "${aiDisclosure}"` : ' Never mention AI or robots.'} Match tone from owner instructions if any.`
-          : `The caller just connected. Speak first with ONE short greeting for ${salon.name}. Max 35 words. Include the AI and call-recording notice exactly as specified in your instructions.`,
+        instructions: `The caller just connected. Speak first with ONE short greeting for ${org.name}. Max 35 words. Include the AI and call-recording notice exactly as specified in your instructions.`,
       });
-      if (!useSalonBookingMode && 'disclosureConfirmed' in session.userData) {
-        session.userData.disclosureConfirmed = true;
-      }
+      session.userData.disclosureConfirmed = true;
     }
   },
 });
@@ -1238,15 +812,6 @@ const _agentNameRaw = process.env.LIVEKIT_AGENT_NAME;
 const resolvedAgentName =
   _agentNameRaw === undefined ? 'cliste-salon-node' : _agentNameRaw.trim();
 
-// Fail-fast at boot if the AI-disclosure config is unsafe for this
-// environment. We do this AFTER dotenv (top of file) and BEFORE
-// cli.runApp so a misconfigured prod worker never registers with
-// LiveKit and never picks up a call.
-assertAiDisclosureSafeForBoot();
-
-// Best-effort: close out any usage rows whose worker died mid-call (no
-// ended_at, started >6h ago). Without this, a single crashed call can
-// poison the quota gate forever and lock the salon out of new calls.
 void reapZombieUsageRows();
 
 cli.runApp(

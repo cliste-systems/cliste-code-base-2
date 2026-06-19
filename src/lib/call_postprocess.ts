@@ -1,9 +1,5 @@
 import { inference, llm } from '@livekit/agents';
 
-import type { SalonServiceRow } from './supabase.js';
-
-import { applyDeterministicSalonTranscript } from './transcript_review.js';
-
 /** Avoid overwhelming inference context on very long calls. */
 const MAX_VERBATIM_FOR_LLM = 48_000;
 
@@ -43,36 +39,31 @@ function parseJsonPayload<T>(raw: string): T | null {
 
 function fallbackSummary(outcome: string): string {
   const o = outcome.toLowerCase();
-  if (o.includes('appointment_booked') || o.includes('booked')) {
-    return 'The caller spoke with the AI receptionist; an appointment was booked or confirmed during the call.';
-  }
   if (o.includes('link_sent')) {
-    return 'The caller received a booking link by SMS during the call.';
+    return 'The caller received a routing link by SMS during the call.';
   }
-  if (o.includes('action_required') || o.includes('action required')) {
-    return 'The AI logged a follow-up for your team (Action Inbox) — e.g. callback, named staff request, or topic outside the AI.';
+  if (o.includes('action_required') || o.includes('action_created')) {
+    return 'The AI logged a follow-up for your team (Action Inbox).';
   }
-  if (o.includes('link')) {
-    return 'The call included sending or discussing a booking link.';
+  if (o.includes('callback')) {
+    return 'The caller asked for a callback or transfer; the team was notified.';
   }
-  return 'The caller spoke with the AI receptionist. See the transcript for details.';
+  if (o.includes('blocked')) {
+    return 'The call was blocked by the business blocklist.';
+  }
+  return 'The caller spoke with Cara. See the transcript for details.';
 }
 
 /**
- * Produces a salon-friendly transcript (STT fixes) and a short owner summary using the same
- * LiveKit inference model as the voice agent.
+ * Produces a readable transcript and short owner summary using LiveKit inference.
  */
 export async function postprocessCallTranscript(input: {
   verbatim: string | null;
-  salonName: string;
-  services: SalonServiceRow[];
+  businessName: string;
   outcome: string;
   inferenceLlmModel: string;
 }): Promise<CallPostprocessResult> {
   const verbatim = input.verbatim?.trim() ?? '';
-  const deterministic = verbatim
-    ? applyDeterministicSalonTranscript(verbatim, input.services)
-    : '';
 
   const verbatimForLlm =
     verbatim.length > MAX_VERBATIM_FOR_LLM
@@ -86,11 +77,6 @@ export async function postprocessCallTranscript(input: {
     };
   }
 
-  const menu = input.services
-    .map((s) => (typeof s.name === 'string' ? s.name.trim() : ''))
-    .filter(Boolean)
-    .join(', ');
-
   const postprocessLlm = new inference.LLM({
     model: input.inferenceLlmModel as inference.LLMModels,
     modelOptions: {
@@ -99,21 +85,15 @@ export async function postprocessCallTranscript(input: {
     },
   });
 
-  const userPrompt = `Salon name: ${input.salonName}
-Services on the menu (use exact names when correcting STT): ${menu || '(none listed)'}
+  const userPrompt = `Business name: ${input.businessName}
 Call outcome code: ${input.outcome}
-
-Deterministic wording pass already applied where obvious (below). Polish further if needed and match menu names.
 
 VERBATIM TRANSCRIPT:
 ${verbatimForLlm}
 
-DETERMINISTIC PRE-PASS (may still have errors):
-${deterministic.length > MAX_VERBATIM_FOR_LLM ? `${deterministic.slice(0, MAX_VERBATIM_FOR_LLM)}…` : deterministic}
-
 Return ONLY valid JSON with keys "transcriptReview" and "summary" (no markdown outside JSON).
-- transcriptReview: Full conversation text with the same line prefixes as the verbatim (Caller:, Assistant:, [Tool], [Tool result], etc.). Fix speech-to-text mistakes using the menu (e.g. "feed" → "Fade" when Fade is a service and the caller is booking a haircut). Do not invent bookings or facts.
-- summary: 2–4 short sentences in Irish/British English for the salon owner: what the caller wanted, what happened, and the result.`;
+- transcriptReview: Full conversation with the same line prefixes (Caller:, Assistant:, [Tool], etc.). Fix obvious speech-to-text mistakes. Do not invent facts.
+- summary: 2–4 short sentences in Irish/British English for the business owner: what the caller wanted, what happened, and the result.`;
 
   const chatCtx = llm.ChatContext.empty();
   chatCtx.addMessage({
@@ -136,7 +116,7 @@ Return ONLY valid JSON with keys "transcriptReview" and "summary" (no markdown o
   }
 
   return {
-    transcriptReview: deterministic || verbatim,
+    transcriptReview: verbatim,
     aiSummary: fallbackSummary(input.outcome),
   };
 }

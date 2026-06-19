@@ -22,9 +22,10 @@ function ensureNodeWebSocket(): void {
   }
 }
 
-/** Read-mostly org config cache window. Dashboard edits surface within this. */
 const ORG_CACHE_TTL_MS = Number.parseInt(
-  process.env.CLISTE_SALON_CACHE_TTL_MS ?? '60000',
+  process.env.CLISTE_ORG_CACHE_TTL_MS ??
+    process.env.CLISTE_SALON_CACHE_TTL_MS ??
+    '30000',
   10,
 );
 
@@ -47,7 +48,7 @@ export function getSupabaseClient(): SupabaseClient {
   return getSupabase();
 }
 
-/** Full org slice for inbound calls — aligned with code-base-1 PROMPT_ORG_COLUMNS + runtime fields. */
+/** Full org slice for inbound Cara calls — aligned with code-base-1 compile contract. */
 export type OrgCallConfig = {
   id: string;
   account_id: string | null;
@@ -68,21 +69,10 @@ export type OrgCallConfig = {
   routing_links: unknown;
   fallback_number: string | null;
   call_routing_mode: string | null;
-  fresha_url: string | null;
   phone_number: string | null;
   plan_tier: string | null;
   billing_period_start: string | null;
-};
-
-/** @deprecated Use OrgCallConfig */
-export type SalonConfig = OrgCallConfig;
-
-export type SalonServiceRow = {
-  id: string;
-  name: string;
-  description: string | null;
-  price: unknown;
-  duration_minutes: number | null;
+  block_anonymous_callers: boolean;
 };
 
 export type BusinessFileRow = {
@@ -112,10 +102,10 @@ const ORG_SELECT = `
   routing_links,
   fallback_number,
   call_routing_mode,
-  fresha_url,
   phone_number,
   plan_tier,
   billing_period_start,
+  block_anonymous_callers,
   accounts ( status )
 `;
 
@@ -179,13 +169,19 @@ function mapOrgRow(data: Record<string, unknown>): OrgCallConfig {
     call_routing_mode: data.call_routing_mode
       ? String(data.call_routing_mode)
       : null,
-    fresha_url: data.fresha_url ? String(data.fresha_url) : null,
     phone_number: data.phone_number ? String(data.phone_number) : null,
     plan_tier: data.plan_tier ? String(data.plan_tier) : null,
     billing_period_start: data.billing_period_start
       ? String(data.billing_period_start)
       : null,
+    block_anonymous_callers: data.block_anonymous_callers === true,
   };
+}
+
+function slugMatches(org: OrgCallConfig, slug: string): boolean {
+  const orgSlug = org.slug?.trim().toLowerCase();
+  const want = slug.trim().toLowerCase();
+  return Boolean(orgSlug && want && orgSlug === want);
 }
 
 async function fetchOrgBySlug(slug: string): Promise<OrgCallConfig | null> {
@@ -251,6 +247,45 @@ async function fetchOrgByPhonePool(phone: string): Promise<OrgCallConfig | null>
   return null;
 }
 
+async function resolveOrgUncached(input: {
+  slug?: string;
+  phone?: string;
+}): Promise<OrgCallConfig | null> {
+  const slug = input.slug?.trim();
+  const phone = input.phone?.trim();
+
+  if (phone) {
+    const byPool = await fetchOrgByPhonePool(phone);
+    if (byPool) {
+      if (slug && !slugMatches(byPool, slug)) {
+        console.warn('[supabase] slug/phone mismatch — using phone_numbers org', {
+          slug,
+          orgSlug: byPool.slug,
+        });
+      }
+      return byPool;
+    }
+
+    const byOrgPhone = await fetchOrgByPhoneOnOrg(phone);
+    if (byOrgPhone) {
+      if (slug && !slugMatches(byOrgPhone, slug)) {
+        console.warn('[supabase] slug/phone mismatch — using organizations.phone_number org', {
+          slug,
+          orgSlug: byOrgPhone.slug,
+        });
+      }
+      return byOrgPhone;
+    }
+  }
+
+  if (slug) {
+    return fetchOrgBySlug(slug);
+  }
+
+  return null;
+}
+
+/** Resolve org by dialed number first (`phone_numbers.e164`), then slug for dev dispatch. */
 export async function getOrgForCall(input: {
   slug?: string;
   phone?: string;
@@ -258,36 +293,12 @@ export async function getOrgForCall(input: {
   const slug = input.slug?.trim();
   const phone = input.phone?.trim();
   const cacheKey = `org:${slug ?? ''}:${phone ?? ''}`;
-  return cached(cacheKey, ORG_CACHE_TTL_MS, async () => {
-    if (slug) {
-      const bySlug = await fetchOrgBySlug(slug);
-      if (bySlug) return bySlug;
-    }
-    if (!phone) return null;
-    const byOrgPhone = await fetchOrgByPhoneOnOrg(phone);
-    if (byOrgPhone) return byOrgPhone;
-    return fetchOrgByPhonePool(phone);
-  });
-}
-
-/** @deprecated Use getOrgForCall */
-export const getSalonForCall = getOrgForCall;
-
-export async function getSalonConfigBySlug(slug: string): Promise<OrgCallConfig | null> {
-  return fetchOrgBySlug(slug);
-}
-
-export async function getSalonServices(organizationId: string): Promise<SalonServiceRow[]> {
-  return cached(`services:${organizationId}`, ORG_CACHE_TTL_MS, async () => {
-    const supabase = getSupabase();
-    const { data, error } = await supabase
-      .from('services')
-      .select('id, name, description, price, duration_minutes')
-      .eq('organization_id', organizationId);
-
-    if (error) throw error;
-    return (data ?? []) as SalonServiceRow[];
-  });
+  return cached(cacheKey, ORG_CACHE_TTL_MS, () =>
+    resolveOrgUncached({
+      ...(slug ? { slug } : {}),
+      ...(phone ? { phone } : {}),
+    }),
+  );
 }
 
 export async function getSendableBusinessFiles(
@@ -318,16 +329,6 @@ export async function createBusinessFileSignedUrl(
   return data.signedUrl;
 }
 
-/** Legacy salon booking path: structured services table + native/connect tier. */
-export function shouldUseSalonBookingMode(
-  org: OrgCallConfig,
-  serviceCount: number,
-): boolean {
-  if (serviceCount <= 0) return false;
-  const tier = String(org.tier ?? '').toLowerCase();
-  return tier === 'native' || tier === 'connect';
-}
-
 export function resolveOrgTimeZone(org: OrgCallConfig): string {
   const raw = org.business_hours;
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -336,7 +337,7 @@ export function resolveOrgTimeZone(org: OrgCallConfig): string {
       return tz.trim();
     }
   }
-  return process.env.SALON_TIMEZONE?.trim() || 'Europe/Dublin';
+  return process.env.ORG_TIMEZONE?.trim() || process.env.SALON_TIMEZONE?.trim() || 'Europe/Dublin';
 }
 
 export function resolveOrgVoiceId(org: OrgCallConfig): string | null {
