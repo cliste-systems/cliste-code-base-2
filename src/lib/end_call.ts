@@ -57,6 +57,14 @@ export type EndCallUserData = {
   endCallTarget?: { roomName: string; callerIdentity: string };
 };
 
+export async function waitForSessionPlayout(
+  _session: voice.AgentSession<EndCallUserData>,
+): Promise<void> {
+  const ms = Number.parseInt(process.env.LIVEKIT_DISCONNECT_PLAYOUT_MS ?? '1200', 10);
+  const delay = Number.isFinite(ms) ? Math.min(Math.max(ms, 300), 5000) : 1200;
+  await new Promise((r) => setTimeout(r, delay));
+}
+
 export async function disconnectCallerLeg(
   session: voice.AgentSession<EndCallUserData>,
   ud: EndCallUserData,

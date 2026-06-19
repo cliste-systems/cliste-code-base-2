@@ -73,6 +73,7 @@ async function main(): Promise<void> {
     businessName: org.name,
     customPrompt: org.custom_prompt.trim(),
     callerLine,
+    routingLinks,
     bookingTimeZone: bookingTz,
     nowUtcIso: now.toISOString(),
     todayLocal,

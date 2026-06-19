@@ -3,7 +3,7 @@ import { redactPii } from './gdpr.js';
 import { getSupabaseClient } from './supabase.js';
 
 function directDbFallbackAllowed(): boolean {
-  return process.env.NODE_ENV !== 'production';
+  return Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY?.trim());
 }
 
 export async function insertCallLog(input: {
@@ -18,7 +18,7 @@ export async function insertCallLog(input: {
 }): Promise<string | null> {
   if (!directDbFallbackAllowed()) {
     console.error(
-      '[call_logs] CRITICAL: direct insert blocked in production — configure CLISTE_APP_URL + CLISTE_VOICE_WEBHOOK_SECRET',
+      '[call_logs] CRITICAL: direct insert blocked — set SUPABASE_SERVICE_ROLE_KEY or fix voice webhook',
     );
     return null;
   }
@@ -46,4 +46,42 @@ export async function insertCallLog(input: {
     return null;
   }
   return typeof data?.id === 'string' ? data.id : null;
+}
+
+export async function updateCallLogEnrichment(
+  callLogId: string,
+  input: {
+    transcriptReview?: string | null;
+    aiSummary?: string | null;
+    costEstimate?: CallCostEstimateRecord | null;
+  },
+): Promise<boolean> {
+  if (!directDbFallbackAllowed()) {
+    console.error('[call_logs] CRITICAL: enrichment update blocked — no service role');
+    return false;
+  }
+  const id = callLogId.trim();
+  if (!id) return false;
+
+  const patch: Record<string, unknown> = {};
+  if (input.transcriptReview !== undefined) {
+    patch.transcript_review = input.transcriptReview
+      ? redactPii(input.transcriptReview)
+      : null;
+  }
+  if (input.aiSummary !== undefined) {
+    patch.ai_summary = input.aiSummary ? redactPii(input.aiSummary) : null;
+  }
+  if (input.costEstimate !== undefined) {
+    patch.cost_estimate = input.costEstimate;
+  }
+  if (Object.keys(patch).length === 0) return true;
+
+  const supabase = getSupabaseClient();
+  const { error } = await supabase.from('call_logs').update(patch).eq('id', id);
+  if (error) {
+    console.error('updateCallLogEnrichment failed', error);
+    return false;
+  }
+  return true;
 }

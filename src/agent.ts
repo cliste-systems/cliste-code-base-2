@@ -21,11 +21,12 @@ import { buildCaraCallPrompt } from './lib/cara_prompt.js';
 import { CaraTools, type CaraAgentUserData } from './lib/cara_tools.js';
 import { estimateCallCostUsd } from './lib/call_cost_estimate.js';
 import { postprocessCallTranscript } from './lib/call_postprocess.js';
-import { insertCallLog } from './lib/call_logs.js';
+import { insertCallLog, updateCallLogEnrichment } from './lib/call_logs.js';
 import {
   assistantTextSoundsLikeFakeHangup,
   assistantTextSoundsLikeGoodbye,
   disconnectCallerLeg,
+  waitForSessionPlayout,
 } from './lib/end_call.js';
 import { createElevenLabsTts } from './lib/elevenlabs-v3-http-tts.js';
 import { greetingIncludesAiDisclosure } from './lib/greeting_compliance.js';
@@ -292,6 +293,7 @@ export default defineAgent({
       businessName: org.name,
       customPrompt: custom,
       callerLine,
+      routingLinks,
       bookingTimeZone: bookingTz,
       nowUtcIso,
       todayLocal,
@@ -550,9 +552,7 @@ export default defineAgent({
     const isCallEnding = () => session.userData.sessionFlags.endPhoneCallUsed;
 
     const gracefulDisconnect = () => {
-      void disconnectCallerLeg(session, session.userData, async () => {
-        await new Promise((r) => setTimeout(r, 650));
-      });
+      void disconnectCallerLeg(session, session.userData, () => waitForSessionPlayout(session));
     };
 
     const clearSilenceRecoveryTimer = () => {
@@ -596,7 +596,17 @@ export default defineAgent({
       }
     };
 
+    const clearAllGuardTimers = () => {
+      clearSilenceRecoveryTimer();
+      clearFakeHangupGuardTimer();
+      clearFillerNoToolGuardTimer();
+      clearGoodbyeForceTimer();
+      clearResponseFillerTimer();
+      clearDeadAirTimers();
+    };
+
     const scheduleResponseFiller = () => {
+      if (isCallEnding()) return;
       clearResponseFillerTimer();
       responseFillerTimer = setTimeout(() => {
         responseFillerTimer = null;
@@ -655,10 +665,12 @@ export default defineAgent({
     };
 
     const scheduleSilenceRecoveryAfterCutoff = () => {
+      if (isCallEnding()) return;
       clearSilenceRecoveryTimer();
       silenceRecoveryTimer = setTimeout(() => {
         silenceRecoveryTimer = null;
         try {
+          if (isCallEnding()) return;
           if (session.userState === 'speaking' || session.agentState !== 'listening') return;
           if (silenceRecoveryCount >= silenceRecoveryMaxPerCall) return;
           silenceRecoveryCount += 1;
@@ -679,14 +691,14 @@ export default defineAgent({
         clearFillerNoToolGuardTimer();
         clearResponseFillerTimer();
       } else if (ev.newState === 'listening') {
-        scheduleResponseFiller();
+        if (!isCallEnding()) scheduleResponseFiller();
       }
     });
 
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
       if (ev.newState === 'speaking') {
         clearResponseFillerTimer();
-      } else if (ev.newState === 'thinking') {
+      } else if (ev.newState === 'thinking' && !isCallEnding()) {
         scheduleResponseFiller();
       }
     });
@@ -701,6 +713,24 @@ export default defineAgent({
 
     const transcriptParts: TranscriptLine[] = [];
     let transcriptSeq = 0;
+    const recentCallerTranscriptKeys = new Set<string>();
+
+    const normalizeTranscriptKey = (text: string) =>
+      text.trim().toLowerCase().replace(/\s+/g, ' ');
+
+    const appendTranscriptLine = (at: number, line: string) => {
+      transcriptParts.push({ at, seq: transcriptSeq++, line });
+    };
+
+    session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
+      if (!ev.isFinal) return;
+      const text = ev.transcript?.trim();
+      if (!text) return;
+      const key = normalizeTranscriptKey(text);
+      if (recentCallerTranscriptKeys.has(key)) return;
+      recentCallerTranscriptKeys.add(key);
+      appendTranscriptLine(ev.createdAt, `Caller: ${text}`);
+    });
 
     session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
       resetDeadAirTimer();
@@ -711,12 +741,27 @@ export default defineAgent({
       const text = item.textContent?.trim();
       if (!text) return;
 
+      if (role === 'user') {
+        const key = normalizeTranscriptKey(text);
+        if (recentCallerTranscriptKeys.has(key)) return;
+        recentCallerTranscriptKeys.add(key);
+      }
+
+      if (isCallEnding()) {
+        const label = role === 'user' ? 'Caller' : 'Assistant';
+        const interruptedNote =
+          item.interrupted && (role === 'assistant' || role === 'user') ? ' [cut off]' : '';
+        appendTranscriptLine(ev.createdAt, `${label}: ${text}${interruptedNote}`);
+        return;
+      }
+
       const flags = session.userData.sessionFlags;
       if (role === 'assistant' && assistantTextSoundsLikeFiller(text)) {
         clearFillerNoToolGuardTimer();
         fillerNoToolGuardTimer = setTimeout(() => {
           fillerNoToolGuardTimer = null;
           try {
+            if (isCallEnding()) return;
             if (session.userState === 'speaking' || session.agentState !== 'listening') return;
             void session.generateReply({
               instructions:
@@ -738,9 +783,9 @@ export default defineAgent({
         goodbyeForceTimer = setTimeout(() => {
           goodbyeForceTimer = null;
           if (session.userData.sessionFlags.endPhoneCallUsed) return;
-          void disconnectCallerLeg(session, session.userData, async () => {
-            await new Promise((r) => setTimeout(r, 650));
-          });
+          void disconnectCallerLeg(session, session.userData, () =>
+            waitForSessionPlayout(session),
+          );
         }, 1500);
       }
 
@@ -749,37 +794,35 @@ export default defineAgent({
         fakeHangupGuardTimer = setTimeout(() => {
           fakeHangupGuardTimer = null;
           if (session.userData.sessionFlags.endPhoneCallUsed) return;
-          void disconnectCallerLeg(session, session.userData, async () => {
-            await new Promise((r) => setTimeout(r, 650));
-          });
+          void disconnectCallerLeg(session, session.userData, () =>
+            waitForSessionPlayout(session),
+          );
         }, 500);
       }
 
       const label = role === 'user' ? 'Caller' : 'Assistant';
-      const interruptedNote = item.interrupted && role === 'assistant' ? ' [cut off]' : '';
-      transcriptParts.push({
-        at: ev.createdAt,
-        seq: transcriptSeq++,
-        line: `${label}: ${text}${interruptedNote}`,
-      });
+      const interruptedNote =
+        item.interrupted && (role === 'assistant' || role === 'user') ? ' [cut off]' : '';
+      appendTranscriptLine(ev.createdAt, `${label}: ${text}${interruptedNote}`);
     });
 
     session.on(voice.AgentSessionEventTypes.FunctionToolsExecuted, (ev) => {
       clearFillerNoToolGuardTimer();
       resetDeadAirTimer();
       for (const [call, out] of voice.zipFunctionCallsAndOutputs(ev)) {
-        transcriptParts.push({
-          at: call.createdAt ?? ev.createdAt,
-          seq: transcriptSeq++,
-          line: `[Tool] ${call.name} ${truncateForTranscript(call.args, MAX_TOOL_SNIPPET_CHARS)}`,
-        });
+        if (call.name === 'endPhoneCall') {
+          clearAllGuardTimers();
+        }
+        appendTranscriptLine(
+          call.createdAt ?? ev.createdAt,
+          `[Tool] ${call.name} ${truncateForTranscript(call.args, MAX_TOOL_SNIPPET_CHARS)}`,
+        );
         if (out) {
           const prefix = out.isError ? '[Tool error] ' : '[Tool result] ';
-          transcriptParts.push({
-            at: out.createdAt,
-            seq: transcriptSeq++,
-            line: `${prefix}${truncateForTranscript(out.output, MAX_TOOL_SNIPPET_CHARS)}`,
-          });
+          appendTranscriptLine(
+            out.createdAt,
+            `${prefix}${truncateForTranscript(out.output, MAX_TOOL_SNIPPET_CHARS)}`,
+          );
         }
       }
     });
@@ -787,16 +830,19 @@ export default defineAgent({
     let callLogWritten = false;
     session.on(voice.AgentSessionEventTypes.Close, async () => {
       if (callLogWritten) return;
-      callLogWritten = true;
-      clearSilenceRecoveryTimer();
-      clearFakeHangupGuardTimer();
-      clearFillerNoToolGuardTimer();
-      clearGoodbyeForceTimer();
-      clearResponseFillerTimer();
-      clearDeadAirTimers();
+      clearAllGuardTimers();
       try {
         const ud = session.userData;
         if (!ud?.organizationId) return;
+
+        const transcriptFlushMs = Number.parseInt(
+          process.env.LIVEKIT_TRANSCRIPT_FLUSH_MS ?? '300',
+          10,
+        );
+        await waitForSessionPlayout(session);
+        if (Number.isFinite(transcriptFlushMs) && transcriptFlushMs > 0) {
+          await new Promise((r) => setTimeout(r, Math.min(transcriptFlushMs, 2000)));
+        }
 
         const durationSeconds = Math.max(0, Math.round((Date.now() - callStartedAt) / 1000));
         const outcome = canonicalCallOutcome({
@@ -808,6 +854,49 @@ export default defineAgent({
 
         const verbatimRaw = mergeTranscriptLines(transcriptParts);
         const verbatim = verbatimRaw ? redactPii(verbatimRaw) : null;
+        const disclosureConfirmed = ud.disclosureConfirmed;
+        const persistCalledNumber = calledNumber.trim() || org.phone_number?.trim() || '';
+
+        let callLogId: string | null = null;
+        const initialPayload = {
+          called_number: persistCalledNumber,
+          call_sid: callSidAttr,
+          room_name: roomName || null,
+          caller_number: callerNumberRaw,
+          duration_seconds: durationSeconds,
+          outcome,
+          transcript: verbatim,
+          transcript_review: null as string | null,
+          ai_summary: null as string | null,
+          disclosure_confirmed: disclosureConfirmed,
+        };
+
+        if (voiceWebhooksConfigured() && persistCalledNumber) {
+          const webhookResult = await postCallComplete(initialPayload);
+          if (webhookResult.ok) {
+            callLogId = webhookResult.callLogId ?? null;
+          } else {
+            console.error('[agent] call-complete webhook failed', webhookResult.error);
+            callLogId = await insertCallLog({
+              organizationId: ud.organizationId,
+              callerNumber: callerNumberRaw,
+              durationSeconds,
+              outcome,
+              transcript: verbatim,
+            });
+          }
+        } else {
+          callLogId = await insertCallLog({
+            organizationId: ud.organizationId,
+            callerNumber: callerNumberRaw,
+            durationSeconds,
+            outcome,
+            transcript: verbatim,
+          });
+        }
+
+        callLogWritten = true;
+
         let transcriptReview: string | null = null;
         let aiSummary: string | null = null;
         let didPostprocess = false;
@@ -833,45 +922,15 @@ export default defineAgent({
           ttsModel: String(elevenModel),
         });
 
-        const disclosureConfirmed = ud.disclosureConfirmed;
-
-        if (voiceWebhooksConfigured() && calledNumber) {
-          const webhookResult = await postCallComplete({
-            called_number: calledNumber,
-            call_sid: callSidAttr,
-            room_name: roomName || null,
-            caller_number: callerNumberRaw,
-            duration_seconds: durationSeconds,
-            outcome,
-            transcript: verbatim,
-            transcript_review: transcriptReview,
-            ai_summary: aiSummary,
-            disclosure_confirmed: disclosureConfirmed,
-          });
-          if (!webhookResult.ok) {
-            console.error('[agent] call-complete webhook failed', webhookResult.error);
-            await insertCallLog({
-              organizationId: ud.organizationId,
-              callerNumber: callerNumberRaw,
-              durationSeconds,
-              outcome,
-              transcript: verbatim,
-              transcriptReview,
-              aiSummary,
-              costEstimate,
-            });
-          }
-        } else {
-          await insertCallLog({
-            organizationId: ud.organizationId,
-            callerNumber: callerNumberRaw,
-            durationSeconds,
-            outcome,
-            transcript: verbatim,
+        if (callLogId && (transcriptReview || aiSummary || costEstimate)) {
+          const enriched = await updateCallLogEnrichment(callLogId, {
             transcriptReview,
             aiSummary,
             costEstimate,
           });
+          if (!enriched) {
+            console.error('[agent] call log enrichment update failed', callLogId);
+          }
         }
 
         const usageRecordId = await usageRecordIdPromise;

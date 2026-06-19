@@ -134,3 +134,110 @@ export function routeUsesCallerLinkDelivery(link: RoutingLink): boolean {
     (isLocationRoute(link) || isBookingRoute(link))
   );
 }
+
+function normalizeRouteKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function routeToolForPrompt(link: RoutingLink): string {
+  if (routeUsesCallerLinkDelivery(link)) {
+    return 'sendDirectionsLink';
+  }
+  switch (link.targetType) {
+    case 'link':
+      return 'sendRoutingLink';
+    case 'form':
+      return 'sendRoutingFile';
+    case 'email':
+      return 'sendRoutingEmail';
+    case 'whatsapp':
+      return 'sendRoutingWhatsApp';
+    case 'phone':
+      return 'transferToTeam';
+    case 'callback':
+      return 'takeCallbackMessage';
+    default:
+      return 'takeCallbackMessage';
+  }
+}
+
+/** Compact route catalog for the live-call prompt — exact routeIds for tools. */
+export function formatRoutesForPrompt(links: RoutingLink[]): string {
+  const routes = activeRoutes(links);
+  if (routes.length === 0) {
+    return '- (No active routes — use takeCallbackMessage for anything you cannot answer.)';
+  }
+  return routes
+    .map((r) => {
+      const trigger = routeTrigger(r) || r.intent || r.label || 'route';
+      const delivery =
+        r.linkDelivery && routeUsesCallerLinkDelivery(r) ? `, delivery: ${r.linkDelivery}` : '';
+      const tool = routeToolForPrompt(r);
+      return `- routeId: ${r.id} | trigger: ${trigger} | type: ${r.targetType}${delivery} | tool: ${tool}`;
+    })
+    .join('\n');
+}
+
+export function listActiveRouteIds(links: RoutingLink[]): string[] {
+  return activeRoutes(links).map((r) => r.id);
+}
+
+export function resolveRoute(links: RoutingLink[], routeId: string): RoutingLink | null {
+  const raw = routeId.trim();
+  if (!raw) return null;
+
+  const exact = links.find((r) => r.id === raw);
+  if (exact) return exact;
+
+  const presetKey = raw.startsWith('preset_') ? raw.slice(7) : raw;
+  const byPreset = links.find(
+    (r) =>
+      r.presetId === presetKey ||
+      r.id === `preset_${presetKey}` ||
+      r.id === presetKey,
+  );
+  if (byPreset) return byPreset;
+
+  const norm = normalizeRouteKey(raw);
+  if (!norm) return null;
+
+  for (const link of links) {
+    const candidates = [
+      link.id,
+      link.presetId ?? '',
+      link.label,
+      link.intent,
+      link.keywords ?? '',
+    ];
+    for (const c of candidates) {
+      const n = normalizeRouteKey(c);
+      if (!n) continue;
+      if (n === norm || n.includes(norm) || norm.includes(n)) {
+        return link;
+      }
+    }
+    if (isBookingRoute(link) && (norm.includes('book') || norm.includes('appointment') || norm.includes('schedule'))) {
+      return link;
+    }
+    if (isLocationRoute(link) && (norm.includes('direction') || norm.includes('location') || norm.includes('where'))) {
+      return link;
+    }
+  }
+
+  if (norm.includes('book') || norm.includes('appointment') || norm === 'booking') {
+    const bookingLink = links.find(
+      (r) =>
+        r.active &&
+        r.targetType === 'link' &&
+        (routeUsesCallerLinkDelivery(r) || isBookingRoute(r) || /book|fresha|appointment/i.test(r.url)),
+    );
+    if (bookingLink) return bookingLink;
+  }
+
+  return null;
+}

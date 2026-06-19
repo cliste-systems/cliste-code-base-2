@@ -11,7 +11,9 @@ import {
   fallbackRoute,
   isBookingRoute,
   isLocationRoute,
+  listActiveRouteIds,
   parseRoutingLinks,
+  resolveRoute,
   routeTrigger,
   routeUsesCallerLinkDelivery,
   type RoutingLink,
@@ -61,9 +63,33 @@ function readCaraUserData(ctx: { userData: unknown }): CaraAgentUserData {
   return ud;
 }
 
-function findRouteById(links: RoutingLink[], routeId: string): RoutingLink | null {
-  const id = routeId.trim();
-  return links.find((r) => r.id === id) ?? null;
+function routeLookupFailure(links: RoutingLink[], routeId: string): string {
+  const ids = listActiveRouteIds(links);
+  const hint = ids.length > 0 ? ` Valid routeIds: ${ids.join(', ')}.` : '';
+  return `Unknown routeId "${routeId}".${hint} Match a route from Active routes in your instructions.`;
+}
+
+function resolveRouteOrFail(
+  links: RoutingLink[],
+  routeId: string,
+): { ok: true; route: RoutingLink } | { ok: false; message: string } {
+  const route = resolveRoute(links, routeId);
+  if (!route) {
+    return { ok: false, message: routeLookupFailure(links, routeId) };
+  }
+  return { ok: true, route };
+}
+
+async function maybeAcknowledgeToolStart(
+  session: voice.AgentSession<CaraAgentUserData>,
+): Promise<void> {
+  try {
+    if (session.userData.sessionFlags.endPhoneCallUsed) return;
+    if (session.agentState === 'speaking' || session.userState === 'speaking') return;
+    session.say('Just a moment.');
+  } catch {
+    /* ignore */
+  }
 }
 
 async function sendCallerSms(
@@ -93,18 +119,23 @@ async function sendCallerSms(
 async function createCallbackViaWebhook(
   ud: CaraAgentUserData,
   summary: string,
-  phone?: string,
+  options?: { phone?: string; callerName?: string },
 ): Promise<{ ok: boolean; message: string }> {
-  const caller = phone?.trim()
-    ? normalizePhoneE164(phone)
+  const caller = options?.phone?.trim()
+    ? normalizePhoneE164(options.phone)
     : ud.callerPhone.trim() || 'unknown';
+  const name = options?.callerName?.trim() ?? '';
+  const summaryWithName = name
+    ? `Caller: ${name}. ${summary.trim()}`
+    : summary.trim();
 
   await insertActionTicket({
     organizationId: ud.organizationId,
     calledNumber: ud.calledNumber,
     callerNumber: caller,
-    summary,
+    summary: summaryWithName,
     engineeringPriority: 'urgent',
+    ...(name ? { callerName: name } : {}),
   });
 
   ud.sessionFlags.actionTicketCreated = true;
@@ -128,8 +159,19 @@ export class CaraTools {
     }),
     execute: async ({ routeId, mobilePhone }, { ctx }) => {
       const ud = readCaraUserData(ctx);
-      const route = findRouteById(ud.routingLinks, routeId);
-      if (!route || route.targetType !== 'link' || !route.url.trim()) {
+      await maybeAcknowledgeToolStart(ctx.session as voice.AgentSession<CaraAgentUserData>);
+      const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
+      if (!resolved.ok) {
+        return resolved;
+      }
+      const { route } = resolved;
+      if (routeUsesCallerLinkDelivery(route)) {
+        return {
+          ok: false,
+          message: `Use sendDirectionsLink for this route (routeId ${route.id}). Ask how they want the link, then send with callerConsented true.`,
+        };
+      }
+      if (route.targetType !== 'link' || !route.url.trim()) {
         return {
           ok: false,
           message: 'Route not found or has no link. Take a message with takeCallbackMessage instead.',
@@ -192,8 +234,13 @@ export class CaraTools {
       { ctx },
     ) => {
       const ud = readCaraUserData(ctx);
-      const route = findRouteById(ud.routingLinks, routeId);
-      if (!route || !routeUsesCallerLinkDelivery(route) || !route.url.trim()) {
+      await maybeAcknowledgeToolStart(ctx.session as voice.AgentSession<CaraAgentUserData>);
+      const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
+      if (!resolved.ok) {
+        return resolved;
+      }
+      const { route } = resolved;
+      if (!routeUsesCallerLinkDelivery(route) || !route.url.trim()) {
         return {
           ok: false,
           message:
@@ -302,8 +349,13 @@ export class CaraTools {
     }),
     execute: async ({ routeId, mobilePhone }, { ctx }) => {
       const ud = readCaraUserData(ctx);
-      const route = findRouteById(ud.routingLinks, routeId);
-      if (!route || route.targetType !== 'form' || !route.businessFileId) {
+      await maybeAcknowledgeToolStart(ctx.session as voice.AgentSession<CaraAgentUserData>);
+      const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
+      if (!resolved.ok) {
+        return resolved;
+      }
+      const { route } = resolved;
+      if (route.targetType !== 'form' || !route.businessFileId) {
         return {
           ok: false,
           message: 'File route not found. Take a message instead.',
@@ -351,21 +403,39 @@ export class CaraTools {
 
   readonly takeCallbackMessage = llm.tool({
     description:
-      'Take a message for the team (Anything else fallback or when you cannot complete the request). Creates an Action Inbox ticket.',
+      'Take a message for the team (Anything else fallback or when you cannot complete the request). Creates an Action Inbox ticket. Requires the caller name — ask first, wait for their answer, then call this tool.',
     parameters: z.object({
+      callerName: z
+        .string()
+        .min(2)
+        .describe('Caller first name (or full name) they gave on this call.'),
       staffSummary: z
         .string()
         .min(40)
         .describe('2–5 sentences: what the caller wanted, details captured, callback preference.'),
-      callbackPhone: z.string().optional(),
+      callbackPhone: z
+        .string()
+        .optional()
+        .describe('Only if caller ID withheld or they gave a different callback number.'),
     }),
-    execute: async ({ staffSummary, callbackPhone }, { ctx }) => {
+    execute: async ({ callerName, staffSummary, callbackPhone }, { ctx }) => {
       const ud = readCaraUserData(ctx);
+      await maybeAcknowledgeToolStart(ctx.session as voice.AgentSession<CaraAgentUserData>);
+      const name = callerName.trim();
+      if (!name || /^(caller|unknown|n\/a|none)$/i.test(name)) {
+        return {
+          ok: false,
+          message: 'Ask for their name first and wait for their answer, then call takeCallbackMessage.',
+        };
+      }
       const text = staffSummary.trim();
       if (!text) {
         return { ok: false, message: 'Provide a fuller staffSummary.' };
       }
-      return createCallbackViaWebhook(ud, text, callbackPhone);
+      return createCallbackViaWebhook(ud, text, {
+        ...(callbackPhone?.trim() ? { phone: callbackPhone } : {}),
+        callerName: name,
+      });
     },
   });
 
@@ -405,8 +475,12 @@ export class CaraTools {
     }),
     execute: async ({ routeId, callerDetails }, { ctx }) => {
       const ud = readCaraUserData(ctx);
-      const route = findRouteById(ud.routingLinks, routeId);
-      if (!route || route.targetType !== 'email' || !route.url.trim()) {
+      const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
+      if (!resolved.ok) {
+        return resolved;
+      }
+      const { route } = resolved;
+      if (route.targetType !== 'email' || !route.url.trim()) {
         return {
           ok: false,
           message: 'Email route not found. Take a message with takeCallbackMessage instead.',
@@ -428,8 +502,12 @@ export class CaraTools {
     }),
     execute: async ({ routeId, mobilePhone }, { ctx }) => {
       const ud = readCaraUserData(ctx);
-      const route = findRouteById(ud.routingLinks, routeId);
-      if (!route || route.targetType !== 'whatsapp' || !route.url.trim()) {
+      const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
+      if (!resolved.ok) {
+        return resolved;
+      }
+      const { route } = resolved;
+      if (route.targetType !== 'whatsapp' || !route.url.trim()) {
         return {
           ok: false,
           message: 'WhatsApp route not found. Take a message instead.',

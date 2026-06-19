@@ -5,6 +5,11 @@ const HTTP_FETCH_TIMEOUT_MS = Number.parseInt(
   10,
 );
 
+const CALL_COMPLETE_TIMEOUT_MS = Number.parseInt(
+  process.env.CLISTE_VOICE_CALL_COMPLETE_TIMEOUT_MS ?? '15000',
+  10,
+);
+
 /** Cap transcript size before POST to dashboard webhook. */
 export const MAX_WEBHOOK_TRANSCRIPT_CHARS = 100_000;
 
@@ -90,14 +95,16 @@ function webhookFetchError(err: unknown): string {
 async function postVoiceWebhook<T>(
   path: string,
   payload: unknown,
+  timeoutMsOverride?: number,
 ): Promise<{ res: Response; body: T }> {
   const base = appBaseUrl();
   if (!base || !voiceSecret()) {
     throw new Error('voice webhooks not configured');
   }
 
-  const timeoutMs = Number.isFinite(HTTP_FETCH_TIMEOUT_MS)
-    ? Math.min(Math.max(HTTP_FETCH_TIMEOUT_MS, 1000), 60_000)
+  const baseTimeout = timeoutMsOverride ?? HTTP_FETCH_TIMEOUT_MS;
+  const timeoutMs = Number.isFinite(baseTimeout)
+    ? Math.min(Math.max(baseTimeout, 1000), 60_000)
     : 6000;
 
   const controller = new AbortController();
@@ -129,11 +136,15 @@ export async function postCallComplete(
       ok?: boolean;
       call_log_id?: string;
       error?: string;
-    }>('/api/voice/call-complete', {
-      ...payload,
-      transcript: capTranscriptField(payload.transcript ?? null),
-      transcript_review: capTranscriptField(payload.transcript_review ?? null),
-    });
+    }>(
+      '/api/voice/call-complete',
+      {
+        ...payload,
+        transcript: capTranscriptField(payload.transcript ?? null),
+        transcript_review: capTranscriptField(payload.transcript_review ?? null),
+      },
+      CALL_COMPLETE_TIMEOUT_MS,
+    );
 
     if (!res.ok) {
       return {
