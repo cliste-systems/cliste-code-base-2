@@ -5,10 +5,21 @@ import { cached } from './cache.js';
 
 const require = createRequire(import.meta.url);
 
-/** Node 20 on Railway has no native WebSocket; Supabase realtime-js requires one at init. */
+/** Node 20 has no native WebSocket; Supabase realtime-js requires one at init (REST-only here). */
 function ensureNodeWebSocket(): void {
   if (typeof globalThis.WebSocket !== 'undefined') return;
-  globalThis.WebSocket = require('ws');
+  try {
+    globalThis.WebSocket = require('ws');
+  } catch {
+    class StubWebSocket {
+      constructor() {}
+      close() {}
+      send() {}
+      addEventListener() {}
+      removeEventListener() {}
+    }
+    globalThis.WebSocket = StubWebSocket as unknown as typeof WebSocket;
+  }
 }
 
 /** Read-mostly org config cache window. Dashboard edits surface within this. */
