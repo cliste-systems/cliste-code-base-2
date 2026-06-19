@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "LiveKit voice agent — salon receptionist + Supabase booking",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "type": "module",
   "scripts": {
@@ -27,7 +27,6 @@
   "license": "ISC",
   "devDependencies": {
     "@types/node": "^25.5.0",
-    "@types/ws": "^8.18.1",
     "knip": "^5.62.0",
     "typescript": "^6.0.2"
   },
@@ -46,7 +45,6 @@
     "stripe": "22.0.2",
     "tsx": "^4.21.0",
     "twilio": "^5.13.1",
-    "ws": "^8.21.0",
     "zod": "^4.3.6"
   }
 }
