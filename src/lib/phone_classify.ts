@@ -225,7 +225,7 @@ export function classifyCallerLine(raw: string | null | undefined): CallerLineIn
       canReceiveSms: cls.canReceiveSms,
       hint:
         cls.kind === 'irish_mobile'
-          ? `Caller line is an Irish mobile (${display}). Confirm it for the SMS in one short turn — do NOT ask "what's your number" from scratch.`
+          ? `Caller line is an Irish mobile (${display}). SMS-capable. Confirm sending to this number in one short turn — do NOT ask "what's your number" from scratch. Forbidden: "what number are you calling from", "your phone number", "name and number".`
           : `Caller line is an Irish landline (${display}); landlines cannot receive SMS. Ask once for an SMS-capable mobile (08x), and use that for the confirmation text.`,
     };
   }

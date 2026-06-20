@@ -13,6 +13,7 @@
     "connect": "tsx src/agent.ts connect",
     "dispatch": "tsx scripts/dispatch.ts",
     "verify": "tsx scripts/verify-integrations.ts",
+    "setup:twilio-ie1": "tsx scripts/setup-twilio-ie1.ts",
     "test:ring-smoke": "tsx scripts/ring-time-smoke.ts",
     "report:costs": "tsx scripts/report-daily-costs.ts",
     "gdpr:erase": "tsx scripts/gdpr-erase.ts",
@@ -41,11 +42,8 @@
     "dotenv": "^17.3.1",
     "livekit-server-sdk": "^2.15.0",
     "tsx": "^4.21.0",
+    "twilio": "^6.0.2",
     "ws": "^8.21.0",
     "zod": "^4.3.6"
-  },
-  "optionalDependencies": {
-    "@emnapi/core": "1.11.1",
-    "@emnapi/runtime": "1.11.1"
   }
 }

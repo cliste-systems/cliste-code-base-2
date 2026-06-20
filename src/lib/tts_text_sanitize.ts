@@ -1,13 +1,33 @@
 /**
- * Removes phrases the model sometimes speaks instead of invoking tools (TTS should not read them).
- * Streaming-safe: keeps a tail buffer so a phrase split across chunks is still removed.
+ * TTS text preparation — removes forbidden spoken phrases and normalizes text
+ * so ElevenLabs does not stress ALL CAPS words or run words together.
+ * Streaming-safe: keeps a tail buffer so transforms work across chunks.
  */
 const FORBIDDEN_SPOKEN = /\b(end\s+phone\s+call|endphonecall)\b/gi;
 
 /** Length of tail retained across chunks (longer than longest forbidden phrase). */
 const TAIL_KEEP = 28;
 
-export function stripForbiddenTtsPhrasesStreaming(source: ReadableStream<string>): ReadableStream<string> {
+/** Lowercase words that are fully ALL CAPS (2+ letters) — avoids odd TTS stress. */
+const ALL_CAPS_WORD = /\b[A-Z]{2,}\b/g;
+
+/** Never read URLs aloud — strip from TTS output. */
+const URL_PATTERN = /https?:\/\/\S+/gi;
+
+function normalizeTtsChunk(text: string): string {
+  return text
+    .replace(ALL_CAPS_WORD, (word) => (word === 'AI' ? word : word.toLowerCase()))
+    .replace(URL_PATTERN, '')
+    .replace(FORBIDDEN_SPOKEN, '')
+    .replace(/\s{2,}/g, ' ');
+}
+
+/** Non-streaming prep for hardcoded greetings — legal wording unchanged. */
+export function prepareGreetingForTts(text: string): string {
+  return normalizeTtsChunk(text).trim();
+}
+
+export function prepareTextForTtsStreaming(source: ReadableStream<string>): ReadableStream<string> {
   let hold = '';
   return new ReadableStream<string>({
     async start(controller) {
@@ -22,7 +42,7 @@ export function stripForbiddenTtsPhrasesStreaming(source: ReadableStream<string>
             continue;
           }
           hold += value;
-          hold = hold.replace(FORBIDDEN_SPOKEN, '').replace(/\s{2,}/g, ' ');
+          hold = normalizeTtsChunk(hold);
           if (hold.length <= TAIL_KEEP) {
             continue;
           }
@@ -30,7 +50,7 @@ export function stripForbiddenTtsPhrasesStreaming(source: ReadableStream<string>
           controller.enqueue(hold.slice(0, emitLen));
           hold = hold.slice(emitLen);
         }
-        hold = hold.replace(FORBIDDEN_SPOKEN, '').replace(/\s{2,}/g, ' ').trim();
+        hold = normalizeTtsChunk(hold).trim();
         if (hold.length > 0) {
           controller.enqueue(hold);
         }
@@ -45,4 +65,9 @@ export function stripForbiddenTtsPhrasesStreaming(source: ReadableStream<string>
       return source.cancel(reason);
     },
   });
+}
+
+/** @deprecated Use prepareTextForTtsStreaming — kept as alias for compatibility. */
+export function stripForbiddenTtsPhrasesStreaming(source: ReadableStream<string>): ReadableStream<string> {
+  return prepareTextForTtsStreaming(source);
 }

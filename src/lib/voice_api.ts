@@ -154,7 +154,10 @@ export async function postCallComplete(
     }
 
     const callLogId = body.call_log_id?.trim();
-    return callLogId ? { ok: true, callLogId } : { ok: true };
+    if (!callLogId) {
+      return { ok: false, error: 'call-complete missing call_log_id' };
+    }
+    return { ok: true, callLogId };
   } catch (err) {
     return { ok: false, error: webhookFetchError(err) };
   }
@@ -188,22 +191,32 @@ export async function postActionTicket(
 
 export async function postSendSms(
   payload: SendSmsPayload,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; to?: string; from?: string }> {
   if (!voiceWebhooksConfigured()) {
     return { ok: false, error: 'voice webhooks not configured' };
   }
 
   try {
-    const { res, body } = await postVoiceWebhook<{ ok?: boolean; error?: string }>(
-      '/api/voice/send-sms',
-      payload,
-    );
+    const { res, body } = await postVoiceWebhook<{
+      ok?: boolean;
+      error?: string;
+      to?: string;
+      from?: string;
+    }>('/api/voice/send-sms', payload);
 
-    if (!res.ok) {
-      return { ok: false, error: body.error ?? `HTTP ${res.status}` };
+    if (!res.ok || body.ok !== true) {
+      const error =
+        res.status === 404 && !body.error
+          ? 'SMS webhook route missing on CLISTE_APP_URL — deploy /api/voice/send-sms'
+          : (body.error ?? `HTTP ${res.status}`);
+      return { ok: false, error };
     }
 
-    return { ok: true };
+    return {
+      ok: true,
+      ...(typeof body.to === 'string' && body.to ? { to: body.to } : {}),
+      ...(typeof body.from === 'string' && body.from ? { from: body.from } : {}),
+    };
   } catch (err) {
     return { ok: false, error: webhookFetchError(err) };
   }
@@ -230,7 +243,7 @@ export async function postSendCallerEmail(
       payload,
     );
 
-    if (!res.ok) {
+    if (!res.ok || body.ok !== true) {
       return { ok: false, error: body.error ?? `HTTP ${res.status}` };
     }
 

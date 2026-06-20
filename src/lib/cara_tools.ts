@@ -25,6 +25,7 @@ import {
 import { insertActionTicket } from './action_tickets.js';
 import { disconnectCallerLeg, type EndCallUserData } from './end_call.js';
 import { normalizePhoneE164 } from './phone_normalize.js';
+import { sendTwilioSms, twilioSmsConfigured } from './twilio_sms.js';
 import {
   postSendCallerEmail,
   postSearchBusinessFile,
@@ -33,12 +34,24 @@ import {
   type SearchBusinessFilePayload,
 } from './voice_api.js';
 
+const SMS_FAILURE_MESSAGE =
+  'SMS failed — tell the caller you could not text the link and offer to take a message. Do not read the URL.';
+
 export type CaraSessionFlags = {
   linkSent: boolean;
   actionTicketCreated: boolean;
   callbackRequested: boolean;
   smsSent: number;
   endPhoneCallUsed: boolean;
+  askedAnythingElse: boolean;
+  callerRespondedAfterAnythingElse: boolean;
+  bookingLinkConsentPending: boolean;
+  bookingLinkConsentGranted: boolean;
+  bookingRouteId: string | null;
+  bookingLinkSendInFlight: boolean;
+  userTurnsSinceBookingOffer: number;
+  closingCall: boolean;
+  bookingSmsAutoSendStarted: boolean;
 };
 
 export type CaraAgentUserData = {
@@ -81,28 +94,54 @@ function resolveRouteOrFail(
 }
 
 async function maybeAcknowledgeToolStart(
-  session: voice.AgentSession<CaraAgentUserData>,
+  _session: voice.AgentSession<CaraAgentUserData>,
 ): Promise<void> {
-  try {
-    if (session.userData.sessionFlags.endPhoneCallUsed) return;
-    if (session.agentState === 'speaking' || session.userState === 'speaking') return;
-    session.say('Just a moment.');
-  } catch {
-    /* ignore */
-  }
+  /* no-op — programmatic "just a moment" overlapped LLM speech and goodbye */
 }
 
-async function sendCallerSms(
+export async function sendCallerSms(
   ud: CaraAgentUserData,
   to: string,
   body: string,
+  toolName: string,
 ): Promise<{ ok: boolean; detail: string }> {
-  if (!voiceWebhooksConfigured()) {
-    return { ok: false, detail: 'SMS is not configured on this worker.' };
-  }
+  const startedAt = Date.now();
   if (!ud.calledNumber.trim()) {
-    return { ok: false, detail: 'Missing dialed number for SMS routing.' };
+    const detail = 'Missing dialed number for SMS routing.';
+    console.error('[sms]', { tool: toolName, to: maskPhone(to), ok: false, error: detail });
+    return { ok: false, detail };
   }
+
+  if (twilioSmsConfigured()) {
+    const twilioResult = await sendTwilioSms(to, body, {
+      organizationId: ud.organizationId,
+      fromE164: ud.calledNumber.trim(),
+      purpose: toolName,
+    });
+    const logPayload = {
+      tool: toolName,
+      channel: 'twilio_direct',
+      calledNumber: maskPhone(ud.calledNumber),
+      to: maskPhone(to),
+      ok: twilioResult.ok,
+      error: twilioResult.ok ? undefined : twilioResult.message,
+      from: twilioResult.ok ? maskPhone(twilioResult.from) : undefined,
+      durationMs: Date.now() - startedAt,
+    };
+    if (!twilioResult.ok) {
+      console.error('[sms]', logPayload);
+      return { ok: false, detail: twilioResult.message };
+    }
+    console.info('[sms]', logPayload);
+    return { ok: true, detail: 'Sent.' };
+  }
+
+  if (!voiceWebhooksConfigured()) {
+    const detail = 'SMS is not configured on this worker.';
+    console.error('[sms]', { tool: toolName, to: maskPhone(to), ok: false, error: detail });
+    return { ok: false, detail };
+  }
+
   const result = await postSendSms({
     called_number: ud.calledNumber,
     to,
@@ -110,10 +149,82 @@ async function sendCallerSms(
     caller_consented: true,
     skip_business_prefix: true,
   });
+  const logPayload = {
+    tool: toolName,
+    channel: 'webhook',
+    calledNumber: maskPhone(ud.calledNumber),
+    to: maskPhone(to),
+    ok: result.ok,
+    error: result.error,
+    durationMs: Date.now() - startedAt,
+  };
   if (!result.ok) {
+    console.error('[sms]', logPayload);
     return { ok: false, detail: result.error ?? 'SMS send failed.' };
   }
+  console.info('[sms]', logPayload);
   return { ok: true, detail: 'Sent.' };
+}
+
+/** Send booking/directions link SMS for a route — used by tools and auto-send on consent. */
+export async function sendBookingLinkSmsForRoute(
+  ud: CaraAgentUserData,
+  routeId: string,
+  mobilePhone?: string,
+): Promise<{ ok: boolean; detail: string }> {
+  if (ud.sessionFlags.linkSent) {
+    return { ok: true, detail: 'Already sent.' };
+  }
+  if (ud.sessionFlags.bookingLinkSendInFlight) {
+    return { ok: false, detail: 'SMS send already in progress.' };
+  }
+  ud.sessionFlags.bookingLinkSendInFlight = true;
+  try {
+    const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
+    if (!resolved.ok) {
+      return { ok: false, detail: resolved.message };
+    }
+    const { route } = resolved;
+    if (!routeUsesCallerLinkDelivery(route) || !route.url.trim()) {
+      return { ok: false, detail: 'Route not found or link delivery is not configured.' };
+    }
+    const to = resolveSmsDestination(ud, mobilePhone);
+    if (!isE164SmsTarget(to)) {
+      return {
+        ok: false,
+        detail: 'This line cannot receive texts. Ask for a mobile number, or offer email instead.',
+      };
+    }
+    const linkUrl = route.url.trim();
+    const smsPrefix = isLocationRoute(route)
+      ? `${ud.businessName} — directions: `
+      : `${ud.businessName}: `;
+    const body = `${smsPrefix}${linkUrl}`;
+    const sms = await sendCallerSms(ud, to, body, 'sendDirectionsLink');
+    if (!sms.ok) {
+      return { ok: false, detail: sms.detail };
+    }
+    ud.sessionFlags.linkSent = true;
+    ud.sessionFlags.smsSent += 1;
+    ud.sessionFlags.bookingLinkConsentPending = false;
+    console.info('sendBookingLinkSmsForRoute', {
+      orgId: ud.organizationId,
+      routeId,
+      to: maskPhone(to),
+      ok: true,
+    });
+    return { ok: true, detail: 'Sent.' };
+  } finally {
+    ud.sessionFlags.bookingLinkSendInFlight = false;
+  }
+}
+
+/** Prefer caller-line E.164 when SMS-capable; ignore LLM national-format overrides. */
+function resolveSmsDestination(ud: CaraAgentUserData, mobilePhone?: string): string {
+  const caller = normalizePhoneE164(ud.callerPhone);
+  if (isE164SmsTarget(caller)) return caller;
+  if (mobilePhone?.trim()) return normalizePhoneE164(mobilePhone);
+  return caller;
 }
 
 async function createCallbackViaWebhook(
@@ -155,11 +266,10 @@ export class CaraTools {
       mobilePhone: z
         .string()
         .optional()
-        .describe('SMS-capable mobile in E.164 or Irish national. Omit to use caller line if mobile.'),
+        .describe('Omit — caller line is used automatically when SMS-capable.'),
     }),
     execute: async ({ routeId, mobilePhone }, { ctx }) => {
       const ud = readCaraUserData(ctx);
-      await maybeAcknowledgeToolStart(ctx.session as voice.AgentSession<CaraAgentUserData>);
       const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
       if (!resolved.ok) {
         return resolved;
@@ -177,9 +287,7 @@ export class CaraTools {
           message: 'Route not found or has no link. Take a message with takeCallbackMessage instead.',
         };
       }
-      let to = mobilePhone?.trim()
-        ? normalizePhoneE164(mobilePhone)
-        : normalizePhoneE164(ud.callerPhone);
+      const to = resolveSmsDestination(ud, mobilePhone);
       if (!isE164SmsTarget(to)) {
         return {
           ok: false,
@@ -188,19 +296,20 @@ export class CaraTools {
         };
       }
       const body = `${ud.businessName}: ${route.url.trim()}`;
-      const sms = await sendCallerSms(ud, to, body);
+      const sms = await sendCallerSms(ud, to, body, 'sendRoutingLink');
       if (!sms.ok) {
         return {
           ok: false,
-          message: `${sms.detail} Read the link aloud: ${route.url.trim()}`,
+          message: SMS_FAILURE_MESSAGE,
         };
       }
       ud.sessionFlags.linkSent = true;
       ud.sessionFlags.smsSent += 1;
-      console.log('sendRoutingLink', {
+      console.info('sendRoutingLink', {
         orgId: ud.organizationId,
         routeId,
         to: maskPhone(to),
+        ok: true,
       });
       return {
         ok: true,
@@ -220,7 +329,7 @@ export class CaraTools {
       mobilePhone: z
         .string()
         .optional()
-        .describe('SMS-capable mobile. Omit to use caller line when it can receive texts.'),
+        .describe('Omit — caller line is used automatically when SMS-capable.'),
       emailAddress: z
         .string()
         .optional()
@@ -230,16 +339,77 @@ export class CaraTools {
         .describe('True after the caller agreed to receive the link this way on the call'),
     }),
     execute: async (
-      { routeId, channel, mobilePhone, emailAddress, callerConsented },
+      { routeId, channel, mobilePhone, emailAddress, callerConsented: _callerConsented },
       { ctx },
     ) => {
       const ud = readCaraUserData(ctx);
-      await maybeAcknowledgeToolStart(ctx.session as voice.AgentSession<CaraAgentUserData>);
       const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
       if (!resolved.ok) {
         return resolved;
       }
       const { route } = resolved;
+      if (isBookingRoute(route)) {
+        if (ud.sessionFlags.linkSent) {
+          return {
+            ok: true,
+            message: 'Booking link already sent. Ask if there is anything else.',
+          };
+        }
+        if (channel === 'sms') {
+          return {
+            ok: false,
+            message:
+              'Booking SMS is sent automatically after the caller says yes to the SMS consent phrase — do not call sendDirectionsLink for booking SMS.',
+          };
+        }
+        const bookingDelivery = route.linkDelivery ?? 'sms';
+        if (bookingDelivery !== 'both' && bookingDelivery !== 'email') {
+          return {
+            ok: false,
+            message:
+              'This booking route is SMS-only — offer the SMS consent phrase (system auto-sends) or takeCallbackMessage.',
+          };
+        }
+        if (!route.url.trim()) {
+          return {
+            ok: false,
+            message: 'Booking link URL not configured. Take a message with takeCallbackMessage.',
+          };
+        }
+        if (!voiceWebhooksConfigured()) {
+          return {
+            ok: false,
+            message:
+              'Email is not available right now — offer SMS (consent phrase) or takeCallbackMessage with their email request.',
+          };
+        }
+        const toEmail = emailAddress?.trim().toLowerCase() ?? '';
+        if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
+          return {
+            ok: false,
+            message: 'Ask for their email address, spell it back, then retry.',
+          };
+        }
+        const linkUrl = route.url.trim();
+        const mail = await postSendCallerEmail({
+          called_number: ud.calledNumber,
+          to: toEmail,
+          subject: 'Booking link',
+          body: `Here is your booking link for ${ud.businessName}:\n\n${linkUrl}`,
+          caller_consented: true,
+        });
+        if (!mail.ok) {
+          return {
+            ok: false,
+            message: SMS_FAILURE_MESSAGE,
+          };
+        }
+        ud.sessionFlags.linkSent = true;
+        return {
+          ok: true,
+          message: `Link emailed to ${toEmail}. Confirm they will receive it.`,
+        };
+      }
       if (!routeUsesCallerLinkDelivery(route) || !route.url.trim()) {
         return {
           ok: false,
@@ -247,10 +417,28 @@ export class CaraTools {
             'Route not found or link delivery is not configured. Use sendRoutingLink for simple link routes, or take a message.',
         };
       }
-      if (!callerConsented) {
+      if (isBookingRoute(route) && !ud.sessionFlags.bookingLinkConsentGranted) {
         return {
           ok: false,
-          message: 'Ask the caller if you may send the link, then retry with callerConsented true.',
+          message:
+            'Wait for the caller to say yes before sending — do not invoke sendDirectionsLink in the same turn as the consent question.',
+        };
+      }
+      if (
+        ud.sessionFlags.bookingLinkConsentPending &&
+        ud.sessionFlags.userTurnsSinceBookingOffer === 0
+      ) {
+        return {
+          ok: false,
+          message:
+            'Wait for the caller to say yes before sending — do not invoke sendDirectionsLink in the same turn as the consent question.',
+        };
+      }
+      if (ud.sessionFlags.bookingLinkConsentPending && !ud.sessionFlags.bookingLinkConsentGranted) {
+        return {
+          ok: false,
+          message:
+            'Wait for the caller to say yes before sending — do not invoke sendDirectionsLink in the same turn as the consent question.',
         };
       }
 
@@ -269,9 +457,7 @@ export class CaraTools {
         : `${ud.businessName}: `;
 
       if (channel === 'sms') {
-        let to = mobilePhone?.trim()
-          ? normalizePhoneE164(mobilePhone)
-          : normalizePhoneE164(ud.callerPhone);
+        const to = resolveSmsDestination(ud, mobilePhone);
         if (!isE164SmsTarget(to)) {
           return {
             ok: false,
@@ -279,17 +465,21 @@ export class CaraTools {
               'This line cannot receive texts. Ask for a mobile number, or offer email instead.',
           };
         }
-        const body = `${smsPrefix}${linkUrl}`;
-        const sms = await sendCallerSms(ud, to, body);
+        const sms = await sendBookingLinkSmsForRoute(ud, routeId, mobilePhone);
         if (!sms.ok) {
           return {
             ok: false,
-            message: `${sms.detail} Read the link aloud: ${linkUrl}`,
+            message: SMS_FAILURE_MESSAGE,
           };
         }
-        ud.sessionFlags.linkSent = true;
-        ud.sessionFlags.smsSent += 1;
         messages.push(isLocationRoute(route) ? 'Maps link sent by text.' : 'Booking link sent by text.');
+        console.info('sendDirectionsLink', {
+          orgId: ud.organizationId,
+          routeId,
+          channel,
+          to: maskPhone(to),
+          ok: true,
+        });
       }
 
       if (channel === 'email') {
@@ -303,7 +493,7 @@ export class CaraTools {
         if (!voiceWebhooksConfigured()) {
           return {
             ok: false,
-            message: `Email is not available — read the link aloud: ${linkUrl}`,
+            message: SMS_FAILURE_MESSAGE,
           };
         }
         const subject = isLocationRoute(route) ? 'Directions' : 'Booking link';
@@ -320,18 +510,12 @@ export class CaraTools {
         if (!mail.ok) {
           return {
             ok: false,
-            message: `${mail.error ?? 'Email failed'} — read the link aloud: ${linkUrl}`,
+            message: SMS_FAILURE_MESSAGE,
           };
         }
         ud.sessionFlags.linkSent = true;
         messages.push(`Link emailed to ${toEmail}.`);
       }
-
-      console.log('sendDirectionsLink', {
-        orgId: ud.organizationId,
-        routeId,
-        channel,
-      });
 
       return {
         ok: true,
@@ -375,9 +559,7 @@ export class CaraTools {
           message: 'Could not prepare the file link. Take a message for the team.',
         };
       }
-      let to = mobilePhone?.trim()
-        ? normalizePhoneE164(mobilePhone)
-        : normalizePhoneE164(ud.callerPhone);
+      const to = resolveSmsDestination(ud, mobilePhone);
       if (!isE164SmsTarget(to)) {
         return {
           ok: false,
@@ -385,7 +567,7 @@ export class CaraTools {
         };
       }
       const body = `${ud.businessName} — ${file.file_name}: ${signed}`;
-      const sms = await sendCallerSms(ud, to, body);
+      const sms = await sendCallerSms(ud, to, body, 'sendRoutingFile');
       if (!sms.ok) {
         return {
           ok: false,
@@ -403,7 +585,7 @@ export class CaraTools {
 
   readonly takeCallbackMessage = llm.tool({
     description:
-      'Take a message for the team (Anything else fallback or when you cannot complete the request). Creates an Action Inbox ticket. Requires the caller name — ask first, wait for their answer, then call this tool.',
+      'Take a message for the team (Anything else fallback or when you cannot complete the request). Creates an Action Inbox ticket. Requires the caller name — ask first, wait for their answer, then call this tool. When caller ID is on file, do NOT ask for their phone number — omit callbackPhone.',
     parameters: z.object({
       callerName: z
         .string()
@@ -513,9 +695,7 @@ export class CaraTools {
           message: 'WhatsApp route not found. Take a message instead.',
         };
       }
-      let to = mobilePhone?.trim()
-        ? normalizePhoneE164(mobilePhone)
-        : normalizePhoneE164(ud.callerPhone);
+      const to = resolveSmsDestination(ud, mobilePhone);
       if (!isE164SmsTarget(to)) {
         return {
           ok: false,
@@ -523,7 +703,7 @@ export class CaraTools {
         };
       }
       const body = `${ud.businessName}: WhatsApp us — ${route.url.trim()}`;
-      const sms = await sendCallerSms(ud, to, body);
+      const sms = await sendCallerSms(ud, to, body, 'sendRoutingWhatsApp');
       if (!sms.ok) {
         return createCallbackViaWebhook(
           ud,
@@ -624,6 +804,16 @@ export class CaraTools {
     parameters: z.object({}),
     execute: async (_args, { ctx }) => {
       const ud = readCaraUserData(ctx);
+      if (
+        ud.sessionFlags.askedAnythingElse &&
+        !ud.sessionFlags.callerRespondedAfterAnythingElse
+      ) {
+        return {
+          ok: false,
+          message:
+            'Wait for the caller to answer "anything else?" before invoking endPhoneCall.',
+        };
+      }
       return disconnectCallerLeg(
         ctx.session as voice.AgentSession<EndCallUserData>,
         ud,
