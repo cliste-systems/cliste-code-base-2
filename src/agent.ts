@@ -62,6 +62,8 @@ import {
 import { sayPrepared } from './lib/say_prepared.js';
 import {
   assistantAskedAnythingElse,
+  assistantAskedServiceIntake,
+  assistantAwaitingCallerReply,
   assistantClaimsLinkWasSent,
   callerAskedNewQuestion,
   callerAskedPhoneOrHumanBooking,
@@ -69,15 +71,17 @@ import {
   callerSaidNothingElse,
 } from './lib/speech_triggers.js';
 import {
+  detectLikelySttGarble,
+  isPhantomCallerTranscript,
+  soundsLikeBookingIntent,
+  soundsLikeCancelOrChangeAppointment,
+  soundsLikeSubstantiveServiceAnswer,
+} from './lib/stt_garble.js';
+import {
   bufferTtsStreamBySentence,
   prepareTextForTtsStreaming,
   setActiveTtsModelForSanitizer,
 } from './lib/tts_text_sanitize.js';
-import {
-  detectLikelySttGarble,
-  soundsLikeBookingIntent,
-  soundsLikeCancelOrChangeAppointment,
-} from './lib/stt_garble.js';
 import {
   buildAssemblyAiSttOptions,
   buildSttDomainPrompt,
@@ -690,6 +694,11 @@ export default defineAgent({
             ? String((err as { message: unknown }).message)
             : String(err);
       console.error('[AgentSession] pipeline error', msg);
+      if (pipelineErrorRecoveryUsed || isCallEnding()) return;
+      pipelineErrorRecoveryUsed = true;
+      if (canPlayRecoverySpeech()) {
+        sayProgrammatic('Sorry — bear with me one second.');
+      }
     });
 
     const silenceRecoveryDelayMs = Number.parseInt(process.env.LIVEKIT_SILENCE_RECOVERY_MS ?? '550', 10);
@@ -745,6 +754,14 @@ export default defineAgent({
     let listenGraceUntil = 0;
     let callerHasFinalTranscript = false;
     let lastAssistantChatText = '';
+    let lastAssistantSpokeAt = 0;
+    let programmaticSpeechPending = 0;
+    let bookingAwaitingServiceAnswer = false;
+    let bookingServiceAnswerConfirmed = false;
+    let serviceIntakeAskEpoch = -1;
+    let postGreetingNoCallerTimer: ReturnType<typeof setTimeout> | null = null;
+    let postGreetingNoCallerUsed = false;
+    let pipelineErrorRecoveryUsed = false;
 
     let thinkingStartedAt: number | null = null;
     let userStoppedSpeakingAt: number | null = null;
@@ -826,6 +843,128 @@ export default defineAgent({
       return true;
     };
 
+    const sayProgrammatic = (text: string, opts?: Parameters<typeof sayPrepared>[2]) => {
+      programmaticSpeechPending += 1;
+      sayPrepared(session, text, { addToChatCtx: false, ...opts });
+    };
+
+    const canArmBookingLinkConsent = (): boolean => {
+      if (!bookingServiceAnswerConfirmed) return false;
+      if (serviceIntakeAskEpoch >= 0 && replyTurnEpoch <= serviceIntakeAskEpoch) return false;
+      return true;
+    };
+
+    const noteCallerServiceAnswer = (text: string) => {
+      if (!soundsLikeSubstantiveServiceAnswer(text)) return;
+      bookingServiceAnswerConfirmed = true;
+      bookingAwaitingServiceAnswer = false;
+    };
+
+    const prematureBookingConsentInstructions = () =>
+      bookingAwaitingServiceAnswer || serviceIntakeAskEpoch >= 0
+        ? 'You offered the SMS booking link before the caller clearly said what service they want. One short turn only: ask what type of appointment — hair, nails, lashes, or something else. Do NOT mention texting or the booking link yet.'
+        : 'You offered the SMS booking link too soon. Acknowledge their request warmly in one line. If the service is not clear yet, ask what type — do NOT offer the text link on this turn.';
+
+    const handleAssistantBookingConsentSpeech = (text: string) => {
+      if (!assistantOfferedBookingLinkConsent(text)) return;
+      const flags = session.userData.sessionFlags;
+      if (
+        flags.bookingLinkConsentOfferSpoken &&
+        !flags.linkSent &&
+        !flags.bookingLinkConsentGranted
+      ) {
+        void safeGenerateReply(
+          'You already asked for SMS consent — wait for yes or no. Do not repeat the link offer or booking pitch.',
+        );
+        return;
+      }
+      if (!markBookingConsentOffered()) {
+        console.warn('[agent] premature_booking_consent_blocked', {
+          bookingServiceAnswerConfirmed,
+          bookingAwaitingServiceAnswer,
+          replyTurnEpoch,
+          serviceIntakeAskEpoch,
+        });
+        void safeGenerateReply(prematureBookingConsentInstructions());
+      }
+    };
+
+    const clearPostGreetingNoCallerTimer = () => {
+      if (postGreetingNoCallerTimer) {
+        clearTimeout(postGreetingNoCallerTimer);
+        postGreetingNoCallerTimer = null;
+      }
+    };
+
+    const schedulePostGreetingNoCallerPrompt = () => {
+      clearPostGreetingNoCallerTimer();
+      if (postGreetingNoCallerUsed || isCallEnding()) return;
+      postGreetingNoCallerTimer = setTimeout(() => {
+        postGreetingNoCallerTimer = null;
+        if (postGreetingNoCallerUsed || isCallEnding() || hasCallerTranscript()) return;
+        if (!canPlayRecoverySpeech()) return;
+        postGreetingNoCallerUsed = true;
+        console.warn('[agent] post_greeting_no_caller_transcript');
+        sayProgrammatic('What can I help you with today?');
+      }, 8000);
+    };
+
+    const ingestCallerFinalText = (
+      text: string,
+      bumpReason: string,
+      at: number,
+      options?: { appendTranscript?: boolean },
+    ): boolean => {
+      if (isPhantomCallerTranscript(text)) {
+        console.warn('[agent] phantom_caller_transcript_ignored', {
+          snippet: text.slice(0, 60),
+          reason: bumpReason,
+        });
+        return false;
+      }
+      const key = normalizeTranscriptKey(text);
+      if (recentCallerTranscriptKeys.has(key)) return false;
+      recentCallerTranscriptKeys.add(key);
+      clearPostGreetingNoCallerTimer();
+      bumpReplyTurn(bumpReason);
+      settleGreetingPhase('caller_spoke');
+      if (options?.appendTranscript !== false) {
+        appendTranscriptLine(at, `Caller: ${text}`);
+      }
+      noteCallerGarble(session.userData.sessionFlags, session.userData.organizationId, text);
+      resetClosePhaseIfCallerContinues(text);
+      noteCallerTurnNeedsReply(text);
+      noteCallerServiceAnswer(text);
+      if (
+        soundsLikeBookingIntent(text) &&
+        !soundsLikeSubstantiveServiceAnswer(text) &&
+        !bookingServiceAnswerConfirmed
+      ) {
+        bookingAwaitingServiceAnswer = true;
+      }
+      if (session.userData.sessionFlags.awaitingAnythingElseReply) {
+        session.userData.sessionFlags.callerRespondedAfterAnythingElse = true;
+      }
+      if (allowBookingAutomation && soundsLikeBookingIntent(text)) {
+        const bookingRoute = activeRoutes(session.userData.routingLinks).find(isBookingRoute);
+        if (bookingRoute) {
+          session.userData.sessionFlags.bookingRouteId = bookingRoute.id;
+        }
+      }
+      if (soundsLikeCancelOrChangeAppointment(text)) {
+        session.userData.sessionFlags.bookingRouteId = null;
+        session.userData.sessionFlags.bookingLinkConsentPending = false;
+        session.userData.sessionFlags.bookingLinkConsentOfferSpoken = false;
+        session.userData.sessionFlags.bookingSmsAutoSendStarted = false;
+        bookingAwaitingServiceAnswer = false;
+        bookingServiceAnswerConfirmed = false;
+        serviceIntakeAskEpoch = -1;
+      }
+      handleBookingConsentCallerTurn(text);
+      maybeCloseAfterAnythingElse(text);
+      return true;
+    };
+
     const deterministicEmptySpeechFallback = () => {
       if (emptySpeechCircuitBreakerUsedForCall || !canPlayRecoverySpeech()) return;
       emptySpeechCircuitBreakerUsedForCall = true;
@@ -837,21 +976,20 @@ export default defineAgent({
         soundsLikeBookingIntent(snippet) ||
         /\b(haircut|colour|color|lash|nail|book|appointment)\b/i.test(snippet)
       ) {
-        sayPrepared(session, 'Sorry about that — what service were you looking to book?');
+        sayProgrammatic('Sorry about that — what service were you looking to book?');
         return;
       }
       if (callerAskedPhoneOrHumanBooking(snippet)) {
-        sayPrepared(
-          session,
+        sayProgrammatic(
           'We take bookings online, or I can pass your details to the team for a callback.',
         );
         return;
       }
       if (!snippet) {
-        sayPrepared(session, 'What can I help you with today?');
+        sayProgrammatic('What can I help you with today?');
         return;
       }
-      sayPrepared(session, 'Sorry about that — how can I help?');
+      sayProgrammatic('Sorry about that — how can I help?');
     };
 
     const speakBookingConfirmationOnce = async () => {
@@ -1040,7 +1178,7 @@ export default defineAgent({
       })();
     };
 
-    const markBookingConsentOffered = () => {
+    const markBookingConsentOffered = (): boolean => {
       const flags = session.userData.sessionFlags;
       if (
         flags.bookingLinkConsentOfferSpoken ||
@@ -1048,13 +1186,18 @@ export default defineAgent({
         flags.linkSent ||
         flags.bookingLinkConsentGranted
       ) {
-        return;
+        return false;
+      }
+      if (!canArmBookingLinkConsent()) {
+        return false;
       }
       flags.bookingLinkConsentOfferSpoken = true;
       flags.bookingLinkConsentPending = true;
       flags.bookingLinkConsentGranted = false;
       flags.userTurnsSinceBookingOffer = 0;
       bookingConsentOfferedAtMs = Date.now();
+      callerAwaitingReply = true;
+      return true;
     };
 
     const gracefulDisconnect = () => {
@@ -1182,6 +1325,7 @@ export default defineAgent({
       clearCallerInterimPauseTimer();
       clearThinkingStuckTimer();
       clearQaThinkingAckTimer();
+      clearPostGreetingNoCallerTimer();
     };
 
     const resetDeadAirTimer = () => {
@@ -1204,7 +1348,7 @@ export default defineAgent({
             return;
           }
           deadAirPromptCount += 1;
-          sayPrepared(session, 'Sorry — are you still there?');
+          sayProgrammatic('Sorry — are you still there?');
           deadAirCloseTimer = setTimeout(() => {
             deadAirCloseTimer = null;
             try {
@@ -1221,8 +1365,9 @@ export default defineAgent({
       }, deadAirMs);
     };
 
-    const scheduleSilenceRecoveryAfterCutoff = () => {
+    const scheduleSilenceRecoveryAfterCutoff = (speechEpoch: number) => {
       if (isCallEnding() || shouldSuppressFillers()) return;
+      if (replyTurnEpoch > speechEpoch) return;
       clearSilenceRecoveryTimer();
       silenceRecoveryTimer = setTimeout(() => {
         silenceRecoveryTimer = null;
@@ -1260,6 +1405,7 @@ export default defineAgent({
         clearQaThinkingAckTimer();
       }
       if (ev.newState === 'speaking') {
+        lastAssistantSpokeAt = Date.now();
         if (thinkingStartedAt !== null) {
           console.info('[agent] thinking_to_speaking_ms', Date.now() - thinkingStartedAt);
           thinkingStartedAt = null;
@@ -1297,12 +1443,13 @@ export default defineAgent({
           return;
         }
         if (sh.interrupted) {
-          scheduleSilenceRecoveryAfterCutoff();
+          scheduleSilenceRecoveryAfterCutoff(speechEpoch);
           if (!allowBookingAutomation) {
             settleGreetingPhase('greeting_interrupted');
           }
         } else if (!allowBookingAutomation) {
           settleGreetingPhase('greeting_completed');
+          schedulePostGreetingNoCallerPrompt();
         }
         const handle = sh as unknown as { text?: string; source?: string };
         const spoken =
@@ -1316,9 +1463,16 @@ export default defineAgent({
             greetingAudioSpeechPending -= 1;
             return;
           }
+          if (programmaticSpeechPending > 0) {
+            programmaticSpeechPending -= 1;
+            return;
+          }
           // SpeechHandle text/source can be empty even when TTS played; chat ctx has the line.
           if (lastAssistantChatText.trim()) {
             lastAssistantChatText = '';
+            return;
+          }
+          if (lastAssistantSpokeAt > 0 && Date.now() - lastAssistantSpokeAt < 8000) {
             return;
           }
           emptySpeechCountForTurn += 1;
@@ -1348,21 +1502,14 @@ export default defineAgent({
             !emptySpeechCircuitBreakerUsedForCall
           ) {
             emptySpeechFallbackUsedForTurn = true;
-            sayPrepared(session, 'Sorry — one sec.', { addToChatCtx: false });
+            sayProgrammatic('Sorry — one sec.');
           }
           return;
         }
         if (lastAssistantChatText.trim()) {
           lastAssistantChatText = '';
         }
-        if (assistantOfferedBookingLinkConsent(spoken)) {
-          const flags = session.userData.sessionFlags;
-          if (flags.bookingLinkConsentOfferSpoken) {
-            console.warn('[agent] duplicate_consent_speech_ignored');
-          } else {
-            markBookingConsentOffered();
-          }
-        }
+        handleAssistantBookingConsentSpeech(spoken);
       });
     });
 
@@ -1398,32 +1545,7 @@ export default defineAgent({
       clearCallerInterimPauseTimer();
       const text = ev.transcript?.trim();
       if (!text) return;
-      const key = normalizeTranscriptKey(text);
-      if (recentCallerTranscriptKeys.has(key)) return;
-      recentCallerTranscriptKeys.add(key);
-      bumpReplyTurn('caller_final_transcript');
-      settleGreetingPhase('caller_spoke');
-      appendTranscriptLine(ev.createdAt, `Caller: ${text}`);
-      noteCallerGarble(session.userData.sessionFlags, session.userData.organizationId, text);
-      resetClosePhaseIfCallerContinues(text);
-      noteCallerTurnNeedsReply(text);
-      if (session.userData.sessionFlags.awaitingAnythingElseReply) {
-        session.userData.sessionFlags.callerRespondedAfterAnythingElse = true;
-      }
-      if (allowBookingAutomation && soundsLikeBookingIntent(text)) {
-        const bookingRoute = activeRoutes(session.userData.routingLinks).find(isBookingRoute);
-        if (bookingRoute) {
-          session.userData.sessionFlags.bookingRouteId = bookingRoute.id;
-        }
-      }
-      if (soundsLikeCancelOrChangeAppointment(text)) {
-        session.userData.sessionFlags.bookingRouteId = null;
-        session.userData.sessionFlags.bookingLinkConsentPending = false;
-        session.userData.sessionFlags.bookingLinkConsentOfferSpoken = false;
-        session.userData.sessionFlags.bookingSmsAutoSendStarted = false;
-      }
-      handleBookingConsentCallerTurn(text);
-      maybeCloseAfterAnythingElse(text);
+      ingestCallerFinalText(text, 'caller_final_transcript', ev.createdAt);
     });
 
     session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
@@ -1436,31 +1558,9 @@ export default defineAgent({
       if (!text) return;
 
       if (role === 'user') {
-        const key = normalizeTranscriptKey(text);
-        if (recentCallerTranscriptKeys.has(key)) return;
-        recentCallerTranscriptKeys.add(key);
-        bumpReplyTurn('caller_conversation_item');
-        settleGreetingPhase('caller_spoke');
-        noteCallerGarble(session.userData.sessionFlags, session.userData.organizationId, text);
-        resetClosePhaseIfCallerContinues(text);
-        noteCallerTurnNeedsReply(text);
-        if (session.userData.sessionFlags.awaitingAnythingElseReply) {
-          session.userData.sessionFlags.callerRespondedAfterAnythingElse = true;
-        }
-        if (allowBookingAutomation && soundsLikeBookingIntent(text)) {
-          const bookingRoute = activeRoutes(session.userData.routingLinks).find(isBookingRoute);
-          if (bookingRoute) {
-            session.userData.sessionFlags.bookingRouteId = bookingRoute.id;
-          }
-        }
-        if (soundsLikeCancelOrChangeAppointment(text)) {
-          session.userData.sessionFlags.bookingRouteId = null;
-          session.userData.sessionFlags.bookingLinkConsentPending = false;
-          session.userData.sessionFlags.bookingLinkConsentOfferSpoken = false;
-          session.userData.sessionFlags.bookingSmsAutoSendStarted = false;
-        }
-        handleBookingConsentCallerTurn(text);
-        maybeCloseAfterAnythingElse(text);
+        ingestCallerFinalText(text, 'caller_conversation_item', ev.createdAt, {
+          appendTranscript: false,
+        });
       }
 
       if (isCallEnding()) {
@@ -1473,21 +1573,20 @@ export default defineAgent({
 
       const flags = session.userData.sessionFlags;
       if (role === 'assistant' && text.length > 3 && !assistantTextSoundsLikeFakeHangup(text)) {
-        callerAwaitingReply = false;
-        lastAssistantChatText = text;
-      }
-      if (role === 'assistant' && assistantOfferedBookingLinkConsent(text)) {
-        if (
-          flags.bookingLinkConsentOfferSpoken &&
-          !flags.linkSent &&
-          !flags.bookingLinkConsentGranted
-        ) {
-          void safeGenerateReply(
-            'You already asked for SMS consent — wait for yes or no. Do not repeat the link offer or booking pitch.',
-          );
+        if (assistantAwaitingCallerReply(text)) {
+          callerAwaitingReply = true;
         } else {
-          markBookingConsentOffered();
+          callerAwaitingReply = false;
         }
+        lastAssistantChatText = text;
+        if (assistantAskedServiceIntake(text)) {
+          bookingAwaitingServiceAnswer = true;
+          bookingServiceAnswerConfirmed = false;
+          serviceIntakeAskEpoch = replyTurnEpoch;
+        }
+      }
+      if (role === 'assistant') {
+        handleAssistantBookingConsentSpeech(text);
       }
       if (role === 'assistant' && assistantClaimsLinkWasSent(text) && !flags.linkSent) {
         flags.assistantClaimedLinkSentSpoken = true;

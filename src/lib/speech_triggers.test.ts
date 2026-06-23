@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   assistantAskedAnythingElse,
+  assistantAskedServiceIntake,
   assistantClaimsLinkWasSent,
   callerAskedNewQuestion,
   callerAskedPhoneOrHumanBooking,
@@ -46,5 +47,20 @@ describe('speech_triggers', () => {
       "Um, yeah, actually, maybe. Um, is there any way you can get a team member to— can I book over the phone, actually?";
     assert.equal(callerAskedPhoneOrHumanBooking(pivot), true);
     assert.equal(callerPivotedFromSmsConsent(pivot), true);
+  });
+
+  it('detects service intake questions', () => {
+    assert.equal(
+      assistantAskedServiceIntake(
+        'What type of appointment are you looking to book — hair, nails, lashes, or something else?',
+      ),
+      true,
+    );
+    assert.equal(
+      assistantAskedServiceIntake(
+        "I can text you our booking link to the number you're calling from — is that alright?",
+      ),
+      false,
+    );
   });
 });

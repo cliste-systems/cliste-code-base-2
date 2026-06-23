@@ -23,6 +23,27 @@ export function detectLikelySttGarble(text: string): boolean {
   return false;
 }
 
+/** Noise / partial STT that must not advance booking or bump reply turns. */
+export function isPhantomCallerTranscript(text: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  if (t.length <= 2) return true;
+  if (/^[\d.]+$/.test(t)) return true;
+  if (/^(um|uh|eh|ah|er|hmm|mm|yeah|yes|no|ok|okay|sir|hello|hi)\.?$/i.test(t)) return true;
+  if (/^(yes,? )?sir\.?$/i.test(t)) return true;
+  return false;
+}
+
+export function soundsLikeSubstantiveServiceAnswer(text: string): boolean {
+  const t = text.trim();
+  if (isPhantomCallerTranscript(t)) return false;
+  if (detectLikelySttGarble(t)) return false;
+  if (t.length < 5) return false;
+  return /\b(hair|nail|lash|lashes|brow|wax|facial|manicure|pedicure|colour|color|balayage|highlights?|cut|blow dry|treatment|massage|gel|acrylic|extension|tint|lamination)\b/i.test(
+    t,
+  );
+}
+
 export function soundsLikeBookingIntent(text: string): boolean {
   if (soundsLikeCancelOrChangeAppointment(text)) return false;
   const t = text.toLowerCase();

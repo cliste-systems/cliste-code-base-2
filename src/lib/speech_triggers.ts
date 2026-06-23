@@ -62,6 +62,26 @@ export function callerPivotedFromSmsConsent(text: string): boolean {
   return false;
 }
 
+/** Assistant asked what service / appointment type before offering the link. */
+export function assistantAskedServiceIntake(text: string): boolean {
+  const t = text.trim();
+  if (!t || !/\?/.test(t)) return false;
+  return (
+    /\bwhat (were you|type of|kind of|service)\b/i.test(t) ||
+    /\b(hair, nails, lashes|nails, lashes|something else)\b/i.test(t) ||
+    /\blooking to book\b/i.test(t)
+  );
+}
+
+/** Assistant turn ends with a question — caller should get a chance to answer. */
+export function assistantAwaitingCallerReply(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (assistantAskedServiceIntake(t)) return true;
+  if (/\b(is that alright|is that okay|shall i text|anything else)\b/i.test(t)) return true;
+  return /\?\s*$/.test(t) || (/\?/.test(t) && t.length < 220);
+}
+
 /** Caller continued the conversation with a new question (not wind-down). */
 export function callerAskedNewQuestion(text: string): boolean {
   const t = text
