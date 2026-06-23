@@ -1316,6 +1316,11 @@ export default defineAgent({
             greetingAudioSpeechPending -= 1;
             return;
           }
+          // SpeechHandle text/source can be empty even when TTS played; chat ctx has the line.
+          if (lastAssistantChatText.trim()) {
+            lastAssistantChatText = '';
+            return;
+          }
           emptySpeechCountForTurn += 1;
           console.warn('[agent] empty_speech_handle', {
             count: emptySpeechCountForTurn,
