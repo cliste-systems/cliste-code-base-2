@@ -9,6 +9,7 @@ import {
   callerAskedPhoneOrHumanBooking,
   callerPivotedFromSmsConsent,
   callerSaidNothingElse,
+  callerSoundsLikeSocialChitchat,
 } from './speech_triggers.js';
 
 describe('speech_triggers', () => {
@@ -60,6 +61,15 @@ describe('speech_triggers', () => {
       assistantAskedServiceIntake(
         "I can text you our booking link to the number you're calling from — is that alright?",
       ),
+      false,
+    );
+  });
+
+  it('detects social chitchat without booking intent', () => {
+    assert.equal(callerSoundsLikeSocialChitchat('Hello, how are you keeping today?'), true);
+    assert.equal(callerSoundsLikeSocialChitchat('Hi there'), true);
+    assert.equal(
+      callerSoundsLikeSocialChitchat("I'd like to book a root touch-up please"),
       false,
     );
   });

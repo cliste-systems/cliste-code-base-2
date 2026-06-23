@@ -82,6 +82,24 @@ export function assistantAwaitingCallerReply(text: string): boolean {
   return /\?\s*$/.test(t) || (/\?/.test(t) && t.length < 220);
 }
 
+/** Small talk / greeting — no thinking filler needed before the reply. */
+export function callerSoundsLikeSocialChitchat(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[!?.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  if (/\b(book|booking|appointment|schedule|cancel|reschedule)\b/.test(t)) return false;
+  return (
+    /^(hello|hi|hey|good morning|good afternoon|good evening)\b/.test(t) ||
+    /\b(how are you keeping|how are you doing|how are you today|how'?s it going|how'?s your day)\b/.test(
+      t,
+    )
+  );
+}
+
 /** Caller continued the conversation with a new question (not wind-down). */
 export function callerAskedNewQuestion(text: string): boolean {
   const t = text

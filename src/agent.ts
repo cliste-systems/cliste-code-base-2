@@ -53,6 +53,7 @@ import {
   assistantAwaitingCallerReply,
   callerAskedNewQuestion,
   callerSaidNothingElse,
+  callerSoundsLikeSocialChitchat,
 } from './lib/speech_triggers.js';
 import {
   detectLikelySttGarble,
@@ -100,7 +101,8 @@ const MAX_TRANSCRIPT_CHARS = 120_000;
 const MAX_TOOL_SNIPPET_CHARS = 800;
 const LLM_STALL_MS = 6000;
 const CALLER_TRANSCRIPT_DEDUPE_MS = 3000;
-const THINKING_ACK_MS = 2000;
+const THINKING_ACK_MS = 2500;
+const THINKING_ACK_PHRASE = 'Right…';
 const GREETING_INTERRUPT_FALLBACK_MS = 1500;
 
 const RESPONSE_FILLER_PHRASES = ['Right —', 'Let me see now…'] as const;
@@ -706,6 +708,8 @@ export default defineAgent({
     let lastAssistantChatText = '';
     let lastAssistantSpokeAt = 0;
     let programmaticSpeechPending = 0;
+    let lastCallerUtterance = '';
+    let llmReplySpeechQueued = false;
 
     let thinkingStartedAt: number | null = null;
     let userStoppedSpeakingAt: number | null = null;
@@ -743,6 +747,7 @@ export default defineAgent({
       replyRetryUsedForTurn = false;
       listenGraceUntil = 0;
       callerHasFinalTranscript = true;
+      llmReplySpeechQueued = false;
       console.info('[agent] reply_turn_bump', { epoch: replyTurnEpoch, reason });
     };
 
@@ -820,13 +825,19 @@ export default defineAgent({
       clearThinkingAckTimer();
       if (THINKING_ACK_MS <= 0 || isCallEnding() || shouldSuppressFillers()) return;
       if (inListenGrace() && !callerHasFinalTranscript) return;
+      if (llmReplySpeechQueued) return;
+      if (callerSoundsLikeSocialChitchat(lastCallerUtterance)) return;
       thinkingAckTimer = setTimeout(() => {
         thinkingAckTimer = null;
+        if (llmReplySpeechQueued) return;
         if (session.agentState !== 'thinking' || thinkingAckUsedForTurn) return;
         if (shouldSuppressFillers() || isCallEnding()) return;
         if (session.userState === 'speaking' || !canPlayRecoverySpeech()) return;
         thinkingAckUsedForTurn = true;
-        sayPrepared(session, 'Let me see now…', { addToChatCtx: false, allowInterruptions: false });
+        sayPrepared(session, THINKING_ACK_PHRASE, {
+          addToChatCtx: false,
+          allowInterruptions: true,
+        });
       }, THINKING_ACK_MS);
     };
 
@@ -883,6 +894,7 @@ export default defineAgent({
       bumpReason: string,
       at: number,
     ): boolean => {
+      lastCallerUtterance = text.trim();
       if (isPhantomCallerTranscript(text)) {
         console.warn('[agent] phantom_caller_transcript_ignored', {
           snippet: text.slice(0, 60),
@@ -1099,6 +1111,10 @@ export default defineAgent({
 
     session.on(voice.AgentSessionEventTypes.SpeechCreated, (ev) => {
       resetDeadAirTimer();
+      clearThinkingAckTimer();
+      if (session.agentState === 'thinking' || generateReplyInFlight) {
+        llmReplySpeechQueued = true;
+      }
       const speechEpoch = replyTurnEpoch;
       if (!greetingPlaybackStarted) {
         greetingPlaybackStarted = true;
