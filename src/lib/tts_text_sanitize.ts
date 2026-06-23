@@ -169,6 +169,8 @@ export function bufferTtsStreamBySentence(source: ReadableStream<string>): Reada
     async start(controller) {
       const sentStream = new tokenize.basic.SentenceTokenizer().stream();
       const reader = source.getReader();
+      let pendingInput = '';
+      const emittedParts: string[] = [];
 
       const inputTask = async (): Promise<void> => {
         try {
@@ -179,6 +181,7 @@ export function bufferTtsStreamBySentence(source: ReadableStream<string>): Reada
               break;
             }
             if (typeof value === 'string' && value.length > 0) {
+              pendingInput += value;
               sentStream.pushText(value);
             }
           }
@@ -191,7 +194,23 @@ export function bufferTtsStreamBySentence(source: ReadableStream<string>): Reada
         for await (const ev of sentStream) {
           const t = ev.token?.trim();
           if (t) {
+            emittedParts.push(t);
             controller.enqueue(t);
+          }
+        }
+        const pending = pendingInput.trim();
+        if (emittedParts.length === 0) {
+          if (pending) {
+            controller.enqueue(pending);
+          }
+          return;
+        }
+        const joined = emittedParts.join(' ').replace(/\s+/g, ' ');
+        const pendingNorm = pending.replace(/\s+/g, ' ');
+        if (pendingNorm.length > joined.length && pendingNorm.startsWith(joined)) {
+          const tail = pendingNorm.slice(joined.length).trim();
+          if (tail) {
+            controller.enqueue(tail);
           }
         }
       };

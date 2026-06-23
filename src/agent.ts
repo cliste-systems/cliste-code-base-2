@@ -707,6 +707,10 @@ export default defineAgent({
     );
     const thinkingStuckMs = Number.parseInt(process.env.LIVEKIT_THINKING_STUCK_MS ?? '2500', 10);
     const qaThinkingAckMs = Number.parseInt(process.env.LIVEKIT_QA_THINKING_ACK_MS ?? '3000', 10);
+    const postGreetingGraceMs = Number.parseInt(
+      process.env.LIVEKIT_POST_GREETING_GRACE_MS ?? '5000',
+      10,
+    );
     const backchannelsEnabled =
       process.env.LIVEKIT_BACKCHANNELS?.trim().toLowerCase() === 'on';
     const backchannelMinIntervalMs = Number.parseInt(
@@ -731,11 +735,16 @@ export default defineAgent({
     let qaThinkingAckUsedForTurn = false;
     let emptySpeechFallbackUsedForTurn = false;
     let emptySpeechCountForTurn = 0;
+    let emptySpeechCircuitBreakerUsedForCall = false;
     let callerAwaitingReply = false;
     let replyTurnEpoch = 0;
     let generateReplyInFlight = false;
     let allowBookingAutomation = false;
     let greetingPlaybackStarted = false;
+    let greetingAudioSpeechPending = 0;
+    let listenGraceUntil = 0;
+    let callerHasFinalTranscript = false;
+    let lastAssistantChatText = '';
 
     let thinkingStartedAt: number | null = null;
     let userStoppedSpeakingAt: number | null = null;
@@ -761,11 +770,19 @@ export default defineAgent({
           pattern.test(p.line),
       );
 
+    const hasCallerTranscript = () =>
+      transcriptParts.some((p) => p.line.startsWith('Caller:'));
+
+    const inListenGrace = () =>
+      listenGraceUntil > 0 && Date.now() < listenGraceUntil;
+
     const bumpReplyTurn = (reason: string) => {
       replyTurnEpoch += 1;
       generateReplyInFlight = false;
       emptySpeechCountForTurn = 0;
       emptySpeechFallbackUsedForTurn = false;
+      listenGraceUntil = 0;
+      callerHasFinalTranscript = true;
       console.info('[agent] reply_turn_bump', { epoch: replyTurnEpoch, reason });
     };
 
@@ -791,10 +808,26 @@ export default defineAgent({
     const settleGreetingPhase = (reason: string) => {
       if (allowBookingAutomation) return;
       allowBookingAutomation = true;
-      console.info('[agent] greeting_phase_settled', { reason });
+      if (postGreetingGraceMs > 0) {
+        listenGraceUntil = Date.now() + postGreetingGraceMs;
+      }
+      console.info('[agent] greeting_phase_settled', {
+        reason,
+        listenGraceMs: postGreetingGraceMs,
+      });
+    };
+
+    const canPlayRecoverySpeech = (): boolean => {
+      if (isCallEnding()) return false;
+      if (session.userState === 'speaking') return false;
+      if (lastCallerInterimAt > 0 && Date.now() - lastCallerInterimAt < 2000) return false;
+      if (inListenGrace()) return false;
+      return true;
     };
 
     const deterministicEmptySpeechFallback = () => {
+      if (emptySpeechCircuitBreakerUsedForCall || !canPlayRecoverySpeech()) return;
+      emptySpeechCircuitBreakerUsedForCall = true;
       const lastCaller = [...transcriptParts]
         .reverse()
         .find((p) => p.line.startsWith('Caller:'));
@@ -813,7 +846,11 @@ export default defineAgent({
         );
         return;
       }
-      sayPrepared(session, 'Sorry — I missed that. How can I help?');
+      if (!snippet) {
+        sayPrepared(session, 'What can I help you with today?');
+        return;
+      }
+      sayPrepared(session, 'Sorry about that — how can I help?');
     };
 
     const speakBookingConfirmationOnce = async () => {
@@ -1106,12 +1143,16 @@ export default defineAgent({
     const scheduleThinkingStuckRecovery = () => {
       clearThinkingStuckTimer();
       if (thinkingStuckMs <= 0 || isCallEnding() || shouldSuppressFillers()) return;
+      if (session.userState === 'speaking') return;
+      if (inListenGrace() && !callerHasFinalTranscript) return;
       thinkingStuckTimer = setTimeout(() => {
         thinkingStuckTimer = null;
         if (session.agentState !== 'thinking' || thinkingStuckRecoveryUsedForTurn) return;
+        if (session.userState === 'speaking') return;
+        if (inListenGrace() && !callerHasFinalTranscript) return;
         thinkingStuckRecoveryUsedForTurn = true;
         console.warn('[agent] thinking_stuck_recovery', { afterMs: thinkingStuckMs });
-        void safeGenerateReply(
+        safeGenerateReply(
           'The caller is waiting on the line after their last message. Reply in one or two short sentences — acknowledge what they asked for. No long service menus.',
         );
       }, thinkingStuckMs);
@@ -1120,10 +1161,12 @@ export default defineAgent({
     const scheduleQaThinkingAck = () => {
       clearQaThinkingAckTimer();
       if (qaThinkingAckMs <= 0 || isCallEnding() || shouldSuppressFillers()) return;
+      if (inListenGrace() && !callerHasFinalTranscript) return;
       qaThinkingAckTimer = setTimeout(() => {
         qaThinkingAckTimer = null;
         if (session.agentState !== 'thinking' || qaThinkingAckUsedForTurn) return;
         if (shouldSuppressFillers() || isCallEnding()) return;
+        if (session.userState === 'speaking' || !canPlayRecoverySpeech()) return;
         qaThinkingAckUsedForTurn = true;
         sayPrepared(session, 'Let me see now…', { addToChatCtx: false, allowInterruptions: false });
       }, qaThinkingAckMs);
@@ -1147,11 +1190,13 @@ export default defineAgent({
       if (f.askedAnythingElse && f.callerRespondedAfterAnythingElse) return;
       if (f.bookingLinkSendInFlight || f.bookingSmsAutoSendStarted) return;
       if (callerAwaitingReply) return;
+      if (inListenGrace()) return;
       deadAirTimer = setTimeout(() => {
         deadAirTimer = null;
         try {
           if (isCallEnding()) return;
           if (callerAwaitingReply) return;
+          if (inListenGrace()) return;
           if (session.agentState !== 'listening' || session.userState === 'speaking') return;
           if (deadAirPromptCount >= deadAirMaxPrompts) {
             gracefulDisconnect();
@@ -1266,19 +1311,43 @@ export default defineAgent({
               ? handle.source
               : '';
         if (!spoken.trim()) {
+          if (greetingAudioSpeechPending > 0) {
+            greetingAudioSpeechPending -= 1;
+            return;
+          }
           emptySpeechCountForTurn += 1;
-          console.warn('[agent] empty_speech_handle', { count: emptySpeechCountForTurn });
-          if (emptySpeechCountForTurn >= 2) {
+          console.warn('[agent] empty_speech_handle', {
+            count: emptySpeechCountForTurn,
+            userState: session.userState,
+            agentState: session.agentState,
+            hasCallerTranscript: hasCallerTranscript(),
+            inListenGrace: inListenGrace(),
+            lastAssistantSnippet: lastAssistantChatText.slice(0, 80),
+          });
+          if (
+            emptySpeechCountForTurn >= 2 &&
+            !emptySpeechCircuitBreakerUsedForCall &&
+            canPlayRecoverySpeech()
+          ) {
             console.error('[agent] empty_speech_circuit_breaker');
             deterministicEmptySpeechFallback();
             return;
           }
-          scheduleThinkingStuckRecovery();
-          if (!emptySpeechFallbackUsedForTurn) {
+          if (!inListenGrace() || callerHasFinalTranscript) {
+            scheduleThinkingStuckRecovery();
+          }
+          if (
+            !emptySpeechFallbackUsedForTurn &&
+            canPlayRecoverySpeech() &&
+            !emptySpeechCircuitBreakerUsedForCall
+          ) {
             emptySpeechFallbackUsedForTurn = true;
             sayPrepared(session, 'Sorry — one sec.', { addToChatCtx: false });
           }
           return;
+        }
+        if (lastAssistantChatText.trim()) {
+          lastAssistantChatText = '';
         }
         if (assistantOfferedBookingLinkConsent(spoken)) {
           const flags = session.userData.sessionFlags;
@@ -1399,6 +1468,7 @@ export default defineAgent({
       const flags = session.userData.sessionFlags;
       if (role === 'assistant' && text.length > 3 && !assistantTextSoundsLikeFakeHangup(text)) {
         callerAwaitingReply = false;
+        lastAssistantChatText = text;
       }
       if (role === 'assistant' && assistantOfferedBookingLinkConsent(text)) {
         if (
@@ -1714,6 +1784,7 @@ export default defineAgent({
             addToChatCtx: false,
             allowInterruptions: true,
           });
+          greetingAudioSpeechPending += 1;
           playedCached = true;
           greetingPlaybackStarted = true;
         } catch (e) {

@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  bufferTtsStreamBySentence,
   prepareGreetingForTts,
   prepareHardcodedSpeechForTts,
+  prepareTextForTtsStreaming,
   setActiveTtsModelForSanitizer,
 } from './tts_text_sanitize.js';
 
@@ -55,5 +57,20 @@ describe('tts_text_sanitize', () => {
     const out = prepareHardcodedSpeechForTts('Grand — [pause] lovely.');
     assert.match(out, /\[pause\]/);
     setActiveTtsModelForSanitizer('eleven_turbo_v2_5');
+  });
+
+  it('flushes unpunctuated short replies through sentence buffer', async () => {
+    const source = new ReadableStream<string>({
+      start(controller) {
+        controller.enqueue('Lovely — happy to help');
+        controller.close();
+      },
+    });
+    const reader = bufferTtsStreamBySentence(source).getReader();
+    const { value, done } = await reader.read();
+    assert.equal(done, false);
+    assert.match(value ?? '', /Lovely — happy to help/);
+    const next = await reader.read();
+    assert.equal(next.done, true);
   });
 });
