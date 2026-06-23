@@ -100,6 +100,8 @@ const MAX_TRANSCRIPT_CHARS = 120_000;
 const MAX_TOOL_SNIPPET_CHARS = 800;
 const LLM_STALL_MS = 6000;
 const CALLER_TRANSCRIPT_DEDUPE_MS = 3000;
+const THINKING_ACK_MS = 2000;
+const GREETING_INTERRUPT_FALLBACK_MS = 1500;
 
 const RESPONSE_FILLER_PHRASES = ['Right —', 'Let me see now…'] as const;
 
@@ -677,6 +679,10 @@ export default defineAgent({
       process.env.LIVEKIT_POST_GREETING_GRACE_MS ?? '5000',
       10,
     );
+    const postGreetingInterruptGraceMs = Number.parseInt(
+      process.env.LIVEKIT_POST_GREETING_INTERRUPT_GRACE_MS ?? '500',
+      10,
+    );
     let fakeHangupGuardTimer: ReturnType<typeof setTimeout> | null = null;
     let goodbyeForceTimer: ReturnType<typeof setTimeout> | null = null;
     let deadAirTimer: ReturnType<typeof setTimeout> | null = null;
@@ -684,6 +690,9 @@ export default defineAgent({
     let deadAirPromptCount = 0;
     let responseFillerTimer: ReturnType<typeof setTimeout> | null = null;
     let responseFillerCount = 0;
+    let thinkingAckTimer: ReturnType<typeof setTimeout> | null = null;
+    let thinkingAckUsedForTurn = false;
+    let greetingInterruptFallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let callerAwaitingReply = false;
     let replyTurnEpoch = 0;
     let replyRetryUsedForTurn = false;
@@ -800,16 +809,68 @@ export default defineAgent({
       retryFailedReplyOnce('pipeline_error');
     });
 
+    const clearThinkingAckTimer = () => {
+      if (thinkingAckTimer) {
+        clearTimeout(thinkingAckTimer);
+        thinkingAckTimer = null;
+      }
+    };
+
+    const scheduleThinkingAck = () => {
+      clearThinkingAckTimer();
+      if (THINKING_ACK_MS <= 0 || isCallEnding() || shouldSuppressFillers()) return;
+      if (inListenGrace() && !callerHasFinalTranscript) return;
+      thinkingAckTimer = setTimeout(() => {
+        thinkingAckTimer = null;
+        if (session.agentState !== 'thinking' || thinkingAckUsedForTurn) return;
+        if (shouldSuppressFillers() || isCallEnding()) return;
+        if (session.userState === 'speaking' || !canPlayRecoverySpeech()) return;
+        thinkingAckUsedForTurn = true;
+        sayPrepared(session, 'Let me see now…', { addToChatCtx: false, allowInterruptions: false });
+      }, THINKING_ACK_MS);
+    };
+
+    const clearGreetingInterruptFallbackTimer = () => {
+      if (greetingInterruptFallbackTimer) {
+        clearTimeout(greetingInterruptFallbackTimer);
+        greetingInterruptFallbackTimer = null;
+      }
+    };
+
+    const scheduleGreetingInterruptFallback = () => {
+      clearGreetingInterruptFallbackTimer();
+      if (GREETING_INTERRUPT_FALLBACK_MS <= 0 || isCallEnding()) return;
+      greetingInterruptFallbackTimer = setTimeout(() => {
+        greetingInterruptFallbackTimer = null;
+        if (isCallEnding()) return;
+        if (session.agentState === 'thinking' || session.agentState === 'speaking') return;
+        if (generateReplyInFlight) return;
+        console.warn('[agent] greeting_interrupt_fallback_reply');
+        safeGenerateReply(
+          'The caller spoke while you were greeting. Respond warmly in one short line and ask how you can help.',
+        );
+      }, GREETING_INTERRUPT_FALLBACK_MS);
+    };
+
     const settleGreetingPhase = (reason: string) => {
       if (allowBookingAutomation) return;
       allowBookingAutomation = true;
-      if (postGreetingGraceMs > 0) {
-        listenGraceUntil = Date.now() + postGreetingGraceMs;
+      const graceMs =
+        reason === 'greeting_interrupted'
+          ? postGreetingInterruptGraceMs
+          : postGreetingGraceMs;
+      if (graceMs > 0) {
+        listenGraceUntil = Date.now() + graceMs;
       }
       console.info('[agent] greeting_phase_settled', {
         reason,
-        listenGraceMs: postGreetingGraceMs,
+        listenGraceMs: graceMs,
       });
+      if (reason === 'greeting_interrupted') {
+        scheduleGreetingInterruptFallback();
+      } else if (reason === 'greeting_completed' && greetingText.trim()) {
+        appendTranscriptLine(Date.now(), `Assistant: ${greetingText.trim()}`);
+      }
     };
 
     const sayProgrammatic = (text: string, opts?: Parameters<typeof sayPrepared>[2]) => {
@@ -956,6 +1017,8 @@ export default defineAgent({
       clearGoodbyeForceTimer();
       clearDeadAirTimers();
       clearResponseFillerTimer();
+      clearThinkingAckTimer();
+      clearGreetingInterruptFallbackTimer();
     };
 
     const resetDeadAirTimer = () => {
@@ -1008,6 +1071,10 @@ export default defineAgent({
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
       if (ev.newState === 'speaking' || ev.newState === 'listening') {
         clearResponseFillerTimer();
+        clearThinkingAckTimer();
+      }
+      if (ev.newState === 'thinking' || ev.newState === 'speaking') {
+        clearGreetingInterruptFallbackTimer();
       }
       if (ev.newState === 'speaking') {
         lastAssistantSpokeAt = Date.now();
@@ -1015,6 +1082,7 @@ export default defineAgent({
           console.info('[agent] thinking_to_speaking_ms', Date.now() - thinkingStartedAt);
           thinkingStartedAt = null;
         }
+        thinkingAckUsedForTurn = false;
       } else if (ev.newState === 'thinking' && !isCallEnding()) {
         if (userStoppedSpeakingAt !== null) {
           console.info(
@@ -1024,6 +1092,8 @@ export default defineAgent({
           userStoppedSpeakingAt = null;
         }
         thinkingStartedAt = Date.now();
+        thinkingAckUsedForTurn = false;
+        scheduleThinkingAck();
       }
     });
 
