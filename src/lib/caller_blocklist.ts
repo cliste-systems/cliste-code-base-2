@@ -10,6 +10,7 @@ import type { RemoteParticipant } from '@livekit/rtc-node';
 import { RoomServiceClient } from 'livekit-server-sdk';
 
 import { createElevenLabsTts } from './elevenlabs-v3-http-tts.js';
+import { prepareHardcodedSpeechForTts } from './tts_text_sanitize.js';
 import { maskPhone } from './gdpr.js';
 import { classifyCallerLine } from './phone_classify.js';
 import { getSupabaseClient, resolveOrgVoiceId, type OrgCallConfig } from './supabase.js';
@@ -215,7 +216,7 @@ export async function rejectBlockedCaller(input: {
         agent: new voice.Agent({ instructions: ' ' }),
         room: input.ctx.room,
       });
-      const handle = session.say(spokenMessage, {
+      const handle = session.say(prepareHardcodedSpeechForTts(spokenMessage), {
         allowInterruptions: false,
       });
       await waitForSpeechPlayout(handle);

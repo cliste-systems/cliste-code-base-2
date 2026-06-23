@@ -20,6 +20,7 @@
     "gdpr:purge-transcripts": "tsx scripts/gdpr-purge-transcripts.ts",
     "download-files": "tsx src/agent.ts download-files || echo '[download-files] failed — agent will fall back to VAD for turn detection'",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/lib/**/*.test.ts",
     "knip": "knip"
   },
   "keywords": [],

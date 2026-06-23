@@ -44,6 +44,8 @@ export type CaraSessionFlags = {
   smsSent: number;
   endPhoneCallUsed: boolean;
   askedAnythingElse: boolean;
+  awaitingAnythingElseReply: boolean;
+  anythingElseAskCount: number;
   callerRespondedAfterAnythingElse: boolean;
   bookingLinkConsentPending: boolean;
   bookingLinkConsentGranted: boolean;
@@ -52,6 +54,10 @@ export type CaraSessionFlags = {
   userTurnsSinceBookingOffer: number;
   closingCall: boolean;
   bookingSmsAutoSendStarted: boolean;
+  bookingLinkConsentOfferSpoken: boolean;
+  likelySttGarble: boolean;
+  bookingSendConfirmedSpoken: boolean;
+  assistantClaimedLinkSentSpoken: boolean;
 };
 
 export type CaraAgentUserData = {
@@ -348,18 +354,36 @@ export class CaraTools {
         return resolved;
       }
       const { route } = resolved;
+      if (isBookingRoute(route) && channel === 'sms') {
+        if (
+          ud.sessionFlags.bookingSmsAutoSendStarted ||
+          ud.sessionFlags.bookingLinkSendInFlight
+        ) {
+          return {
+            ok: true,
+            message:
+              'Booking SMS is sending automatically. Do not speak about sending or call this tool again — the system confirms aloud.',
+          };
+        }
+        if (ud.sessionFlags.linkSent) {
+          return {
+            ok: true,
+            message: ud.sessionFlags.bookingSmsAutoSendStarted
+              ? 'Booking link already sent automatically. Do not speak this turn — system confirmation handles it.'
+              : 'Booking link already sent. Ask if there is anything else.',
+          };
+        }
+        return {
+          ok: false,
+          message:
+            'Booking SMS is sent automatically after the caller says yes to the SMS consent phrase — do not call sendDirectionsLink for booking SMS.',
+        };
+      }
       if (isBookingRoute(route)) {
         if (ud.sessionFlags.linkSent) {
           return {
             ok: true,
             message: 'Booking link already sent. Ask if there is anything else.',
-          };
-        }
-        if (channel === 'sms') {
-          return {
-            ok: false,
-            message:
-              'Booking SMS is sent automatically after the caller says yes to the SMS consent phrase — do not call sendDirectionsLink for booking SMS.',
           };
         }
         const bookingDelivery = route.linkDelivery ?? 'sms';
@@ -805,7 +829,18 @@ export class CaraTools {
     execute: async (_args, { ctx }) => {
       const ud = readCaraUserData(ctx);
       if (
-        ud.sessionFlags.askedAnythingElse &&
+        ud.sessionFlags.assistantClaimedLinkSentSpoken &&
+        !ud.sessionFlags.linkSent &&
+        !ud.sessionFlags.actionTicketCreated
+      ) {
+        return {
+          ok: false,
+          message:
+            'Cannot end yet — you implied the booking link was sent but SMS did not go out. Apologise, clarify, or takeCallbackMessage.',
+        };
+      }
+      if (
+        (ud.sessionFlags.askedAnythingElse || ud.sessionFlags.awaitingAnythingElseReply) &&
         !ud.sessionFlags.callerRespondedAfterAnythingElse
       ) {
         return {

@@ -4,7 +4,13 @@ import { describe, it } from 'node:test';
 import {
   assistantOfferedBookingLinkConsent,
   BOOKING_SMS_CONSENT_PHRASES,
+  callerDeclinedSmsConsent,
+  callerGrantedSmsConsent,
 } from './booking_consent.js';
+
+/** Good booking example embedded in cara_prompt.ts (must arm auto-SMS). */
+const PROMPT_GOOD_BOOKING_CONSENT =
+  "Lovely — a gel manicure, grand. Easiest is to book online — I can text you our booking link to the number you're calling from — is that alright?";
 
 describe('booking_consent', () => {
   it('matches every canonical SMS consent phrase from the prompt', () => {
@@ -15,6 +21,10 @@ describe('booking_consent', () => {
         `must match: ${phrase}`,
       );
     }
+  });
+
+  it('matches the Good booking consent example from cara_prompt.ts', () => {
+    assert.equal(assistantOfferedBookingLinkConsent(PROMPT_GOOD_BOOKING_CONSENT), true);
   });
 
   it('does not match channel offers without consent ask', () => {
@@ -41,5 +51,30 @@ describe('booking_consent', () => {
       ),
       false,
     );
+  });
+
+  it('does not treat booking please as SMS consent', () => {
+    assert.equal(callerGrantedSmsConsent('Could I get lashes, please?'), false);
+    assert.equal(callerGrantedSmsConsent('I want to book with Emma please'), false);
+    assert.equal(callerGrantedSmsConsent('Grand'), false);
+  });
+
+  it('treats explicit yes as SMS consent', () => {
+    assert.equal(callerGrantedSmsConsent('Yes'), true);
+    assert.equal(callerGrantedSmsConsent('Yeah please'), true);
+    assert.equal(callerGrantedSmsConsent('Go ahead'), true);
+    assert.equal(callerGrantedSmsConsent("That's fine"), true);
+  });
+
+  it('detects SMS decline', () => {
+    assert.equal(callerDeclinedSmsConsent("No that's not possible"), true);
+    assert.equal(callerDeclinedSmsConsent('Nope'), true);
+    assert.equal(callerDeclinedSmsConsent('Yes'), false);
+  });
+
+  it('does not treat hedged phone-booking pivot as SMS consent', () => {
+    const pivot =
+      "Um, yeah, actually, maybe. Um, is there any way you can get a team member to— can I book over the phone, actually?";
+    assert.equal(callerGrantedSmsConsent(pivot), false);
   });
 });

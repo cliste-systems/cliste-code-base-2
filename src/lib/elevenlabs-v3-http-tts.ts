@@ -52,7 +52,8 @@ function buildHttpStreamUrl(config: ElevenLabsHttpV3Config): string {
   let url =
     `${config.baseURL}/text-to-speech/${config.voiceId}/stream` +
     `?model_id=${encodeURIComponent(config.model)}` +
-    `&output_format=${encodeURIComponent(config.encoding)}`;
+    `&output_format=${encodeURIComponent(config.encoding)}` +
+    `&apply_text_normalization=auto`;
   if (config.streamingLatency !== undefined) {
     url += `&optimize_streaming_latency=${config.streamingLatency}`;
   }
@@ -91,6 +92,127 @@ export function resolveElevenLabsHttpV3Config(
   return config;
 }
 
+export type V3SentenceContext = {
+  previousText?: string;
+  nextText?: string;
+};
+
+export async function fetchV3SentencePcm(
+  config: ElevenLabsHttpV3Config,
+  text: string,
+  context?: V3SentenceContext,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return new Uint8Array();
+  }
+
+  const voiceSettings = config.voiceSettings
+    ? stripUndefined(config.voiceSettings)
+    : undefined;
+
+  const body: Record<string, unknown> = {
+    text: trimmed,
+    model_id: config.model,
+    voice_settings: voiceSettings,
+  };
+  if (context?.previousText?.trim()) {
+    body.previous_text = context.previousText.trim();
+  }
+  if (context?.nextText?.trim()) {
+    body.next_text = context.nextText.trim();
+  }
+
+  const response = await fetch(buildHttpStreamUrl(config), {
+    method: 'POST',
+    headers: {
+      [AUTHORIZATION_HEADER]: config.apiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new APIStatusError({
+      message: `ElevenLabs v3 HTTP stream error: ${errorText}`,
+      options: { statusCode: response.status },
+    });
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.startsWith('audio/')) {
+    const content = await response.text();
+    throw new APIError(`ElevenLabs v3 returned non-audio data: ${content}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new APIError('ElevenLabs v3 stream has no response body');
+  }
+
+  const chunks: Uint8Array[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (value?.byteLength) {
+      chunks.push(value);
+    }
+  }
+
+  const total = chunks.reduce((n, c) => n + c.byteLength, 0);
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
+}
+
+/** Offline render of full text via v3 HTTP (sentence continuity). */
+export async function renderTextToPcmWithV3(
+  config: ElevenLabsHttpV3Config,
+  text: string,
+): Promise<Uint8Array> {
+  const tokenizer = new tokenize.basic.SentenceTokenizer();
+  const sentences = tokenizer
+    .tokenize(text)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  if (sentences.length === 0) {
+    return new Uint8Array();
+  }
+
+  const pcmParts: Uint8Array[] = [];
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i]!;
+    const ctx: V3SentenceContext = {};
+    const prev = i > 0 ? sentences[i - 1] : undefined;
+    const next = i < sentences.length - 1 ? sentences[i + 1] : undefined;
+    if (prev) ctx.previousText = prev;
+    if (next) ctx.nextText = next;
+    const pcm = await fetchV3SentencePcm(config, sentence, ctx);
+    if (pcm.byteLength > 0) {
+      pcmParts.push(pcm);
+    }
+  }
+
+  const total = pcmParts.reduce((n, p) => n + p.byteLength, 0);
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const part of pcmParts) {
+    merged.set(part, offset);
+    offset += part.byteLength;
+  }
+  return merged;
+}
+
 class V3HttpSynthesizeStream extends tts.SynthesizeStream {
   #config: ElevenLabsHttpV3Config;
   label = 'elevenlabs.v3-http.SynthesizeStream';
@@ -120,62 +242,23 @@ class V3HttpSynthesizeStream extends tts.SynthesizeStream {
       }
     };
 
-    const synthesizeSentence = async (text: string): Promise<void> => {
-      const trimmed = text.trim();
-      if (!trimmed || this.abortController.signal.aborted) {
+    const synthesizeSentence = async (
+      text: string,
+      context?: V3SentenceContext,
+    ): Promise<void> => {
+      const pcm = await fetchV3SentencePcm(
+        this.#config,
+        text,
+        context,
+        this.abortSignal,
+      );
+      if (!pcm.byteLength || this.abortController.signal.aborted) {
         return;
       }
 
-      const voiceSettings = this.#config.voiceSettings
-        ? stripUndefined(this.#config.voiceSettings)
-        : undefined;
-
-      const response = await fetch(buildHttpStreamUrl(this.#config), {
-        method: 'POST',
-        headers: {
-          [AUTHORIZATION_HEADER]: this.#config.apiKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          text: trimmed,
-          model_id: this.#config.model,
-          voice_settings: voiceSettings,
-        }),
-        signal: this.abortSignal,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new APIStatusError({
-          message: `ElevenLabs v3 HTTP stream error: ${errorText}`,
-          options: { statusCode: response.status },
-        });
-      }
-
-      const contentType = response.headers.get('content-type') || '';
-      if (!contentType.startsWith('audio/')) {
-        const content = await response.text();
-        throw new APIError(`ElevenLabs v3 returned non-audio data: ${content}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new APIError('ElevenLabs v3 stream has no response body');
-      }
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        if (this.abortController.signal.aborted) {
-          break;
-        }
-
-        for (const frame of bstream.write(value.buffer)) {
-          sendLastFrame(false);
-          lastFrame = frame;
-        }
+      for (const frame of bstream.write(pcm.buffer)) {
+        sendLastFrame(false);
+        lastFrame = frame;
       }
     };
 
@@ -194,11 +277,28 @@ class V3HttpSynthesizeStream extends tts.SynthesizeStream {
     };
 
     const sentenceTask = async (): Promise<void> => {
+      const sentences: string[] = [];
       for await (const data of sentTokenizerStream) {
         if (this.abortController.signal.aborted) {
           break;
         }
-        await synthesizeSentence(data.token);
+        const trimmed = data.token.trim();
+        if (trimmed) {
+          sentences.push(trimmed);
+        }
+      }
+
+      for (let i = 0; i < sentences.length; i++) {
+        if (this.abortController.signal.aborted) {
+          break;
+        }
+        const sentence = sentences[i]!;
+        const ctx: V3SentenceContext = {};
+        const prev = i > 0 ? sentences[i - 1] : undefined;
+        const next = i < sentences.length - 1 ? sentences[i + 1] : undefined;
+        if (prev) ctx.previousText = prev;
+        if (next) ctx.nextText = next;
+        await synthesizeSentence(sentence, ctx);
       }
     };
 
@@ -247,6 +347,29 @@ export class ElevenLabsQualityTts extends elevenlabs.TTS {
   }
 }
 
+export function resolvePronunciationDictionaryLocators():
+  | Array<{ pronunciation_dictionary_id: string; version_id?: string }>
+  | undefined {
+  const dictId = process.env.ELEVEN_PRONUNCIATION_DICTIONARY_ID?.trim();
+  if (!dictId) {
+    return undefined;
+  }
+  const versionId = process.env.ELEVEN_PRONUNCIATION_DICTIONARY_VERSION_ID?.trim();
+  return versionId
+    ? [{ pronunciation_dictionary_id: dictId, version_id: versionId }]
+    : [{ pronunciation_dictionary_id: dictId }];
+}
+
 export function createElevenLabsTts(opts: elevenlabs.TTSOptions = {}): ElevenLabsQualityTts {
-  return new ElevenLabsQualityTts(opts);
+  const locators = resolvePronunciationDictionaryLocators();
+  const autoModeRaw = process.env.ELEVEN_TTS_AUTO_MODE?.trim().toLowerCase();
+  const autoMode = autoModeRaw === 'true' || autoModeRaw === '1';
+  const merged: elevenlabs.TTSOptions = {
+    ...opts,
+    autoMode,
+    ...(locators
+      ? ({ pronunciationDictionaryLocators: locators } as elevenlabs.TTSOptions)
+      : {}),
+  };
+  return new ElevenLabsQualityTts(merged);
 }

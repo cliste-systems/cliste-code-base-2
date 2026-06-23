@@ -178,7 +178,11 @@ export function formatRoutesForPrompt(links: RoutingLink[]): string {
       const delivery =
         r.linkDelivery && routeUsesCallerLinkDelivery(r) ? `, delivery: ${r.linkDelivery}` : '';
       const tool = routeToolForPrompt(r);
-      return `- routeId: ${r.id} | trigger: ${trigger} | type: ${r.targetType}${delivery} | tool: ${tool}`;
+      const linkHint =
+        r.url.trim() && (isBookingRoute(r) || isLocationRoute(r))
+          ? ` | link: ${r.url.trim()}`
+          : '';
+      return `- routeId: ${r.id} | trigger: ${trigger} | type: ${r.targetType}${delivery}${linkHint} | tool: ${tool}`;
     })
     .join('\n');
 }
