@@ -47,17 +47,10 @@ export type CaraSessionFlags = {
   awaitingAnythingElseReply: boolean;
   anythingElseAskCount: number;
   callerRespondedAfterAnythingElse: boolean;
-  bookingLinkConsentPending: boolean;
-  bookingLinkConsentGranted: boolean;
   bookingRouteId: string | null;
   bookingLinkSendInFlight: boolean;
-  userTurnsSinceBookingOffer: number;
   closingCall: boolean;
-  bookingSmsAutoSendStarted: boolean;
-  bookingLinkConsentOfferSpoken: boolean;
   likelySttGarble: boolean;
-  bookingSendConfirmedSpoken: boolean;
-  assistantClaimedLinkSentSpoken: boolean;
 };
 
 export type CaraAgentUserData = {
@@ -186,7 +179,7 @@ export async function sendCallerSms(
   return { ok: true, detail: 'Sent.' };
 }
 
-/** Send booking/directions link SMS for a route — used by tools and auto-send on consent. */
+/** Send booking link SMS for a route — invoked only via sendBookingLink tool. */
 export async function sendBookingLinkSmsForRoute(
   ud: CaraAgentUserData,
   routeId: string,
@@ -194,13 +187,6 @@ export async function sendBookingLinkSmsForRoute(
 ): Promise<{ ok: boolean; detail: string }> {
   if (ud.sessionFlags.linkSent) {
     return { ok: true, detail: 'Already sent.' };
-  }
-  const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
-  if (resolved.ok && isBookingRoute(resolved.route) && !ud.sessionFlags.bookingLinkConsentGranted) {
-    return {
-      ok: false,
-      detail: 'Caller has not granted SMS consent — wait for explicit yes on the call.',
-    };
   }
   if (ud.sessionFlags.bookingLinkSendInFlight) {
     return { ok: false, detail: 'SMS send already in progress.' };
@@ -227,13 +213,12 @@ export async function sendBookingLinkSmsForRoute(
       ? `${ud.businessName} — directions: `
       : `${ud.businessName}: `;
     const body = `${smsPrefix}${linkUrl}`;
-    const sms = await sendCallerSms(ud, to, body, 'sendDirectionsLink');
+    const sms = await sendCallerSms(ud, to, body, 'sendBookingLink');
     if (!sms.ok) {
       return { ok: false, detail: sms.detail };
     }
     ud.sessionFlags.linkSent = true;
     ud.sessionFlags.smsSent += 1;
-    ud.sessionFlags.bookingLinkConsentPending = false;
     console.info('sendBookingLinkSmsForRoute', {
       orgId: ud.organizationId,
       routeId,
@@ -305,8 +290,7 @@ export class CaraTools {
       if (isBookingRoute(route)) {
         return {
           ok: false,
-          message:
-            'Never use this tool for booking — offer the SMS consent phrase and wait; the system auto-sends when the caller says yes.',
+          message: `Use sendBookingLink for booking routes (routeId ${route.id}).`,
         };
       }
       if (routeUsesCallerLinkDelivery(route)) {
@@ -352,9 +336,39 @@ export class CaraTools {
     },
   });
 
+  readonly sendBookingLink = llm.tool({
+    description:
+      'Send the online booking link by SMS to the caller\'s phone after they agreed. Use only for booking routes.',
+    parameters: z.object({
+      routeId: z.string().min(1).describe('The booking routeId from Active routes'),
+      callerConsented: z
+        .boolean()
+        .describe('True only after the caller agreed to receive the booking link by text'),
+    }),
+    execute: async ({ routeId, callerConsented }, { ctx }) => {
+      if (!callerConsented) {
+        return {
+          ok: false,
+          message: 'Wait for the caller to agree before sending — do not set callerConsented true yourself.',
+        };
+      }
+      const ud = readCaraUserData(ctx);
+      const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
+      if (!resolved.ok) {
+        return resolved;
+      }
+      if (!isBookingRoute(resolved.route)) {
+        return { ok: false, message: 'Not a booking route — use sendDirectionsLink or sendRoutingLink.' };
+      }
+      ud.sessionFlags.bookingRouteId = routeId;
+      const result = await sendBookingLinkSmsForRoute(ud, routeId);
+      return { ok: result.ok, message: result.detail };
+    },
+  });
+
   readonly sendDirectionsLink = llm.tool({
     description:
-      'DIRECTIONS / maps links only — never for booking appointments. Booking SMS is automatic after verbal consent. Say the address first for directions, ask consent, then send.',
+      'Directions / maps links only — not for booking appointments (use sendBookingLink). Say the address first, ask consent, then send.',
     parameters: z.object({
       routeId: z.string().min(1).describe('The routing_links id for the route'),
       channel: z
@@ -385,8 +399,7 @@ export class CaraTools {
       if (isBookingRoute(route)) {
         return {
           ok: false,
-          message:
-            'Never use this tool for booking — offer the SMS consent phrase and wait; the system auto-sends when the caller says yes.',
+          message: `Use sendBookingLink for booking routes (routeId ${route.id}).`,
         };
       }
       if (!_callerConsented) {
@@ -766,17 +779,6 @@ export class CaraTools {
     execute: async (_args, { ctx }) => {
       const ud = readCaraUserData(ctx);
       if (
-        ud.sessionFlags.assistantClaimedLinkSentSpoken &&
-        !ud.sessionFlags.linkSent &&
-        !ud.sessionFlags.actionTicketCreated
-      ) {
-        return {
-          ok: false,
-          message:
-            'Cannot end yet — you implied the booking link was sent but SMS did not go out. Apologise, clarify, or takeCallbackMessage.',
-        };
-      }
-      if (
         (ud.sessionFlags.askedAnythingElse || ud.sessionFlags.awaitingAnythingElseReply) &&
         !ud.sessionFlags.callerRespondedAfterAnythingElse
       ) {
@@ -802,6 +804,7 @@ export class CaraTools {
 
   toolContext() {
     return {
+      sendBookingLink: this.sendBookingLink,
       sendRoutingLink: this.sendRoutingLink,
       sendDirectionsLink: this.sendDirectionsLink,
       sendRoutingFile: this.sendRoutingFile,
