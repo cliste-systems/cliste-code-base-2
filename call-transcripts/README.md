@@ -1,13 +1,15 @@
 # Call transcripts (local mirror)
 
-After each call, the voice worker writes **`latest.md`** here (and a timestamped archive copy).
+**`latest.md`** is the single file agents should read in Cursor — it always holds the most recent call.
 
-Pull the latest row from Supabase without placing a call:
+## When it updates
 
-```bash
-npm run export:latest-call
-```
+| Source | How |
+|--------|-----|
+| **Local dev call** | Worker writes + opens `latest.md` on hangup (twice: verbatim immediately, then with AI summary) |
+| **Production (Railway) call** | Run `npm run watch:call-transcripts` in a terminal while testing — polls Supabase every 15s and refreshes + opens on new calls |
+| **Manual / after any call** | `npm run export:latest-call` — pulls latest row from Supabase, writes `latest.md`, opens in editor |
 
-Files in this folder are gitignored — they may contain caller PII. Open `latest.md` in Cursor for agent review.
+Set `CARA_TRANSCRIPT_OPEN=0` to skip auto-open. Set `CARA_TRANSCRIPT_MIRROR_DIR` to change output folder (default: `call-transcripts/`).
 
-Optional env: `CARA_TRANSCRIPT_MIRROR_DIR` (worker), `CARA_TRANSCRIPT_ORG_NAME` (export script label).
+Transcript `*.md` files are gitignored (PII). This README is committed.

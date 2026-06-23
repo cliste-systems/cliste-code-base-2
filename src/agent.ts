@@ -97,7 +97,7 @@ import {
   postCallComplete,
   voiceWebhooksConfigured,
 } from './lib/voice_api.js';
-import { mirrorCallTranscriptToWorkspace } from './lib/call_transcript_mirror.js';
+import { mirrorLatestCall } from './lib/sync_latest_call_transcript.js';
 import {
   currentBillingPeriodStart,
   finishUsageRecord,
@@ -1529,6 +1529,20 @@ export default defineAgent({
     session.on(voice.AgentSessionEventTypes.Close, async () => {
       if (callLogWritten) return;
       clearAllGuardTimers();
+
+      const mirrorBase = () => ({
+        callerNumber: callerNumberRaw,
+        startedAtMs: callStartedAt,
+        jobId: livekitJobId,
+        orgName: org.name,
+      });
+
+      let durationSeconds = 0;
+      let outcome = 'answered';
+      let verbatim: string | null = null;
+      let callLogId: string | null = null;
+      let aiSummary: string | null = null;
+
       try {
         const ud = session.userData;
         if (!ud?.organizationId) return;
@@ -1542,8 +1556,8 @@ export default defineAgent({
           await new Promise((r) => setTimeout(r, Math.min(transcriptFlushMs, 2000)));
         }
 
-        const durationSeconds = Math.max(0, Math.round((Date.now() - callStartedAt) / 1000));
-        const outcome = canonicalCallOutcome({
+        durationSeconds = Math.max(0, Math.round((Date.now() - callStartedAt) / 1000));
+        outcome = canonicalCallOutcome({
           linkSent: ud.sessionFlags.linkSent,
           actionTicketCreated: ud.sessionFlags.actionTicketCreated,
           callbackRequested: ud.sessionFlags.callbackRequested,
@@ -1551,11 +1565,20 @@ export default defineAgent({
         });
 
         const verbatimRaw = mergeTranscriptLines(transcriptParts);
-        const verbatim = verbatimRaw ? redactPii(verbatimRaw) : null;
+        verbatim = verbatimRaw ? redactPii(verbatimRaw) : null;
+
+        mirrorLatestCall({
+          ...mirrorBase(),
+          callLogId: null,
+          durationSeconds,
+          outcome,
+          transcript: verbatim,
+          aiSummary: null,
+        });
+
         const disclosureConfirmed = ud.disclosureConfirmed;
         const persistCalledNumber = calledNumber.trim() || org.phone_number?.trim() || '';
 
-        let callLogId: string | null = null;
         const initialPayload = {
           called_number: persistCalledNumber,
           call_sid: callSidAttr,
@@ -1618,7 +1641,6 @@ export default defineAgent({
         });
 
         let transcriptReview: string | null = null;
-        let aiSummary: string | null = null;
         let didPostprocess = false;
         if (verbatim) {
           const pp = await postprocessCallTranscript({
@@ -1658,19 +1680,26 @@ export default defineAgent({
           await finishUsageRecord({ usageId: usageRecordId, durationSeconds });
         }
 
-        mirrorCallTranscriptToWorkspace({
+        mirrorLatestCall({
+          ...mirrorBase(),
           callLogId,
-          callerNumber: callerNumberRaw,
           durationSeconds,
           outcome,
-          startedAtMs: callStartedAt,
           transcript: verbatim,
           aiSummary,
-          jobId: livekitJobId,
-          orgName: org.name,
         });
       } catch (err) {
         console.error('[AgentSession] close handler failed', err);
+        if (verbatim) {
+          mirrorLatestCall({
+            ...mirrorBase(),
+            callLogId,
+            durationSeconds,
+            outcome,
+            transcript: verbatim,
+            aiSummary,
+          });
+        }
       }
     });
 

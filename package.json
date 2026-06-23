@@ -16,6 +16,7 @@
     "setup:twilio-ie1": "tsx scripts/setup-twilio-ie1.ts",
     "test:ring-smoke": "tsx scripts/ring-time-smoke.ts",
     "export:latest-call": "tsx scripts/export-latest-call.ts",
+    "watch:call-transcripts": "tsx scripts/watch-call-transcripts.ts",
     "report:costs": "tsx scripts/report-daily-costs.ts",
     "gdpr:erase": "tsx scripts/gdpr-erase.ts",
     "gdpr:purge-transcripts": "tsx scripts/gdpr-purge-transcripts.ts",
