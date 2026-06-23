@@ -22,6 +22,11 @@ export function twilioSmsConfigured(): boolean {
   return Boolean(sid && token && (from || ie1SmsConfigured()));
 }
 
+/** Log + succeed without Twilio — full booking flow (linkSent, spoken confirmation). */
+export function caraSmsDryRunEnabled(): boolean {
+  return process.env.CARA_SMS_DRY_RUN?.trim().toLowerCase() === 'true';
+}
+
 function platformSmsFrom(): string | null {
   return (
     process.env.TWILIO_SMS_FROM?.trim() ||

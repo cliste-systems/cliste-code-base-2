@@ -25,7 +25,7 @@ import {
 import { insertActionTicket } from './action_tickets.js';
 import { disconnectCallerLeg, type EndCallUserData } from './end_call.js';
 import { normalizePhoneE164 } from './phone_normalize.js';
-import { sendTwilioSms, twilioSmsConfigured } from './twilio_sms.js';
+import { sendTwilioSms, twilioSmsConfigured, caraSmsDryRunEnabled } from './twilio_sms.js';
 import {
   postSendCallerEmail,
   postSearchBusinessFile,
@@ -116,6 +116,20 @@ export async function sendCallerSms(
     const detail = 'Missing dialed number for SMS routing.';
     console.error('[sms]', { tool: toolName, to: maskPhone(to), ok: false, error: detail });
     return { ok: false, detail };
+  }
+
+  if (caraSmsDryRunEnabled()) {
+    const bodyPreview = body.length > 160 ? `${body.slice(0, 160)}…` : body;
+    console.info('[sms] dry_run', {
+      tool: toolName,
+      channel: 'dry_run',
+      calledNumber: maskPhone(ud.calledNumber),
+      to: maskPhone(to),
+      body: bodyPreview,
+      ok: true,
+      durationMs: Date.now() - startedAt,
+    });
+    return { ok: true, detail: 'Sent (dry run — no SMS delivered).' };
   }
 
   if (twilioSmsConfigured()) {
