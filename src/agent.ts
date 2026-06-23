@@ -793,8 +793,9 @@ export default defineAgent({
         return;
       }
       generateReplyInFlight = true;
-      void session
-        .generateReply({ instructions })
+      const handle = session.generateReply({ instructions });
+      // SpeechHandle is thenable (has .then) but not a Promise — wrap before .catch/.finally.
+      void Promise.resolve(handle)
         .catch((e) => {
           console.error('[AgentSession] generateReply failed', e);
         })
