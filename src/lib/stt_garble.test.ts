@@ -34,6 +34,8 @@ describe('stt_garble', () => {
   it('ignores phantom STT fragments', () => {
     assert.equal(isPhantomCallerTranscript('6.'), true);
     assert.equal(isPhantomCallerTranscript('um'), true);
+    assert.equal(isPhantomCallerTranscript('Um,'), true);
+    assert.equal(isPhantomCallerTranscript('Uh, just'), false);
     assert.equal(isPhantomCallerTranscript('Yes, sir, book for my mother'), false);
   });
 

@@ -25,12 +25,18 @@ export function detectLikelySttGarble(text: string): boolean {
 
 /** Noise / partial STT that must not advance booking or bump reply turns. */
 export function isPhantomCallerTranscript(text: string): boolean {
-  const t = text.trim();
+  const raw = text.trim();
+  if (!raw) return true;
+  if (raw.length <= 2) return true;
+  if (/^[\d.]+$/.test(raw)) return true;
+  const t = raw
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!t) return true;
-  if (t.length <= 2) return true;
-  if (/^[\d.]+$/.test(t)) return true;
-  if (/^(um|uh|eh|ah|er|hmm|mm|yeah|yes|no|ok|okay|sir|hello|hi)\.?$/i.test(t)) return true;
-  if (/^(yes,? )?sir\.?$/i.test(t)) return true;
+  if (/^(um|uh|eh|ah|er|hmm|mm|yeah|yes|no|ok|okay|sir|hello|hi)$/.test(t)) return true;
+  if (/^(yes )?sir$/.test(t)) return true;
   return false;
 }
 
