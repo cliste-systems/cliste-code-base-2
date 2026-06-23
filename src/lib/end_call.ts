@@ -13,7 +13,7 @@ function defaultPhoneHangupPath(): string {
   return fileURLToPath(new URL('../assets/phone-hangup.mp3', import.meta.url));
 }
 
-function waitForSpeechHandlePlayout(handle: {
+export function waitForSpeechHandlePlayout(handle: {
   done(): boolean;
   addDoneCallback: (cb: (sh: unknown) => void) => void;
 }): Promise<void> {

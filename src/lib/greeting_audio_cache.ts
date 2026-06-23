@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { AudioByteStream, tokenize } from '@livekit/agents';
 import { AudioFrame } from '@livekit/rtc-node';
-import { tokenize } from '@livekit/agents';
 
 import {
   type ElevenLabsHttpV3Config,
@@ -49,36 +49,45 @@ export async function storeCachedGreetingPcm(cacheKey: string, pcm: Uint8Array):
   await writeFile(cacheFilePath(cacheKey), pcm);
 }
 
+/** PCM int16 mono → LiveKit AudioFrame stream (same framing as TTS / audioFramesFromFile). */
 export function pcmToAudioFrameStream(
   pcm: Uint8Array,
   sampleRate: number,
 ): ReadableStream<AudioFrame> {
-  const generator = pcmToAudioFrames(pcm, sampleRate);
-  return new ReadableStream<AudioFrame>({
-    async pull(controller) {
-      const { value, done } = await generator.next();
-      if (done) {
-        controller.close();
-      } else {
-        controller.enqueue(value);
-      }
-    },
-    cancel() {
-      void generator.return(undefined);
-    },
-  });
+  const byteStream = new AudioByteStream(sampleRate, 1);
+  const frames = [...byteStream.write(pcm), ...byteStream.flush()];
+  return ReadableStream.from(frames);
 }
 
-export async function* pcmToAudioFrames(
-  pcm: Uint8Array,
-  sampleRate: number,
-): AsyncGenerator<AudioFrame> {
-  const samples = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 2);
-  const frameSamples = Math.max(1, Math.floor(sampleRate / 50));
-  for (let i = 0; i < samples.length; i += frameSamples) {
-    const chunk = samples.subarray(i, Math.min(i + frameSamples, samples.length));
-    yield new AudioFrame(chunk, sampleRate, 1, chunk.length);
-  }
+/** Load cached greeting PCM or render via Eleven v3 and store for the next call. */
+export async function ensureGreetingPcmCached(input: {
+  orgId: string;
+  greetingText: string;
+  apiKey: string;
+  voiceId: string;
+  encoding?: string;
+  baseURL?: string;
+  voiceSettings?: ElevenLabsHttpV3Config['voiceSettings'];
+}): Promise<Uint8Array> {
+  const cacheKey = greetingAudioCacheKey(input.orgId, input.greetingText, input.voiceId);
+  const existing = await loadCachedGreetingPcm(cacheKey);
+  if (existing?.byteLength) return existing;
+
+  const config = buildGreetingV3RenderConfig({
+    apiKey: input.apiKey,
+    voiceId: input.voiceId,
+    ...(input.encoding ? { encoding: input.encoding } : {}),
+    ...(input.baseURL ? { baseURL: input.baseURL } : {}),
+    ...(input.voiceSettings ? { voiceSettings: input.voiceSettings } : {}),
+  });
+  const pcm = await renderGreetingPcmForCache(config, input.greetingText);
+  await storeCachedGreetingPcm(cacheKey, pcm);
+  return pcm;
+}
+
+export function pcmSampleRateFromEncoding(encoding: string | undefined): number {
+  const sampleRateMatch = (encoding?.trim() || 'pcm_24000').match(/(\d+)$/);
+  return sampleRateMatch ? Number.parseInt(sampleRateMatch[1]!, 10) : 24000;
 }
 
 export function buildGreetingV3RenderConfig(input: {

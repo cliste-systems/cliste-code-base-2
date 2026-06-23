@@ -10,6 +10,7 @@ import {
   callerPivotedFromSmsConsent,
   callerSaidNothingElse,
   callerSoundsLikeSocialChitchat,
+  callerWindingDownCall,
 } from './speech_triggers.js';
 
 describe('speech_triggers', () => {
@@ -28,6 +29,13 @@ describe('speech_triggers', () => {
     assert.equal(callerSaidNothingElse('No'), false);
     assert.equal(callerSaidNothingElse("No that's not possible"), false);
     assert.equal(callerSaidNothingElse("That's all, thanks"), true);
+  });
+
+  it('treats bare no as wind-down only in anything-else context', () => {
+    assert.equal(callerWindingDownCall('No'), true);
+    assert.equal(callerWindingDownCall('Nope, thanks'), true);
+    assert.equal(callerWindingDownCall("No that's not possible"), false);
+    assert.equal(callerWindingDownCall("That's all, thanks"), true);
   });
 
   it('detects false link-sent claims', () => {

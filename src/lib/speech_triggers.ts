@@ -27,6 +27,18 @@ export function callerSaidNothingElse(text: string): boolean {
   );
 }
 
+/** Caller winding down after "anything else?" — bare "no" is clear in that context. */
+export function callerWindingDownCall(text: string): boolean {
+  if (callerSaidNothingElse(text)) return true;
+  const t = text
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  return /^(no|nope|nah)(\s+(thanks|thank you))?$/i.test(t);
+}
+
 /** Caller wants human/phone booking instead of the SMS link. */
 export function callerAskedPhoneOrHumanBooking(text: string): boolean {
   const t = text

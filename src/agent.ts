@@ -27,16 +27,16 @@ import {
   assistantTextSoundsLikeGoodbye,
   disconnectCallerLeg,
   waitForSessionPlayout,
+  waitForSpeechHandlePlayout,
 } from './lib/end_call.js';
 import { createElevenLabsTts } from './lib/elevenlabs-v3-http-tts.js';
 import { greetingIncludesAiDisclosure } from './lib/greeting_compliance.js';
 import {
-  buildGreetingV3RenderConfig,
+  ensureGreetingPcmCached,
   greetingAudioCacheKey,
   loadCachedGreetingPcm,
+  pcmSampleRateFromEncoding,
   pcmToAudioFrameStream,
-  renderGreetingPcmForCache,
-  storeCachedGreetingPcm,
 } from './lib/greeting_audio_cache.js';
 import { maskPhone, redactPii } from './lib/gdpr.js';
 import { assertOrgCallable } from './lib/org_gate.js';
@@ -53,7 +53,7 @@ import {
   assistantAwaitingCallerReply,
   callerAskedNewQuestion,
   callerSaidNothingElse,
-  callerSoundsLikeSocialChitchat,
+  callerWindingDownCall,
 } from './lib/speech_triggers.js';
 import {
   detectLikelySttGarble,
@@ -68,6 +68,7 @@ import {
 } from './lib/supabase.js';
 import {
   bufferTtsStreamBySentence,
+  prepareHardcodedSpeechForTts,
   prepareTextForTtsStreaming,
   setActiveTtsModelForSanitizer,
 } from './lib/tts_text_sanitize.js';
@@ -101,11 +102,11 @@ const MAX_TRANSCRIPT_CHARS = 120_000;
 const MAX_TOOL_SNIPPET_CHARS = 800;
 const LLM_STALL_MS = 6000;
 const CALLER_TRANSCRIPT_DEDUPE_MS = 3000;
-const THINKING_ACK_MS = 2500;
-const THINKING_ACK_PHRASE = 'Right…';
 const GREETING_INTERRUPT_FALLBACK_MS = 1500;
+const GREETING_PLAYBACK_FALLBACK_MS = 800;
 
-const RESPONSE_FILLER_PHRASES = ['Right —', 'Let me see now…'] as const;
+/** Optional slow-tool stall phrases — disabled by default (see LIVEKIT_RESPONSE_FILLER_MS). */
+const RESPONSE_FILLER_PHRASES = ['Let me see now…'] as const;
 
 const REPLY_RETRY_INSTRUCTIONS =
   'Your last reply did not reach the caller. One short warm line — acknowledge what they asked — then continue. No service menu. If waiting on SMS yes/no, do not re-offer the link.';
@@ -517,6 +518,33 @@ export default defineAgent({
     const elevenEncoding = process.env.ELEVEN_TTS_ENCODING?.trim() || 'pcm_24000';
     const elevenBaseUrl =
       process.env.ELEVENLABS_BASE_URL?.trim() || 'https://api.elevenlabs.io/v1';
+    const elevenVoiceSettings = resolveElevenVoiceSettings();
+
+    const greetingCacheKey = greetingText
+      ? greetingAudioCacheKey(org.id, greetingText, elevenVoiceId)
+      : null;
+
+    const greetingCacheWarmPromise = greetingText
+      ? ensureGreetingPcmCached({
+          orgId: org.id,
+          greetingText,
+          apiKey: elevenApiKey,
+          voiceId: elevenVoiceId,
+          encoding: elevenEncoding,
+          baseURL: elevenBaseUrl,
+          voiceSettings: elevenVoiceSettings,
+        })
+          .then((pcm) => {
+            console.info('[agent] greeting_pcm_warm', {
+              orgId: org.id,
+              bytes: pcm.byteLength,
+              msSinceCallStart: Date.now() - callStartedAt,
+            });
+          })
+          .catch((e) => {
+            console.error('[agent] greeting pcm warmup failed', e);
+          })
+      : null;
 
     const useSttNeuralTurnDetection = isU3RtProSttModel(inferenceSttModel);
     const latencyProfile = resolveSttLatencyProfile(process.env.LIVEKIT_STT_LATENCY_PROFILE);
@@ -672,7 +700,7 @@ export default defineAgent({
     const deadAirMs = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MS ?? '10000', 10);
     const deadAirCloseMs = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_CLOSE_MS ?? '8000', 10);
     const deadAirMaxPrompts = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MAX_PROMPTS ?? '2', 10);
-    const responseFillerMs = Number.parseInt(process.env.LIVEKIT_RESPONSE_FILLER_MS ?? '1200', 10);
+    const responseFillerMs = Number.parseInt(process.env.LIVEKIT_RESPONSE_FILLER_MS ?? '0', 10);
     const responseFillerMaxPerCall = Number.parseInt(
       process.env.LIVEKIT_RESPONSE_FILLER_MAX_PER_CALL ?? '3',
       10,
@@ -692,8 +720,6 @@ export default defineAgent({
     let deadAirPromptCount = 0;
     let responseFillerTimer: ReturnType<typeof setTimeout> | null = null;
     let responseFillerCount = 0;
-    let thinkingAckTimer: ReturnType<typeof setTimeout> | null = null;
-    let thinkingAckUsedForTurn = false;
     let greetingInterruptFallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let callerAwaitingReply = false;
     let replyTurnEpoch = 0;
@@ -814,33 +840,6 @@ export default defineAgent({
       retryFailedReplyOnce('pipeline_error');
     });
 
-    const clearThinkingAckTimer = () => {
-      if (thinkingAckTimer) {
-        clearTimeout(thinkingAckTimer);
-        thinkingAckTimer = null;
-      }
-    };
-
-    const scheduleThinkingAck = () => {
-      clearThinkingAckTimer();
-      if (THINKING_ACK_MS <= 0 || isCallEnding() || shouldSuppressFillers()) return;
-      if (inListenGrace() && !callerHasFinalTranscript) return;
-      if (llmReplySpeechQueued) return;
-      if (callerSoundsLikeSocialChitchat(lastCallerUtterance)) return;
-      thinkingAckTimer = setTimeout(() => {
-        thinkingAckTimer = null;
-        if (llmReplySpeechQueued) return;
-        if (session.agentState !== 'thinking' || thinkingAckUsedForTurn) return;
-        if (shouldSuppressFillers() || isCallEnding()) return;
-        if (session.userState === 'speaking' || !canPlayRecoverySpeech()) return;
-        thinkingAckUsedForTurn = true;
-        sayPrepared(session, THINKING_ACK_PHRASE, {
-          addToChatCtx: false,
-          allowInterruptions: true,
-        });
-      }, THINKING_ACK_MS);
-    };
-
     const clearGreetingInterruptFallbackTimer = () => {
       if (greetingInterruptFallbackTimer) {
         clearTimeout(greetingInterruptFallbackTimer);
@@ -934,8 +933,11 @@ export default defineAgent({
     const shouldSuppressFillers = () => {
       const f = session.userData.sessionFlags;
       return (
+        !allowBookingAutomation ||
         isCallEnding() ||
+        f.askedAnythingElse ||
         f.awaitingAnythingElseReply ||
+        f.closingCall ||
         f.bookingLinkSendInFlight
       );
     };
@@ -948,13 +950,18 @@ export default defineAgent({
 
     const maybeCloseAfterAnythingElse = (text: string) => {
       const flags = session.userData.sessionFlags;
-      if (!flags.askedAnythingElse || !callerSaidNothingElse(text)) return;
+      if (!flags.askedAnythingElse || !callerWindingDownCall(text)) return;
       if (flags.bookingLinkSendInFlight) return;
       if (flags.endPhoneCallUsed || flags.closingCall) return;
 
       flags.callerRespondedAfterAnythingElse = true;
       flags.closingCall = true;
       clearAllGuardTimers();
+      try {
+        session.interrupt();
+      } catch {
+        /* ignore */
+      }
       void (async () => {
         try {
           sayPrepared(session, `Lovely, thanks for calling ${org.name}. Bye!`);
@@ -1020,7 +1027,7 @@ export default defineAgent({
           RESPONSE_FILLER_PHRASES[
             (responseFillerCount - 1) % RESPONSE_FILLER_PHRASES.length
           ]!;
-        sayPrepared(session, phrase);
+        sayProgrammatic(phrase, { addToChatCtx: false, allowInterruptions: true });
       }, responseFillerMs);
     };
 
@@ -1029,7 +1036,6 @@ export default defineAgent({
       clearGoodbyeForceTimer();
       clearDeadAirTimers();
       clearResponseFillerTimer();
-      clearThinkingAckTimer();
       clearGreetingInterruptFallbackTimer();
     };
 
@@ -1083,7 +1089,6 @@ export default defineAgent({
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
       if (ev.newState === 'speaking' || ev.newState === 'listening') {
         clearResponseFillerTimer();
-        clearThinkingAckTimer();
       }
       if (ev.newState === 'thinking' || ev.newState === 'speaking') {
         clearGreetingInterruptFallbackTimer();
@@ -1094,7 +1099,6 @@ export default defineAgent({
           console.info('[agent] thinking_to_speaking_ms', Date.now() - thinkingStartedAt);
           thinkingStartedAt = null;
         }
-        thinkingAckUsedForTurn = false;
       } else if (ev.newState === 'thinking' && !isCallEnding()) {
         if (userStoppedSpeakingAt !== null) {
           console.info(
@@ -1104,14 +1108,11 @@ export default defineAgent({
           userStoppedSpeakingAt = null;
         }
         thinkingStartedAt = Date.now();
-        thinkingAckUsedForTurn = false;
-        scheduleThinkingAck();
       }
     });
 
     session.on(voice.AgentSessionEventTypes.SpeechCreated, (ev) => {
       resetDeadAirTimer();
-      clearThinkingAckTimer();
       if (session.agentState === 'thinking' || generateReplyInFlight) {
         llmReplySpeechQueued = true;
       }
@@ -1416,15 +1417,23 @@ export default defineAgent({
 
         let transcriptReview: string | null = null;
         let didPostprocess = false;
+        let knowledgeGaps: Array<{
+          topic: string;
+          caller_context?: string;
+          cara_question?: string;
+          suggested_section?: string;
+        }> = [];
         if (verbatim) {
           const pp = await postprocessCallTranscript({
             verbatim,
             businessName: org.name,
             outcome,
             inferenceLlmModel,
+            actionTicketCreated: ud.sessionFlags.actionTicketCreated,
           });
           transcriptReview = pp.transcriptReview ? redactPii(pp.transcriptReview) : null;
           aiSummary = pp.aiSummary ? redactPii(pp.aiSummary) : null;
+          knowledgeGaps = pp.knowledgeGaps;
           didPostprocess = true;
         }
 
@@ -1446,6 +1455,30 @@ export default defineAgent({
           });
           if (!enriched) {
             console.error('[agent] call log enrichment update failed', callLogId);
+          }
+        }
+
+        if (
+          callLogId &&
+          knowledgeGaps.length > 0 &&
+          voiceWebhooksConfigured() &&
+          persistCalledNumber
+        ) {
+          const gapPayload = {
+            called_number: persistCalledNumber,
+            call_sid: callSidAttr,
+            room_name: roomName || null,
+            caller_number: callerNumberRaw,
+            duration_seconds: durationSeconds,
+            outcome,
+            knowledge_gaps: knowledgeGaps,
+          };
+          const gapResult = await postCallComplete(gapPayload);
+          if (!gapResult.ok) {
+            console.warn('[agent] knowledge_gaps webhook failed', {
+              error: gapResult.error,
+              gapCount: knowledgeGaps.length,
+            });
           }
         }
 
@@ -1500,58 +1533,77 @@ export default defineAgent({
     await session.start({ agent, room: ctx.room });
     resetDeadAirTimer();
 
-    const elevenVoiceSettings = resolveElevenVoiceSettings();
-
-    const warmGreetingAudioCache = () => {
-      if (!greetingText) return;
-      const cacheKey = greetingAudioCacheKey(org.id, greetingText, elevenVoiceId);
-      void (async () => {
-        try {
-          const existing = await loadCachedGreetingPcm(cacheKey);
-          if (existing?.byteLength) return;
-          const config = buildGreetingV3RenderConfig({
-            apiKey: elevenApiKey,
-            voiceId: elevenVoiceId,
-            encoding: elevenEncoding,
-            baseURL: elevenBaseUrl,
-            voiceSettings: elevenVoiceSettings,
-          });
-          const pcm = await renderGreetingPcmForCache(config, greetingText);
-          await storeCachedGreetingPcm(cacheKey, pcm);
-          console.info('[agent] greeting v3 cache stored', { orgId: org.id, cacheKey });
-        } catch (e) {
-          console.error('[agent] greeting v3 cache warm failed', e);
-        }
-      })();
-    };
-
     if (greetingText) {
-      const cacheKey = greetingAudioCacheKey(org.id, greetingText, elevenVoiceId);
-      const cachedPcm = await loadCachedGreetingPcm(cacheKey);
-      let playedCached = false;
+      void greetingCacheWarmPromise;
+
+      const playLiveTtsGreeting = () => {
+        sayPrepared(session, greetingText, { greeting: true, allowInterruptions: false });
+        greetingPlaybackStarted = true;
+        console.info('[agent] greeting_playback', {
+          source: 'live_tts',
+          msSinceCallStart: Date.now() - callStartedAt,
+        });
+      };
+
+      const cachedPcm = greetingCacheKey
+        ? await loadCachedGreetingPcm(greetingCacheKey)
+        : null;
+
       if (cachedPcm?.byteLength) {
+        let fallbackUsed = false;
         try {
-          const sampleRate = Number.parseInt(elevenEncoding.match(/(\d+)$/)?.[1] ?? '24000', 10);
-          session.say(' ', {
+          const sampleRate = pcmSampleRateFromEncoding(elevenEncoding);
+          const spokenText = prepareHardcodedSpeechForTts(greetingText, { greeting: true });
+          const handle = session.say(spokenText, {
             audio: pcmToAudioFrameStream(cachedPcm, sampleRate),
-            addToChatCtx: false,
-            allowInterruptions: true,
+            addToChatCtx: true,
+            allowInterruptions: false,
           });
           greetingAudioSpeechPending += 1;
-          playedCached = true;
           greetingPlaybackStarted = true;
+          console.info('[agent] greeting_playback', {
+            source: 'cached_pcm',
+            msSinceCallStart: Date.now() - callStartedAt,
+          });
+
+          const watchdog = setTimeout(() => {
+            if (session.agentState !== 'speaking' && !fallbackUsed) {
+              fallbackUsed = true;
+              console.warn('[agent] greeting_playback_fallback', {
+                reason: 'no_speaking_state',
+                msSinceCallStart: Date.now() - callStartedAt,
+              });
+              try {
+                session.interrupt();
+              } catch {
+                /* ignore */
+              }
+              playLiveTtsGreeting();
+            }
+          }, GREETING_PLAYBACK_FALLBACK_MS);
+
+          try {
+            await waitForSpeechHandlePlayout(handle);
+          } catch (e) {
+            console.error('[agent] cached greeting playout failed — live TTS fallback', e);
+            if (!fallbackUsed && session.agentState !== 'speaking') {
+              fallbackUsed = true;
+              playLiveTtsGreeting();
+            }
+          } finally {
+            clearTimeout(watchdog);
+          }
         } catch (e) {
           console.error('[agent] cached greeting play failed — live TTS fallback', e);
+          playLiveTtsGreeting();
         }
+      } else {
+        playLiveTtsGreeting();
       }
-      if (!playedCached) {
-        sayPrepared(session, greetingText, { greeting: true });
-        greetingPlaybackStarted = true;
-      }
+
       if (greetingIncludesAiDisclosure(greetingText)) {
         session.userData.disclosureConfirmed = true;
       }
-      warmGreetingAudioCache();
     } else {
       allowBookingAutomation = true;
       await session.generateReply({
