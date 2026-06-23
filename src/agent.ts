@@ -661,7 +661,10 @@ export default defineAgent({
       userData: sessionUserData,
       maxToolSteps: 5,
       turnHandling: {
-        preemptiveGeneration: { enabled: true },
+        preemptiveGeneration: {
+          enabled:
+            process.env.LIVEKIT_PREEMPTIVE_GENERATION?.trim().toLowerCase() === 'true',
+        },
         turnDetection: turnDetectorInstance ?? 'stt',
         endpointing: {
           mode: endpointMode,
@@ -727,7 +730,12 @@ export default defineAgent({
     let qaThinkingAckTimer: ReturnType<typeof setTimeout> | null = null;
     let qaThinkingAckUsedForTurn = false;
     let emptySpeechFallbackUsedForTurn = false;
+    let emptySpeechCountForTurn = 0;
     let callerAwaitingReply = false;
+    let replyTurnEpoch = 0;
+    let generateReplyInFlight = false;
+    let allowBookingAutomation = false;
+    let greetingPlaybackStarted = false;
 
     let thinkingStartedAt: number | null = null;
     let userStoppedSpeakingAt: number | null = null;
@@ -752,6 +760,61 @@ export default defineAgent({
           p.at >= bookingConsentOfferedAtMs &&
           pattern.test(p.line),
       );
+
+    const bumpReplyTurn = (reason: string) => {
+      replyTurnEpoch += 1;
+      generateReplyInFlight = false;
+      emptySpeechCountForTurn = 0;
+      emptySpeechFallbackUsedForTurn = false;
+      console.info('[agent] reply_turn_bump', { epoch: replyTurnEpoch, reason });
+    };
+
+    const safeGenerateReply = (instructions: string, opts?: { force?: boolean }) => {
+      const epoch = replyTurnEpoch;
+      if (generateReplyInFlight && !opts?.force) {
+        console.warn('[agent] generateReply_suppressed — single-flight', { epoch });
+        return;
+      }
+      generateReplyInFlight = true;
+      void session
+        .generateReply({ instructions })
+        .catch((e) => {
+          console.error('[AgentSession] generateReply failed', e);
+        })
+        .finally(() => {
+          if (epoch === replyTurnEpoch) {
+            generateReplyInFlight = false;
+          }
+        });
+    };
+
+    const settleGreetingPhase = (reason: string) => {
+      if (allowBookingAutomation) return;
+      allowBookingAutomation = true;
+      console.info('[agent] greeting_phase_settled', { reason });
+    };
+
+    const deterministicEmptySpeechFallback = () => {
+      const lastCaller = [...transcriptParts]
+        .reverse()
+        .find((p) => p.line.startsWith('Caller:'));
+      const snippet = lastCaller?.line.replace(/^Caller:\s*/, '') ?? '';
+      if (
+        soundsLikeBookingIntent(snippet) ||
+        /\b(haircut|colour|color|lash|nail|book|appointment)\b/i.test(snippet)
+      ) {
+        sayPrepared(session, 'Sorry about that — what service were you looking to book?');
+        return;
+      }
+      if (callerAskedPhoneOrHumanBooking(snippet)) {
+        sayPrepared(
+          session,
+          'We take bookings online, or I can pass your details to the team for a callback.',
+        );
+        return;
+      }
+      sayPrepared(session, 'Sorry — I missed that. How can I help?');
+    };
 
     const speakBookingConfirmationOnce = async () => {
       const flags = session.userData.sessionFlags;
@@ -839,10 +902,9 @@ export default defineAgent({
         callerAwaitingReply = false;
         clearThinkingStuckTimer();
         thinkingStuckRecoveryUsedForTurn = true;
-        void session.generateReply({
-          instructions:
-            'Caller declined the text booking link. One turn: "No bother — I\'ll get the team to sort that for you." Ask first name only. Do NOT repeat the service name or re-offer the link. After name, takeCallbackMessage.',
-        });
+        void safeGenerateReply(
+          'Caller declined the text booking link. One turn: "No bother — I\'ll get the team to sort that for you." Ask first name only. Do NOT repeat the service name or re-offer the link. After name, takeCallbackMessage.',
+        );
         return;
       }
 
@@ -856,11 +918,11 @@ export default defineAgent({
         clearThinkingStuckTimer();
         thinkingStuckRecoveryUsedForTurn = false;
         const phonePivot = callerAskedPhoneOrHumanBooking(text);
-        void session.generateReply({
-          instructions: phonePivot
+        safeGenerateReply(
+          phonePivot
             ? 'Caller asked to book over the phone or speak to a team member. One short turn: appointment times are booked online, or you can leave details for a team callback — you cannot lock in a slot on this call. Ask first name only if they want a callback. Do NOT re-offer the SMS link unless they ask for it.'
             : 'Caller did not give a clear yes or no on the SMS link — they asked something else. Answer their question directly in one or two sentences. Do NOT repeat the full booking link consent pitch.',
-        });
+        );
         return;
       }
 
@@ -873,10 +935,9 @@ export default defineAgent({
         soundsLikeCallerLineCheck(text) &&
         flags.userTurnsSinceBookingOffer > 0
       ) {
-        void session.generateReply({
-          instructions:
-            'Caller is checking you are still on the line while waiting for SMS consent. One short line only: still here. Then ask "Shall I text you that link — just say yes or no?" Do NOT repeat the service summary or full booking pitch.',
-        });
+        safeGenerateReply(
+          'Caller is checking you are still on the line while waiting for SMS consent. One short line only: still here. Then ask "Shall I text you that link — just say yes or no?" Do NOT repeat the service summary or full booking pitch.',
+        );
       }
     };
 
@@ -1050,10 +1111,9 @@ export default defineAgent({
         if (session.agentState !== 'thinking' || thinkingStuckRecoveryUsedForTurn) return;
         thinkingStuckRecoveryUsedForTurn = true;
         console.warn('[agent] thinking_stuck_recovery', { afterMs: thinkingStuckMs });
-        void session.generateReply({
-          instructions:
-            'The caller is waiting on the line after their last message. Reply in one or two short sentences — acknowledge what they asked for. No long service menus.',
-        });
+        void safeGenerateReply(
+          'The caller is waiting on the line after their last message. Reply in one or two short sentences — acknowledge what they asked for. No long service menus.',
+        );
       }, thinkingStuckMs);
     };
 
@@ -1125,10 +1185,9 @@ export default defineAgent({
           if (session.userState === 'speaking' || session.agentState !== 'listening') return;
           if (silenceRecoveryCount >= silenceRecoveryMaxPerCall) return;
           silenceRecoveryCount += 1;
-          void session.generateReply({
-            instructions:
-              'Your previous reply may not have played. One short warm line — sorry about that — then continue where you left off. If you already asked to send the booking link, do NOT offer it again — wait for their yes or no.',
-          });
+          void safeGenerateReply(
+            'Your previous reply may not have played. One short warm line — sorry about that — then continue where you left off. If you already asked to send the booking link, do NOT offer it again — wait for their yes or no.',
+          );
         } catch (e) {
           console.error('[AgentSession] silence recovery failed', e);
         }
@@ -1178,8 +1237,27 @@ export default defineAgent({
 
     session.on(voice.AgentSessionEventTypes.SpeechCreated, (ev) => {
       resetDeadAirTimer();
+      const speechEpoch = replyTurnEpoch;
+      if (!greetingPlaybackStarted) {
+        greetingPlaybackStarted = true;
+      }
       ev.speechHandle.addDoneCallback((sh) => {
-        if (sh.interrupted) scheduleSilenceRecoveryAfterCutoff();
+        if (speechEpoch !== replyTurnEpoch) {
+          console.info('[agent] stale_speech_ignored', {
+            speechEpoch,
+            replyTurnEpoch,
+            interrupted: sh.interrupted,
+          });
+          return;
+        }
+        if (sh.interrupted) {
+          scheduleSilenceRecoveryAfterCutoff();
+          if (!allowBookingAutomation) {
+            settleGreetingPhase('greeting_interrupted');
+          }
+        } else if (!allowBookingAutomation) {
+          settleGreetingPhase('greeting_completed');
+        }
         const handle = sh as unknown as { text?: string; source?: string };
         const spoken =
           typeof handle.text === 'string'
@@ -1188,20 +1266,27 @@ export default defineAgent({
               ? handle.source
               : '';
         if (!spoken.trim()) {
-          console.warn('[agent] empty_speech_handle — scheduling thinking recovery');
+          emptySpeechCountForTurn += 1;
+          console.warn('[agent] empty_speech_handle', { count: emptySpeechCountForTurn });
+          if (emptySpeechCountForTurn >= 2) {
+            console.error('[agent] empty_speech_circuit_breaker');
+            deterministicEmptySpeechFallback();
+            return;
+          }
           scheduleThinkingStuckRecovery();
           if (!emptySpeechFallbackUsedForTurn) {
             emptySpeechFallbackUsedForTurn = true;
             sayPrepared(session, 'Sorry — one sec.', { addToChatCtx: false });
-            void session.generateReply({
-              instructions:
-                'Your last reply failed to play. Answer the caller\'s last message in one or two short sentences. If they asked about booking on the phone or speaking to the team, explain online booking or a team callback — do not re-pitch the SMS link.',
-            });
           }
           return;
         }
         if (assistantOfferedBookingLinkConsent(spoken)) {
-          markBookingConsentOffered();
+          const flags = session.userData.sessionFlags;
+          if (flags.bookingLinkConsentOfferSpoken) {
+            console.warn('[agent] duplicate_consent_speech_ignored');
+          } else {
+            markBookingConsentOffered();
+          }
         }
       });
     });
@@ -1241,6 +1326,8 @@ export default defineAgent({
       const key = normalizeTranscriptKey(text);
       if (recentCallerTranscriptKeys.has(key)) return;
       recentCallerTranscriptKeys.add(key);
+      bumpReplyTurn('caller_final_transcript');
+      settleGreetingPhase('caller_spoke');
       appendTranscriptLine(ev.createdAt, `Caller: ${text}`);
       noteCallerGarble(session.userData.sessionFlags, session.userData.organizationId, text);
       resetClosePhaseIfCallerContinues(text);
@@ -1248,7 +1335,7 @@ export default defineAgent({
       if (session.userData.sessionFlags.awaitingAnythingElseReply) {
         session.userData.sessionFlags.callerRespondedAfterAnythingElse = true;
       }
-      if (soundsLikeBookingIntent(text)) {
+      if (allowBookingAutomation && soundsLikeBookingIntent(text)) {
         const bookingRoute = activeRoutes(session.userData.routingLinks).find(isBookingRoute);
         if (bookingRoute) {
           session.userData.sessionFlags.bookingRouteId = bookingRoute.id;
@@ -1277,13 +1364,15 @@ export default defineAgent({
         const key = normalizeTranscriptKey(text);
         if (recentCallerTranscriptKeys.has(key)) return;
         recentCallerTranscriptKeys.add(key);
+        bumpReplyTurn('caller_conversation_item');
+        settleGreetingPhase('caller_spoke');
         noteCallerGarble(session.userData.sessionFlags, session.userData.organizationId, text);
         resetClosePhaseIfCallerContinues(text);
         noteCallerTurnNeedsReply(text);
         if (session.userData.sessionFlags.awaitingAnythingElseReply) {
           session.userData.sessionFlags.callerRespondedAfterAnythingElse = true;
         }
-        if (soundsLikeBookingIntent(text)) {
+        if (allowBookingAutomation && soundsLikeBookingIntent(text)) {
           const bookingRoute = activeRoutes(session.userData.routingLinks).find(isBookingRoute);
           if (bookingRoute) {
             session.userData.sessionFlags.bookingRouteId = bookingRoute.id;
@@ -1317,20 +1406,18 @@ export default defineAgent({
           !flags.linkSent &&
           !flags.bookingLinkConsentGranted
         ) {
-          void session.generateReply({
-            instructions:
-              'You already asked for SMS consent — wait for yes or no. Do not repeat the link offer or booking pitch.',
-          });
+          void safeGenerateReply(
+            'You already asked for SMS consent — wait for yes or no. Do not repeat the link offer or booking pitch.',
+          );
         } else {
           markBookingConsentOffered();
         }
       }
       if (role === 'assistant' && assistantClaimsLinkWasSent(text) && !flags.linkSent) {
         flags.assistantClaimedLinkSentSpoken = true;
-        void session.generateReply({
-          instructions:
-            'SMS was NOT sent. Do not claim the link was texted or that the link has everything. Either wait for explicit yes and let the system send, or offer a team callback. Do not invoke endPhoneCall.',
-        });
+        void safeGenerateReply(
+          'SMS was NOT sent. Do not claim the link was texted or that the link has everything. Either wait for explicit yes and let the system send, or offer a team callback. Do not invoke endPhoneCall.',
+        );
       }
       if (
         role === 'assistant' &&
@@ -1341,10 +1428,9 @@ export default defineAgent({
       }
       if (role === 'assistant' && assistantAskedAnythingElse(text)) {
         if (flags.anythingElseAskCount >= 1 && !flags.callerRespondedAfterAnythingElse) {
-          void session.generateReply({
-            instructions:
-              'Do not ask "anything else" again — the caller is still asking questions. Answer their question only.',
-          });
+          void safeGenerateReply(
+            'Do not ask "anything else" again — the caller is still asking questions. Answer their question only.',
+          );
         }
         flags.askedAnythingElse = true;
         flags.awaitingAnythingElseReply = true;
@@ -1365,9 +1451,9 @@ export default defineAgent({
         console.warn('[agent] blocked phone-number ask — caller ID on file', {
           display: callerLine.display,
         });
-        void session.generateReply({
-          instructions: `You must NOT ask for their phone number — caller ID is already on file (${callerLine.display}). Apologise in one short sentence, then continue helping. For messages or cancellations use takeCallbackMessage with name and staffSummary only — omit callbackPhone.`,
-        });
+        void safeGenerateReply(
+          `You must NOT ask for their phone number — caller ID is already on file (${callerLine.display}). Apologise in one short sentence, then continue helping. For messages or cancellations use takeCallbackMessage with name and staffSummary only — omit callbackPhone.`,
+        );
       }
 
       if (
@@ -1629,18 +1715,21 @@ export default defineAgent({
             allowInterruptions: true,
           });
           playedCached = true;
+          greetingPlaybackStarted = true;
         } catch (e) {
           console.error('[agent] cached greeting play failed — live TTS fallback', e);
         }
       }
       if (!playedCached) {
         sayPrepared(session, greetingText, { greeting: true });
+        greetingPlaybackStarted = true;
       }
       if (greetingIncludesAiDisclosure(greetingText)) {
         session.userData.disclosureConfirmed = true;
       }
       warmGreetingAudioCache();
     } else {
+      allowBookingAutomation = true;
       await session.generateReply({
         instructions: `The caller just connected. Speak first with ONE short greeting for ${org.name}. Max 35 words. Include the AI and call-recording notice exactly as specified in your instructions.`,
       });

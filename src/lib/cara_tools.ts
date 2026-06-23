@@ -181,6 +181,13 @@ export async function sendBookingLinkSmsForRoute(
   if (ud.sessionFlags.linkSent) {
     return { ok: true, detail: 'Already sent.' };
   }
+  const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
+  if (resolved.ok && isBookingRoute(resolved.route) && !ud.sessionFlags.bookingLinkConsentGranted) {
+    return {
+      ok: false,
+      detail: 'Caller has not granted SMS consent — wait for explicit yes on the call.',
+    };
+  }
   if (ud.sessionFlags.bookingLinkSendInFlight) {
     return { ok: false, detail: 'SMS send already in progress.' };
   }
@@ -281,6 +288,13 @@ export class CaraTools {
         return resolved;
       }
       const { route } = resolved;
+      if (isBookingRoute(route)) {
+        return {
+          ok: false,
+          message:
+            'Never use this tool for booking — offer the SMS consent phrase and wait; the system auto-sends when the caller says yes.',
+        };
+      }
       if (routeUsesCallerLinkDelivery(route)) {
         return {
           ok: false,
@@ -326,7 +340,7 @@ export class CaraTools {
 
   readonly sendDirectionsLink = llm.tool({
     description:
-      'For booking or directions routes with text/email delivery configured. For directions, say the address first. Then ask how they want the link and send by SMS and/or email per the route setup.',
+      'DIRECTIONS / maps links only — never for booking appointments. Booking SMS is automatic after verbal consent. Say the address first for directions, ask consent, then send.',
     parameters: z.object({
       routeId: z.string().min(1).describe('The routing_links id for the route'),
       channel: z
@@ -354,84 +368,17 @@ export class CaraTools {
         return resolved;
       }
       const { route } = resolved;
-      if (isBookingRoute(route) && channel === 'sms') {
-        if (
-          ud.sessionFlags.bookingSmsAutoSendStarted ||
-          ud.sessionFlags.bookingLinkSendInFlight
-        ) {
-          return {
-            ok: true,
-            message:
-              'Booking SMS is sending automatically. Do not speak about sending or call this tool again — the system confirms aloud.',
-          };
-        }
-        if (ud.sessionFlags.linkSent) {
-          return {
-            ok: true,
-            message: ud.sessionFlags.bookingSmsAutoSendStarted
-              ? 'Booking link already sent automatically. Do not speak this turn — system confirmation handles it.'
-              : 'Booking link already sent. Ask if there is anything else.',
-          };
-        }
+      if (isBookingRoute(route)) {
         return {
           ok: false,
           message:
-            'Booking SMS is sent automatically after the caller says yes to the SMS consent phrase — do not call sendDirectionsLink for booking SMS.',
+            'Never use this tool for booking — offer the SMS consent phrase and wait; the system auto-sends when the caller says yes.',
         };
       }
-      if (isBookingRoute(route)) {
-        if (ud.sessionFlags.linkSent) {
-          return {
-            ok: true,
-            message: 'Booking link already sent. Ask if there is anything else.',
-          };
-        }
-        const bookingDelivery = route.linkDelivery ?? 'sms';
-        if (bookingDelivery !== 'both' && bookingDelivery !== 'email') {
-          return {
-            ok: false,
-            message:
-              'This booking route is SMS-only — offer the SMS consent phrase (system auto-sends) or takeCallbackMessage.',
-          };
-        }
-        if (!route.url.trim()) {
-          return {
-            ok: false,
-            message: 'Booking link URL not configured. Take a message with takeCallbackMessage.',
-          };
-        }
-        if (!voiceWebhooksConfigured()) {
-          return {
-            ok: false,
-            message:
-              'Email is not available right now — offer SMS (consent phrase) or takeCallbackMessage with their email request.',
-          };
-        }
-        const toEmail = emailAddress?.trim().toLowerCase() ?? '';
-        if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
-          return {
-            ok: false,
-            message: 'Ask for their email address, spell it back, then retry.',
-          };
-        }
-        const linkUrl = route.url.trim();
-        const mail = await postSendCallerEmail({
-          called_number: ud.calledNumber,
-          to: toEmail,
-          subject: 'Booking link',
-          body: `Here is your booking link for ${ud.businessName}:\n\n${linkUrl}`,
-          caller_consented: true,
-        });
-        if (!mail.ok) {
-          return {
-            ok: false,
-            message: SMS_FAILURE_MESSAGE,
-          };
-        }
-        ud.sessionFlags.linkSent = true;
+      if (!_callerConsented) {
         return {
-          ok: true,
-          message: `Link emailed to ${toEmail}. Confirm they will receive it.`,
+          ok: false,
+          message: 'Wait for the caller to agree before sending — do not set callerConsented true yourself.',
         };
       }
       if (!routeUsesCallerLinkDelivery(route) || !route.url.trim()) {
@@ -439,30 +386,6 @@ export class CaraTools {
           ok: false,
           message:
             'Route not found or link delivery is not configured. Use sendRoutingLink for simple link routes, or take a message.',
-        };
-      }
-      if (isBookingRoute(route) && !ud.sessionFlags.bookingLinkConsentGranted) {
-        return {
-          ok: false,
-          message:
-            'Wait for the caller to say yes before sending — do not invoke sendDirectionsLink in the same turn as the consent question.',
-        };
-      }
-      if (
-        ud.sessionFlags.bookingLinkConsentPending &&
-        ud.sessionFlags.userTurnsSinceBookingOffer === 0
-      ) {
-        return {
-          ok: false,
-          message:
-            'Wait for the caller to say yes before sending — do not invoke sendDirectionsLink in the same turn as the consent question.',
-        };
-      }
-      if (ud.sessionFlags.bookingLinkConsentPending && !ud.sessionFlags.bookingLinkConsentGranted) {
-        return {
-          ok: false,
-          message:
-            'Wait for the caller to say yes before sending — do not invoke sendDirectionsLink in the same turn as the consent question.',
         };
       }
 
