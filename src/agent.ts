@@ -109,8 +109,13 @@ import {
 const DEFAULT_TEST_PHONE = '+15551234567';
 const MAX_TRANSCRIPT_CHARS = 120_000;
 const MAX_TOOL_SNIPPET_CHARS = 800;
+const LLM_STALL_MS = 6000;
+const THINKING_ACK_MS = 3000;
 
 const RESPONSE_FILLER_PHRASES = ['Right —', 'Let me see now…'] as const;
+
+const REPLY_RETRY_INSTRUCTIONS =
+  'Your last reply did not reach the caller. One short warm line — acknowledge what they asked — then continue. No service menu. If waiting on SMS yes/no, do not re-offer the link.';
 
 function resolveElevenVoiceSettings(): {
   stability: number;
@@ -520,9 +525,9 @@ export default defineAgent({
     const inferenceSttLanguage = process.env.LIVEKIT_INFERENCE_STT_LANGUAGE?.trim() || 'en';
     const inferenceLlmModel =
       process.env.LIVEKIT_INFERENCE_LLM_MODEL?.trim() || 'openai/gpt-4.1';
-    const useDirectOpenAiLlm =
-      process.env.CARA_LLM_PROVIDER?.trim().toLowerCase() === 'openai' &&
-      !!process.env.OPENAI_API_KEY?.trim();
+    const llmProvider = process.env.CARA_LLM_PROVIDER?.trim().toLowerCase();
+    const openAiKey = process.env.OPENAI_API_KEY?.trim();
+    const useDirectOpenAiLlm = llmProvider !== 'gateway' && !!openAiKey;
 
     const elevenVoiceId =
       resolveOrgVoiceId(org) || process.env.ELEVEN_VOICE_ID?.trim() || 'C92s6vssSLlabgIln1iY';
@@ -665,10 +670,7 @@ export default defineAgent({
       userData: sessionUserData,
       maxToolSteps: 5,
       turnHandling: {
-        preemptiveGeneration: {
-          enabled:
-            process.env.LIVEKIT_PREEMPTIVE_GENERATION?.trim().toLowerCase() === 'true',
-        },
+        preemptiveGeneration: { enabled: false },
         turnDetection: turnDetectorInstance ?? 'stt',
         endpointing: {
           mode: endpointMode,
@@ -685,27 +687,6 @@ export default defineAgent({
       },
     });
 
-    session.on(voice.AgentSessionEventTypes.Error, (ev) => {
-      const err = ev.error;
-      const msg =
-        err instanceof Error
-          ? err.message
-          : typeof err === 'object' && err !== null && 'message' in err
-            ? String((err as { message: unknown }).message)
-            : String(err);
-      console.error('[AgentSession] pipeline error', msg);
-      if (pipelineErrorRecoveryUsed || isCallEnding()) return;
-      pipelineErrorRecoveryUsed = true;
-      if (canPlayRecoverySpeech()) {
-        sayProgrammatic('Sorry — bear with me one second.');
-      }
-    });
-
-    const silenceRecoveryDelayMs = Number.parseInt(process.env.LIVEKIT_SILENCE_RECOVERY_MS ?? '550', 10);
-    const silenceRecoveryMaxPerCall = Number.parseInt(
-      process.env.LIVEKIT_SILENCE_RECOVERY_MAX_PER_CALL ?? '5',
-      10,
-    );
     const deadAirMs = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MS ?? '10000', 10);
     const deadAirCloseMs = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_CLOSE_MS ?? '8000', 10);
     const deadAirMaxPrompts = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MAX_PROMPTS ?? '2', 10);
@@ -714,20 +695,10 @@ export default defineAgent({
       process.env.LIVEKIT_RESPONSE_FILLER_MAX_PER_CALL ?? '3',
       10,
     );
-    const thinkingStuckMs = Number.parseInt(process.env.LIVEKIT_THINKING_STUCK_MS ?? '2500', 10);
-    const qaThinkingAckMs = Number.parseInt(process.env.LIVEKIT_QA_THINKING_ACK_MS ?? '3000', 10);
     const postGreetingGraceMs = Number.parseInt(
       process.env.LIVEKIT_POST_GREETING_GRACE_MS ?? '5000',
       10,
     );
-    const backchannelsEnabled =
-      process.env.LIVEKIT_BACKCHANNELS?.trim().toLowerCase() === 'on';
-    const backchannelMinIntervalMs = Number.parseInt(
-      process.env.LIVEKIT_BACKCHANNEL_MIN_MS ?? '6000',
-      10,
-    );
-    let silenceRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
-    let silenceRecoveryCount = 0;
     let fakeHangupGuardTimer: ReturnType<typeof setTimeout> | null = null;
     let goodbyeForceTimer: ReturnType<typeof setTimeout> | null = null;
     let deadAirTimer: ReturnType<typeof setTimeout> | null = null;
@@ -735,19 +706,13 @@ export default defineAgent({
     let deadAirPromptCount = 0;
     let responseFillerTimer: ReturnType<typeof setTimeout> | null = null;
     let responseFillerCount = 0;
-    let callerInterimPauseTimer: ReturnType<typeof setTimeout> | null = null;
-    let lastBackchannelAt = 0;
-    let lastCallerInterimAt = 0;
-    let thinkingStuckTimer: ReturnType<typeof setTimeout> | null = null;
-    let thinkingStuckRecoveryUsedForTurn = false;
-    let qaThinkingAckTimer: ReturnType<typeof setTimeout> | null = null;
-    let qaThinkingAckUsedForTurn = false;
-    let emptySpeechFallbackUsedForTurn = false;
-    let emptySpeechCountForTurn = 0;
-    let emptySpeechCircuitBreakerUsedForCall = false;
+    let thinkingAckTimer: ReturnType<typeof setTimeout> | null = null;
+    let thinkingAckUsedForTurn = false;
     let callerAwaitingReply = false;
     let replyTurnEpoch = 0;
+    let replyRetryUsedForTurn = false;
     let generateReplyInFlight = false;
+    let generateReplyStartedAt = 0;
     let allowBookingAutomation = false;
     let greetingPlaybackStarted = false;
     let greetingAudioSpeechPending = 0;
@@ -759,9 +724,6 @@ export default defineAgent({
     let bookingAwaitingServiceAnswer = false;
     let bookingServiceAnswerConfirmed = false;
     let serviceIntakeAskEpoch = -1;
-    let postGreetingNoCallerTimer: ReturnType<typeof setTimeout> | null = null;
-    let postGreetingNoCallerUsed = false;
-    let pipelineErrorRecoveryUsed = false;
 
     let thinkingStartedAt: number | null = null;
     let userStoppedSpeakingAt: number | null = null;
@@ -796,32 +758,75 @@ export default defineAgent({
     const bumpReplyTurn = (reason: string) => {
       replyTurnEpoch += 1;
       generateReplyInFlight = false;
-      emptySpeechCountForTurn = 0;
-      emptySpeechFallbackUsedForTurn = false;
+      generateReplyStartedAt = 0;
+      replyRetryUsedForTurn = false;
       listenGraceUntil = 0;
       callerHasFinalTranscript = true;
       console.info('[agent] reply_turn_bump', { epoch: replyTurnEpoch, reason });
     };
 
+    const isCallEnding = () => {
+      const f = session.userData.sessionFlags;
+      return f.endPhoneCallUsed || f.closingCall;
+    };
+
     const safeGenerateReply = (instructions: string, opts?: { force?: boolean }) => {
       const epoch = replyTurnEpoch;
       if (generateReplyInFlight && !opts?.force) {
-        console.warn('[agent] generateReply_suppressed — single-flight', { epoch });
-        return;
+        const stalledFor = Date.now() - generateReplyStartedAt;
+        if (stalledFor > LLM_STALL_MS) {
+          console.warn('[agent] generateReply_stale_reset', { stalledFor, epoch });
+          generateReplyInFlight = false;
+          generateReplyStartedAt = 0;
+          replyTurnEpoch += 1;
+        } else {
+          console.warn('[agent] generateReply_suppressed — single-flight', { epoch });
+          return;
+        }
       }
       generateReplyInFlight = true;
+      generateReplyStartedAt = Date.now();
+      const activeEpoch = replyTurnEpoch;
       const handle = session.generateReply({ instructions });
-      // SpeechHandle is thenable (has .then) but not a Promise — wrap before .catch/.finally.
       void Promise.resolve(handle)
         .catch((e) => {
           console.error('[AgentSession] generateReply failed', e);
+          retryFailedReplyOnce('generateReply_failed');
         })
         .finally(() => {
-          if (epoch === replyTurnEpoch) {
+          if (activeEpoch === replyTurnEpoch) {
             generateReplyInFlight = false;
+            generateReplyStartedAt = 0;
           }
         });
     };
+
+    const canPlayRecoverySpeech = (): boolean => {
+      if (isCallEnding()) return false;
+      if (session.userState === 'speaking') return false;
+      if (inListenGrace()) return false;
+      return true;
+    };
+
+    const retryFailedReplyOnce = (source: string) => {
+      if (replyRetryUsedForTurn || isCallEnding()) return;
+      if (!canPlayRecoverySpeech()) return;
+      replyRetryUsedForTurn = true;
+      console.warn('[agent] reply_retry', { source, epoch: replyTurnEpoch });
+      safeGenerateReply(REPLY_RETRY_INSTRUCTIONS, { force: true });
+    };
+
+    session.on(voice.AgentSessionEventTypes.Error, (ev) => {
+      const err = ev.error;
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === 'object' && err !== null && 'message' in err
+            ? String((err as { message: unknown }).message)
+            : String(err);
+      console.error('[AgentSession] pipeline error', msg);
+      retryFailedReplyOnce('pipeline_error');
+    });
 
     const settleGreetingPhase = (reason: string) => {
       if (allowBookingAutomation) return;
@@ -833,14 +838,6 @@ export default defineAgent({
         reason,
         listenGraceMs: postGreetingGraceMs,
       });
-    };
-
-    const canPlayRecoverySpeech = (): boolean => {
-      if (isCallEnding()) return false;
-      if (session.userState === 'speaking') return false;
-      if (lastCallerInterimAt > 0 && Date.now() - lastCallerInterimAt < 2000) return false;
-      if (inListenGrace()) return false;
-      return true;
     };
 
     const sayProgrammatic = (text: string, opts?: Parameters<typeof sayPrepared>[2]) => {
@@ -889,26 +886,6 @@ export default defineAgent({
       }
     };
 
-    const clearPostGreetingNoCallerTimer = () => {
-      if (postGreetingNoCallerTimer) {
-        clearTimeout(postGreetingNoCallerTimer);
-        postGreetingNoCallerTimer = null;
-      }
-    };
-
-    const schedulePostGreetingNoCallerPrompt = () => {
-      clearPostGreetingNoCallerTimer();
-      if (postGreetingNoCallerUsed || isCallEnding()) return;
-      postGreetingNoCallerTimer = setTimeout(() => {
-        postGreetingNoCallerTimer = null;
-        if (postGreetingNoCallerUsed || isCallEnding() || hasCallerTranscript()) return;
-        if (!canPlayRecoverySpeech()) return;
-        postGreetingNoCallerUsed = true;
-        console.warn('[agent] post_greeting_no_caller_transcript');
-        sayProgrammatic('What can I help you with today?');
-      }, 8000);
-    };
-
     const ingestCallerFinalText = (
       text: string,
       bumpReason: string,
@@ -925,7 +902,6 @@ export default defineAgent({
       const key = normalizeTranscriptKey(text);
       if (recentCallerTranscriptKeys.has(key)) return false;
       recentCallerTranscriptKeys.add(key);
-      clearPostGreetingNoCallerTimer();
       bumpReplyTurn(bumpReason);
       settleGreetingPhase('caller_spoke');
       if (options?.appendTranscript !== false) {
@@ -963,33 +939,6 @@ export default defineAgent({
       handleBookingConsentCallerTurn(text);
       maybeCloseAfterAnythingElse(text);
       return true;
-    };
-
-    const deterministicEmptySpeechFallback = () => {
-      if (emptySpeechCircuitBreakerUsedForCall || !canPlayRecoverySpeech()) return;
-      emptySpeechCircuitBreakerUsedForCall = true;
-      const lastCaller = [...transcriptParts]
-        .reverse()
-        .find((p) => p.line.startsWith('Caller:'));
-      const snippet = lastCaller?.line.replace(/^Caller:\s*/, '') ?? '';
-      if (
-        soundsLikeBookingIntent(snippet) ||
-        /\b(haircut|colour|color|lash|nail|book|appointment)\b/i.test(snippet)
-      ) {
-        sayProgrammatic('Sorry about that — what service were you looking to book?');
-        return;
-      }
-      if (callerAskedPhoneOrHumanBooking(snippet)) {
-        sayProgrammatic(
-          'We take bookings online, or I can pass your details to the team for a callback.',
-        );
-        return;
-      }
-      if (!snippet) {
-        sayProgrammatic('What can I help you with today?');
-        return;
-      }
-      sayProgrammatic('Sorry about that — how can I help?');
     };
 
     const speakBookingConfirmationOnce = async () => {
@@ -1041,11 +990,6 @@ export default defineAgent({
       }
     };
 
-    const isCallEnding = () => {
-      const f = session.userData.sessionFlags;
-      return f.endPhoneCallUsed || f.closingCall;
-    };
-
     const shouldSuppressFillers = () => {
       const f = session.userData.sessionFlags;
       return (
@@ -1076,8 +1020,7 @@ export default defineAgent({
         flags.bookingLinkConsentPending = false;
         flags.bookingLinkConsentGranted = false;
         callerAwaitingReply = false;
-        clearThinkingStuckTimer();
-        thinkingStuckRecoveryUsedForTurn = true;
+        clearThinkingAckTimer();
         void safeGenerateReply(
           'Caller declined the text booking link. One turn: "No bother — I\'ll get the team to sort that for you." Ask first name only. Do NOT repeat the service name or re-offer the link. After name, takeCallbackMessage.',
         );
@@ -1091,8 +1034,7 @@ export default defineAgent({
       ) {
         flags.bookingLinkConsentPending = false;
         flags.bookingLinkConsentGranted = false;
-        clearThinkingStuckTimer();
-        thinkingStuckRecoveryUsedForTurn = false;
+        clearThinkingAckTimer();
         const phonePivot = callerAskedPhoneOrHumanBooking(text);
         safeGenerateReply(
           phonePivot
@@ -1204,12 +1146,6 @@ export default defineAgent({
       void disconnectCallerLeg(session, session.userData, () => waitForSessionPlayout(session));
     };
 
-    const clearSilenceRecoveryTimer = () => {
-      if (silenceRecoveryTimer) {
-        clearTimeout(silenceRecoveryTimer);
-        silenceRecoveryTimer = null;
-      }
-    };
     const clearFakeHangupGuardTimer = () => {
       if (fakeHangupGuardTimer) {
         clearTimeout(fakeHangupGuardTimer);
@@ -1239,12 +1175,6 @@ export default defineAgent({
         responseFillerTimer = null;
       }
     };
-    const clearCallerInterimPauseTimer = () => {
-      if (callerInterimPauseTimer) {
-        clearTimeout(callerInterimPauseTimer);
-        callerInterimPauseTimer = null;
-      }
-    };
 
     const canPlayResponseFiller = (): boolean => {
       if (responseFillerMs <= 0) return false;
@@ -1270,62 +1200,33 @@ export default defineAgent({
       }, responseFillerMs);
     };
 
-    const clearThinkingStuckTimer = () => {
-      if (thinkingStuckTimer) {
-        clearTimeout(thinkingStuckTimer);
-        thinkingStuckTimer = null;
+    const clearThinkingAckTimer = () => {
+      if (thinkingAckTimer) {
+        clearTimeout(thinkingAckTimer);
+        thinkingAckTimer = null;
       }
     };
 
-    const clearQaThinkingAckTimer = () => {
-      if (qaThinkingAckTimer) {
-        clearTimeout(qaThinkingAckTimer);
-        qaThinkingAckTimer = null;
-      }
-    };
-
-    const scheduleThinkingStuckRecovery = () => {
-      clearThinkingStuckTimer();
-      if (thinkingStuckMs <= 0 || isCallEnding() || shouldSuppressFillers()) return;
-      if (session.userState === 'speaking') return;
+    const scheduleThinkingAck = () => {
+      clearThinkingAckTimer();
+      if (THINKING_ACK_MS <= 0 || isCallEnding() || shouldSuppressFillers()) return;
       if (inListenGrace() && !callerHasFinalTranscript) return;
-      thinkingStuckTimer = setTimeout(() => {
-        thinkingStuckTimer = null;
-        if (session.agentState !== 'thinking' || thinkingStuckRecoveryUsedForTurn) return;
-        if (session.userState === 'speaking') return;
-        if (inListenGrace() && !callerHasFinalTranscript) return;
-        thinkingStuckRecoveryUsedForTurn = true;
-        console.warn('[agent] thinking_stuck_recovery', { afterMs: thinkingStuckMs });
-        safeGenerateReply(
-          'The caller is waiting on the line after their last message. Reply in one or two short sentences — acknowledge what they asked for. No long service menus.',
-        );
-      }, thinkingStuckMs);
-    };
-
-    const scheduleQaThinkingAck = () => {
-      clearQaThinkingAckTimer();
-      if (qaThinkingAckMs <= 0 || isCallEnding() || shouldSuppressFillers()) return;
-      if (inListenGrace() && !callerHasFinalTranscript) return;
-      qaThinkingAckTimer = setTimeout(() => {
-        qaThinkingAckTimer = null;
-        if (session.agentState !== 'thinking' || qaThinkingAckUsedForTurn) return;
+      thinkingAckTimer = setTimeout(() => {
+        thinkingAckTimer = null;
+        if (session.agentState !== 'thinking' || thinkingAckUsedForTurn) return;
         if (shouldSuppressFillers() || isCallEnding()) return;
         if (session.userState === 'speaking' || !canPlayRecoverySpeech()) return;
-        qaThinkingAckUsedForTurn = true;
+        thinkingAckUsedForTurn = true;
         sayPrepared(session, 'Let me see now…', { addToChatCtx: false, allowInterruptions: false });
-      }, qaThinkingAckMs);
+      }, THINKING_ACK_MS);
     };
 
     const clearAllGuardTimers = () => {
-      clearSilenceRecoveryTimer();
       clearFakeHangupGuardTimer();
       clearGoodbyeForceTimer();
       clearDeadAirTimers();
       clearResponseFillerTimer();
-      clearCallerInterimPauseTimer();
-      clearThinkingStuckTimer();
-      clearQaThinkingAckTimer();
-      clearPostGreetingNoCallerTimer();
+      clearThinkingAckTimer();
     };
 
     const resetDeadAirTimer = () => {
@@ -1365,35 +1266,12 @@ export default defineAgent({
       }, deadAirMs);
     };
 
-    const scheduleSilenceRecoveryAfterCutoff = (speechEpoch: number) => {
-      if (isCallEnding() || shouldSuppressFillers()) return;
-      if (replyTurnEpoch > speechEpoch) return;
-      clearSilenceRecoveryTimer();
-      silenceRecoveryTimer = setTimeout(() => {
-        silenceRecoveryTimer = null;
-        try {
-          if (isCallEnding()) return;
-          if (session.userState === 'speaking' || session.agentState !== 'listening') return;
-          if (silenceRecoveryCount >= silenceRecoveryMaxPerCall) return;
-          silenceRecoveryCount += 1;
-          void safeGenerateReply(
-            'Your previous reply may not have played. One short warm line — sorry about that — then continue where you left off. If you already asked to send the booking link, do NOT offer it again — wait for their yes or no.',
-          );
-        } catch (e) {
-          console.error('[AgentSession] silence recovery failed', e);
-        }
-      }, silenceRecoveryDelayMs);
-    };
-
     session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
       resetDeadAirTimer();
       if (ev.oldState === 'speaking' && ev.newState === 'listening') {
         userStoppedSpeakingAt = Date.now();
       }
       if (ev.newState === 'speaking') {
-        thinkingStuckRecoveryUsedForTurn = false;
-        emptySpeechFallbackUsedForTurn = false;
-        clearSilenceRecoveryTimer();
         userStoppedSpeakingAt = null;
       }
     });
@@ -1401,8 +1279,7 @@ export default defineAgent({
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
       if (ev.newState === 'speaking' || ev.newState === 'listening') {
         clearResponseFillerTimer();
-        clearThinkingStuckTimer();
-        clearQaThinkingAckTimer();
+        clearThinkingAckTimer();
       }
       if (ev.newState === 'speaking') {
         lastAssistantSpokeAt = Date.now();
@@ -1410,7 +1287,7 @@ export default defineAgent({
           console.info('[agent] thinking_to_speaking_ms', Date.now() - thinkingStartedAt);
           thinkingStartedAt = null;
         }
-        qaThinkingAckUsedForTurn = false;
+        thinkingAckUsedForTurn = false;
       } else if (ev.newState === 'thinking' && !isCallEnding()) {
         if (userStoppedSpeakingAt !== null) {
           console.info(
@@ -1420,10 +1297,8 @@ export default defineAgent({
           userStoppedSpeakingAt = null;
         }
         thinkingStartedAt = Date.now();
-        thinkingStuckRecoveryUsedForTurn = false;
-        qaThinkingAckUsedForTurn = false;
-        scheduleThinkingStuckRecovery();
-        scheduleQaThinkingAck();
+        thinkingAckUsedForTurn = false;
+        scheduleThinkingAck();
       }
     });
 
@@ -1443,13 +1318,11 @@ export default defineAgent({
           return;
         }
         if (sh.interrupted) {
-          scheduleSilenceRecoveryAfterCutoff(speechEpoch);
           if (!allowBookingAutomation) {
             settleGreetingPhase('greeting_interrupted');
           }
         } else if (!allowBookingAutomation) {
           settleGreetingPhase('greeting_completed');
-          schedulePostGreetingNoCallerPrompt();
         }
         const handle = sh as unknown as { text?: string; source?: string };
         const spoken =
@@ -1475,35 +1348,14 @@ export default defineAgent({
           if (lastAssistantSpokeAt > 0 && Date.now() - lastAssistantSpokeAt < 8000) {
             return;
           }
-          emptySpeechCountForTurn += 1;
           console.warn('[agent] empty_speech_handle', {
-            count: emptySpeechCountForTurn,
             userState: session.userState,
             agentState: session.agentState,
             hasCallerTranscript: hasCallerTranscript(),
             inListenGrace: inListenGrace(),
             lastAssistantSnippet: lastAssistantChatText.slice(0, 80),
           });
-          if (
-            emptySpeechCountForTurn >= 2 &&
-            !emptySpeechCircuitBreakerUsedForCall &&
-            canPlayRecoverySpeech()
-          ) {
-            console.error('[agent] empty_speech_circuit_breaker');
-            deterministicEmptySpeechFallback();
-            return;
-          }
-          if (!inListenGrace() || callerHasFinalTranscript) {
-            scheduleThinkingStuckRecovery();
-          }
-          if (
-            !emptySpeechFallbackUsedForTurn &&
-            canPlayRecoverySpeech() &&
-            !emptySpeechCircuitBreakerUsedForCall
-          ) {
-            emptySpeechFallbackUsedForTurn = true;
-            sayProgrammatic('Sorry — one sec.');
-          }
+          retryFailedReplyOnce('empty_speech_handle');
           return;
         }
         if (lastAssistantChatText.trim()) {
@@ -1514,35 +1366,7 @@ export default defineAgent({
     });
 
     session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
-      if (backchannelsEnabled && !ev.isFinal && ev.transcript?.trim()) {
-        lastCallerInterimAt = Date.now();
-        if (
-          !isCallEnding() &&
-          !shouldSuppressFillers() &&
-          session.agentState === 'listening' &&
-          session.userState === 'speaking'
-        ) {
-          clearCallerInterimPauseTimer();
-          callerInterimPauseTimer = setTimeout(() => {
-            callerInterimPauseTimer = null;
-            try {
-              if (!backchannelsEnabled || isCallEnding() || shouldSuppressFillers()) return;
-              if (session.agentState !== 'listening' || session.userState !== 'speaking') {
-                return;
-              }
-              if (Date.now() - lastBackchannelAt < backchannelMinIntervalMs) return;
-              if (Date.now() - lastCallerInterimAt < 650) return;
-              lastBackchannelAt = Date.now();
-              sayPrepared(session, 'mm-hmm', { addToChatCtx: false, allowInterruptions: false });
-            } catch (e) {
-              console.error('[AgentSession] backchannel failed', e);
-            }
-          }, 700);
-        }
-      }
-
       if (!ev.isFinal) return;
-      clearCallerInterimPauseTimer();
       const text = ev.transcript?.trim();
       if (!text) return;
       ingestCallerFinalText(text, 'caller_final_transcript', ev.createdAt);
