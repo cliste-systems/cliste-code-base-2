@@ -97,6 +97,7 @@ import {
   postCallComplete,
   voiceWebhooksConfigured,
 } from './lib/voice_api.js';
+import { mirrorCallTranscriptToWorkspace } from './lib/call_transcript_mirror.js';
 import {
   currentBillingPeriodStart,
   finishUsageRecord,
@@ -419,6 +420,10 @@ export default defineAgent({
     });
 
     const callStartedAt = Date.now();
+    const livekitJobId =
+      typeof (ctx.job as { id?: string }).id === 'string'
+        ? (ctx.job as { id: string }).id
+        : null;
     const roomName =
       (typeof ctx.room.name === 'string' && ctx.room.name.trim()) ||
       (ctx.job.room && typeof (ctx.job.room as { name?: string }).name === 'string'
@@ -724,6 +729,7 @@ export default defineAgent({
     let bookingAwaitingServiceAnswer = false;
     let bookingServiceAnswerConfirmed = false;
     let serviceIntakeAskEpoch = -1;
+    let prematureConsentCorrectionUsedForTurn = false;
 
     let thinkingStartedAt: number | null = null;
     let userStoppedSpeakingAt: number | null = null;
@@ -760,6 +766,7 @@ export default defineAgent({
       generateReplyInFlight = false;
       generateReplyStartedAt = 0;
       replyRetryUsedForTurn = false;
+      prematureConsentCorrectionUsedForTurn = false;
       listenGraceUntil = 0;
       callerHasFinalTranscript = true;
       console.info('[agent] reply_turn_bump', { epoch: replyTurnEpoch, reason });
@@ -882,7 +889,9 @@ export default defineAgent({
           replyTurnEpoch,
           serviceIntakeAskEpoch,
         });
-        void safeGenerateReply(prematureBookingConsentInstructions());
+        if (prematureConsentCorrectionUsedForTurn) return;
+        prematureConsentCorrectionUsedForTurn = true;
+        void safeGenerateReply(prematureBookingConsentInstructions(), { force: true });
       }
     };
 
@@ -1648,6 +1657,18 @@ export default defineAgent({
         if (usageRecordId) {
           await finishUsageRecord({ usageId: usageRecordId, durationSeconds });
         }
+
+        mirrorCallTranscriptToWorkspace({
+          callLogId,
+          callerNumber: callerNumberRaw,
+          durationSeconds,
+          outcome,
+          startedAtMs: callStartedAt,
+          transcript: verbatim,
+          aiSummary,
+          jobId: livekitJobId,
+          orgName: org.name,
+        });
       } catch (err) {
         console.error('[AgentSession] close handler failed', err);
       }

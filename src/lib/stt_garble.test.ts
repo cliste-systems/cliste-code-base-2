@@ -40,5 +40,9 @@ describe('stt_garble', () => {
   it('accepts substantive service answers', () => {
     assert.equal(soundsLikeSubstantiveServiceAnswer("she's looking for a balayage"), true);
     assert.equal(soundsLikeSubstantiveServiceAnswer('book for my mother'), false);
+    assert.equal(
+      soundsLikeSubstantiveServiceAnswer('Um, I was looking at booking a root touch-up, please.'),
+      true,
+    );
   });
 });

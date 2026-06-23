@@ -39,7 +39,7 @@ export function soundsLikeSubstantiveServiceAnswer(text: string): boolean {
   if (isPhantomCallerTranscript(t)) return false;
   if (detectLikelySttGarble(t)) return false;
   if (t.length < 5) return false;
-  return /\b(hair|nail|lash|lashes|brow|wax|facial|manicure|pedicure|colour|color|balayage|highlights?|cut|blow dry|treatment|massage|gel|acrylic|extension|tint|lamination)\b/i.test(
+  return /\b(hair|nail|lash|lashes|brow|wax|facial|manicure|pedicure|colour|color|balayage|highlights?|touch[- ]?up|root|roots|cut|blow dry|treatment|massage|gel|acrylic|extension|tint|lamination|perm|blowdry|blow-dry)\b/i.test(
     t,
   );
 }
