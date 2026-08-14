@@ -29,6 +29,50 @@ const ORG_CACHE_TTL_MS = Number.parseInt(
   10,
 );
 
+function envFlag(name: string): boolean {
+  const v = process.env[name]?.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+}
+
+/** Local Console/Playground testing when Supabase is unreachable. Never set in production. */
+export function isOfflinePlayground(): boolean {
+  return envFlag('CARA_OFFLINE_PLAYGROUND');
+}
+
+export function playgroundOrg(): OrgCallConfig {
+  return {
+    id: '00000000-0000-4000-8000-000000000001',
+    account_id: null,
+    name: process.env.CARA_TRANSCRIPT_ORG_NAME?.trim() || 'Bloom Beauty Studio',
+    slug:
+      process.env.DEFAULT_ORG_SLUG?.trim() ||
+      process.env.DEFAULT_SALON_SLUG?.trim() ||
+      'playground',
+    niche: 'salon',
+    tier: 'starter',
+    status: 'active',
+    is_active: true,
+    account_status: 'active',
+    business_hours: null,
+    custom_prompt: null,
+    greeting: null,
+    assistant_display_name: 'Cara',
+    agent_voice_id: process.env.ELEVEN_VOICE_ID?.trim() || null,
+    agent_business_type: 'salon',
+    agent_opening_hours: null,
+    routing_links: null,
+    fallback_number: null,
+    call_routing_mode: null,
+    phone_number:
+      process.env.DEFAULT_ORG_PHONE?.trim() ||
+      process.env.DEFAULT_SALON_PHONE?.trim() ||
+      null,
+    plan_tier: null,
+    billing_period_start: null,
+    block_anonymous_callers: false,
+  };
+}
+
 let client: SupabaseClient | null = null;
 
 function getSupabase(): SupabaseClient {
@@ -290,6 +334,10 @@ export async function getOrgForCall(input: {
   slug?: string;
   phone?: string;
 }): Promise<OrgCallConfig | null> {
+  if (isOfflinePlayground()) {
+    console.warn('[supabase] CARA_OFFLINE_PLAYGROUND — skipping org lookup');
+    return playgroundOrg();
+  }
   const slug = input.slug?.trim();
   const phone = input.phone?.trim();
   const cacheKey = `org:${slug ?? ''}:${phone ?? ''}`;
@@ -304,6 +352,7 @@ export async function getOrgForCall(input: {
 export async function getSendableBusinessFiles(
   organizationId: string,
 ): Promise<BusinessFileRow[]> {
+  if (isOfflinePlayground()) return [];
   return cached(`bizfiles:${organizationId}`, ORG_CACHE_TTL_MS, async () => {
     const supabase = getSupabase();
     const { data, error } = await supabase

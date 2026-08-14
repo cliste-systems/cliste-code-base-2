@@ -1,6 +1,6 @@
 import type { CallCostEstimateRecord } from './call_cost_estimate.js';
 import { redactPii } from './gdpr.js';
-import { getSupabaseClient } from './supabase.js';
+import { getSupabaseClient, isOfflinePlayground } from './supabase.js';
 
 function directDbFallbackAllowed(): boolean {
   return Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY?.trim());
@@ -16,6 +16,7 @@ export async function insertCallLog(input: {
   aiSummary?: string | null;
   costEstimate?: CallCostEstimateRecord | null;
 }): Promise<string | null> {
+  if (isOfflinePlayground()) return null;
   if (!directDbFallbackAllowed()) {
     console.error(
       '[call_logs] CRITICAL: direct insert blocked — set SUPABASE_SERVICE_ROLE_KEY or fix voice webhook',
@@ -56,6 +57,7 @@ export async function updateCallLogEnrichment(
     costEstimate?: CallCostEstimateRecord | null;
   },
 ): Promise<boolean> {
+  if (isOfflinePlayground()) return false;
   if (!directDbFallbackAllowed()) {
     console.error('[call_logs] CRITICAL: enrichment update blocked — no service role');
     return false;

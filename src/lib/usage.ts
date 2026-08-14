@@ -1,4 +1,4 @@
-import { getSupabaseClient } from './supabase.js';
+import { getSupabaseClient, isOfflinePlayground } from './supabase.js';
 
 /**
  * Per-call metering for Stripe Billing overage.
@@ -25,6 +25,7 @@ export type StartUsageInput = {
 };
 
 export async function startUsageRecord(input: StartUsageInput): Promise<string | null> {
+  if (isOfflinePlayground()) return null;
   try {
     const supabase = getSupabaseClient();
     const { data, error } = await supabase
@@ -60,7 +61,7 @@ export async function finishUsageRecord(input: {
   usageId: string;
   durationSeconds: number;
 }): Promise<void> {
-  if (!input.usageId) {
+  if (isOfflinePlayground() || !input.usageId) {
     return;
   }
   // Bill actual talk time in minutes (2dp) — no per-call round-up.
@@ -132,6 +133,7 @@ export async function sumUsageMinutesThisPeriod(input: {
   organizationId: string;
   billingPeriodStart: string;
 }): Promise<number | null> {
+  if (isOfflinePlayground()) return 0;
   try {
     const supabase = getSupabaseClient();
     const { data, error } = await supabase
@@ -189,6 +191,7 @@ export async function sumUsageMinutesThisPeriod(input: {
  * crash). Safe to call from agent boot — runs once, fail-silent.
  */
 export async function reapZombieUsageRows(): Promise<void> {
+  if (isOfflinePlayground()) return;
   try {
     const supabase = getSupabaseClient();
     const cutoffIso = new Date(Date.now() - ZOMBIE_OPEN_AGE_MS).toISOString();

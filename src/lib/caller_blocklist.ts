@@ -13,19 +13,24 @@ import { createElevenLabsTts } from './elevenlabs-v3-http-tts.js';
 import { prepareHardcodedSpeechForTts } from './tts_text_sanitize.js';
 import { maskPhone } from './gdpr.js';
 import { classifyCallerLine } from './phone_classify.js';
-import { getSupabaseClient, resolveOrgVoiceId, type OrgCallConfig } from './supabase.js';
+import {
+  getSupabaseClient,
+  isOfflinePlayground,
+  resolveOrgVoiceId,
+  type OrgCallConfig,
+} from './supabase.js';
 import { postCallComplete } from './voice_api.js';
 
 export const ANONYMOUS_CALLER_E164 = '+anonymous';
 
 export function blockedCallSpokenMessage(businessName: string): string {
   const name = businessName.trim() || 'this business';
-  return `We're unable to put you through to ${name}. This line is operated by Cliste Systems on behalf of the business, and your number isn't authorised to connect. Goodbye.`;
+  return `We're unable to put you through to ${name}. This line is operated by Hello Cara, and your number isn't authorised to connect. Goodbye.`;
 }
 
 export function blockedCallDashboardSummary(businessName: string): string {
   const name = businessName.trim() || 'your business';
-  return `This caller tried to reach ${name}, but their number is on your blocklist. Cliste stopped the call before Cara could answer.`;
+  return `This caller tried to reach ${name}, but their number is on your blocklist. Hello Cara stopped the call before Cara could answer.`;
 }
 
 const E164_RE = /^\+\d{8,16}$/;
@@ -81,6 +86,7 @@ export async function checkCallerBlocklist(input: {
   callerE164: string;
   blockAnonymous: boolean;
 }): Promise<BlocklistCheckResult> {
+  if (isOfflinePlayground()) return 'allowed';
   if (isAnonymousCallerE164(input.callerE164)) {
     return input.blockAnonymous ? 'blocked' : 'allowed';
   }

@@ -35,6 +35,7 @@ apply to it directly — the hardening for public surfaces lives in
 1. **Secrets** — every secret should be a Railway Variable, never checked in.
    Confirm `STRIPE_SECRET_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `TWILIO_AUTH_TOKEN`,
    `LIVEKIT_API_SECRET` are set as Railway variables and marked sealed.
+   Set `CLISTE_APP_URL` to the Hello Cara dashboard origin (`https://app.hellocara.ie`) so voice webhooks reach the Next.js app.
 2. **Team access** — enforce 2FA on every Railway team member. Remove anyone
    who does not need access.
 3. **Deployment logs** — Railway retains logs; phone numbers are already
@@ -58,4 +59,4 @@ apply to it directly — the hardening for public surfaces lives in
 ## Related
 
 - `../cliste-code-base-1/SECURITY_CLOUDFLARE.md` — edge hardening for the
-  public-facing Next.js app.
+  public-facing Hello Cara dashboard (`https://app.hellocara.ie`).

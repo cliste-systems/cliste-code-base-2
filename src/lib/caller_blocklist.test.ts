@@ -28,6 +28,6 @@ describe('caller_blocklist', () => {
   it('builds spoken block message with business name', () => {
     const text = blockedCallSpokenMessage('Bloom Beauty Studio');
     assert.match(text, /Bloom Beauty Studio/);
-    assert.match(text, /Cliste Systems/i);
+    assert.match(text, /Hello Cara/i);
   });
 });
