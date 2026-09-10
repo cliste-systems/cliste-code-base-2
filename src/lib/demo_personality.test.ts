@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  buildDemoAfterConsentAckOnly,
   buildDemoAfterConsentReply,
   buildDemoAskNameAgainReply,
   buildDemoConversationalReplySteer,
@@ -125,6 +126,14 @@ describe('demo_personality', () => {
     assert.match(out, /alright|okay/i);
     assert.doesNotMatch(out, /heads-up/i);
     assert.doesNotMatch(out, /perfect/i);
+    assert.doesNotMatch(out, /^Sound,/i);
+  });
+
+  it('never opens consent or ack lines with Sound', () => {
+    for (const name of ['Mary', 'John', 'Brendan']) {
+      assert.doesNotMatch(buildDemoRecordingConsentReply(name), /^Sound[,\s]/i);
+      assert.doesNotMatch(buildDemoAfterConsentAckOnly(name), /^Sound[,\s]/i);
+    }
   });
 
   it('after-consent reply opens with how are you keeping', () => {

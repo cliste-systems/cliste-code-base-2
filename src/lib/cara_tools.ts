@@ -96,6 +96,8 @@ export type CaraAgentUserData = {
   disclosureConfirmed: boolean;
   /** Hello Cara demo line — stricter tool and closing rules. */
   demoLine?: boolean;
+  /** Vanilla Cartesia Siobhan baseline — no demo orchestrator or TTS sanitization. */
+  factoryFreshLine?: boolean;
   /** Next session.say() should be one Cartesia synthesis (programmatic lines). */
   preparedSpeechSingleUtteranceNext?: boolean;
   endCallTarget?: { roomName: string; callerIdentity: string };

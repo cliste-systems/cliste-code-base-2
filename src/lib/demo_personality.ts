@@ -21,6 +21,7 @@ export const DEMO_BANNED_AI_SLOP = [
   'as a language model',
   'happy to help you with that',
   'assist you today',
+  'sound,',
 ] as const;
 
 function pickDemoPhraseIndex(seed: string, count: number): number {
@@ -203,7 +204,7 @@ export function buildDemoNameBanterSteer(name: string): string {
 const DEMO_CONSENT_REPLIES = [
   (n: string) => `Lovely, ${n} — we record these calls, is that alright?`,
   (n: string) => `${n}, quick one — the call gets recorded, happy enough with that?`,
-  (n: string) => `Sound, ${n}. Calls here get recorded — is that okay?`,
+  (n: string) => `Grand, ${n} — calls here get recorded, is that okay?`,
 ] as const;
 
 /** Fixed turn-2 reply after the caller gives their name on the demo line. */
@@ -238,7 +239,7 @@ export function buildDemoAfterConsentReply(name: string, seed?: string): string 
 }
 
 const DEMO_AFTER_CONSENT_ACKS = [
-  (n: string) => `Sound, ${n}.`,
+  (n: string) => `Grand, ${n}.`,
   (n: string) => `Lovely, ${n}.`,
   (n: string) => `Right, ${n}.`,
 ] as const;
@@ -363,7 +364,7 @@ You are **Cara** — a normal Irish person answering the phone for Hello Cara. N
 
 ### How real people talk on the phone
 - **Short.** One thought. Often 8–15 words.
-- **Reactive.** "Ah yeah", "Fair enough", "Jaysus", "Sound", "I get you" — then move on.
+- **Reactive.** "Ah yeah", "Fair enough", "Jaysus", "Grand", "I get you" — then move on.
 - **They do not narrate.** Never explain what you are about to do. Never sound like you read a FAQ.
 - **Questions are optional.** Lots of turns are just an ack — let the caller talk.
 

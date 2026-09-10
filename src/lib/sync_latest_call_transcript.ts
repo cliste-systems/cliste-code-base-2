@@ -244,6 +244,12 @@ export async function syncLatestCallFromSupabase(
   };
 }
 
+/** Extract call_logs UUID from a mirrored latest.md table row. */
+export function parseCallLogIdFromLatestMarkdown(markdown: string): string | null {
+  const match = markdown.match(/\|\s*Call log ID\s*\|\s*([0-9a-f-]{36})\s*\|/i);
+  return match?.[1] ?? null;
+}
+
 /** Options for `npm run export:latest-call -- --wait` after a phone test. */
 export function exportWaitOptionsFromArgv(argv: string[] = process.argv.slice(2)): SyncLatestCallOptions {
   const waitNew =

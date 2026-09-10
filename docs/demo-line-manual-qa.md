@@ -4,6 +4,27 @@
 **Baseline call (pre-playbook):** `d42c3254` — good role-play setup, improvised beats 3–4  
 **After deploy:** run these paths and compare transcripts in Call Testing.
 
+## Before you push demo-line changes
+
+Run locally — **do not deploy with red tests**:
+
+```bash
+npm run verify
+npm test -- --run
+npm run test:demo-golden
+```
+
+Golden suite locks Margaret, Mary wellbeing double-speak, consent flows, and post-open steers. If a phone call regresses, add a turn sequence to `src/lib/demo_turn_arbiter.test.ts` before fixing.
+
+## Local testing (no Railway deploy)
+
+1. Pause the Railway worker **or** set `LIVEKIT_AGENT_NAME=cliste-voice-local` so local dev does not steal jobs.
+2. `npm run dev` (or `dev:trace`) with the same `LIVEKIT_*` creds as production.
+3. Use LiveKit Agents Playground with `DEFAULT_ORG_PHONE=+353749389378`.
+4. After a call: `npm run export:latest-call -- --wait` → `call-transcripts/latest.md`.
+
+**Demo TTS lock:** keep `CARA_TTS_PROVIDER=cartesia-inference` (Siobhan) unless golden tests pass and you run one phone smoke call.
+
 ## Pre-call
 
 - [ ] Worker deployed with conversational demo behaviour (Railway latest commit)

@@ -13,7 +13,11 @@ import {
 
 const hours = {
   monday: { open: true, start: '08:00', end: '21:00' },
+  tuesday: { open: true, start: '08:00', end: '21:00' },
+  wednesday: { open: true, start: '08:00', end: '21:00' },
   thursday: { open: true, start: '08:00', end: '21:00' },
+  friday: { open: true, start: '08:00', end: '21:00' },
+  saturday: { open: true, start: '09:00', end: '18:00' },
   sunday: { open: true, start: '09:00', end: '18:00' },
 };
 
@@ -48,10 +52,10 @@ describe('retail_hours', () => {
   it('builds spoken retail hours without LLM', () => {
     const line = buildRetailHoursSpokenReply(
       hours,
-      "Very good. Yeah. He's open tomorrow.",
+      'Are you open on Sunday?',
       'Europe/Dublin',
     );
-    assert.match(line ?? '', /Tomorrow we're open from/i);
+    assert.match(line ?? '', /On Sunday we're open from/i);
     assert.match(line ?? '', /nine in the morning/i);
     assert.match(line ?? '', /six in the evening/i);
   });

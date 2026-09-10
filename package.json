@@ -24,6 +24,7 @@
     "preview:persona": "tsx scripts/preview-persona.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/lib/**/*.test.ts",
+    "test:demo-golden": "tsx --test src/lib/demo_turn_arbiter.test.ts src/lib/demo_opening_orchestrator.test.ts",
     "knip": "knip"
   },
   "keywords": [],

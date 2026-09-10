@@ -44,7 +44,7 @@ import {
 } from './lib/call_participant.js';
 import { createElevenLabsTts, isElevenV3Model } from './lib/elevenlabs-v3-http-tts.js';
 import { prewarmConfiguredGreetingCaches } from './lib/greeting_prewarm.js';
-import { resolveTtsConfig } from './lib/tts_config.js';
+import { resolveTtsConfig, CARTESIA_SIOBHAN_VOICE_ID } from './lib/tts_config.js';
 import { greetingIncludesAiDisclosure } from './lib/greeting_compliance.js';
 import {
   ensureGreetingPcmCached,
@@ -67,6 +67,7 @@ import {
   postPipelineIncident,
 } from './lib/pipeline_incident.js';
 import { isTestCall } from './lib/test_call.js';
+import { isFactoryFreshLine } from './lib/factory_fresh_line.js';
 import { getActiveCallTestProfile } from './lib/test_profile.js';
 import {
   detectDemoScenario,
@@ -81,22 +82,11 @@ import { buildDemoCallClosingLine, assistantAskedDemoWrap } from './lib/natural_
 import { caraTypingSoundEnabled, playTypingSound } from './lib/callback_audio.js';
 import { persistTestCallReportFromWorker } from './lib/persist_test_call_report.js';
 import {
-  classifyHelloCaraAboutQuestion,
-  helloCaraAboutSteerInstructions,
-} from './lib/hello_cara_website_facts.js';
-import {
-  advanceDemoOpening,
-  formatDemoOpeningDiagMeta,
   isDemoOpeningComplete,
   syncDemoOpeningPhase,
-  type DemoOpeningAction,
 } from './lib/demo_opening_orchestrator.js';
-import {
-  buildDemoConversationalReplySteer,
-  buildDemoFollowMotivationSteer,
-  buildDemoWellbeingAckReply,
-  callerSoundsLikeHelloCaraMotivation,
-} from './lib/demo_personality.js';
+import { executeDemoTurnAction } from './lib/demo_speech_executor.js';
+import { resolveDemoTurnAction } from './lib/demo_turn_arbiter.js';
 import {
   buildDemoCallerReplyNudgeSteer,
   buildDemoNeverSilentSteer,
@@ -116,12 +106,9 @@ import {
   assistantClaimsLinkWasSent,
   assistantSoundsLikeCorporateAssist,
   callerAskedNewQuestion,
-  callerAsksDemoMenu,
   callerExplicitlyRequestedHangup,
   callerPivotedFromSmsConsent,
   callerSaidNothingElse,
-  callerSoundsLikeAudioCheck,
-  callerSoundsLikeVagueDemoOpening,
   callerWindingDownCall,
   assistantSoundsLikeTradeMenu,
   assistantOffersRedundantSampleCall,
@@ -419,13 +406,24 @@ export default defineAgent({
       resolveCalledNumber(routing.phone, org.phone_number) ||
       org.phone_number?.trim() ||
       '';
+    const factoryFreshLine =
+      isFactoryFreshLine(calledNumber) ||
+      isFactoryFreshLine(routing.phone) ||
+      isFactoryFreshLine(org.phone_number);
     const testCall =
-      isTestCall(calledNumber) ||
-      isTestCall(routing.phone) ||
-      isTestCall(org.phone_number);
-    const testProfile = testCall ? await getActiveCallTestProfile() : null;
+      !factoryFreshLine &&
+      (isTestCall(calledNumber) ||
+        isTestCall(routing.phone) ||
+        isTestCall(org.phone_number));
+    const testProfile =
+      factoryFreshLine || !testCall ? null : await getActiveCallTestProfile();
     const demoScenarios: DemoScenario[] = testCall ? await loadDemoScenarios() : [];
-    if (testCall) {
+    if (factoryFreshLine) {
+      console.info('[agent] factory_fresh_line', {
+        calledNumber: maskPhone(calledNumber),
+        tts: 'cartesia/sonic-3:siobhan',
+      });
+    } else if (testCall) {
       console.info('[agent] test_call', {
         calledNumber: maskPhone(calledNumber),
         profile: testProfile?.name ?? '(none)',
@@ -483,10 +481,18 @@ export default defineAgent({
     const hasCallerIdOnFile =
       callerLine.kind !== 'unknown' && Boolean(callerLine.e164);
 
-    const ttsConfig = resolveTtsConfig({
-      testProfile,
-      orgVoiceId: resolveOrgVoiceId(org),
-    });
+    const ttsConfig = factoryFreshLine
+      ? {
+          provider: 'cartesia-inference' as const,
+          model: process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3',
+          voiceId: process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() || CARTESIA_SIOBHAN_VOICE_ID,
+          language: process.env.LIVEKIT_INFERENCE_TTS_LANGUAGE?.trim() || 'en',
+          label: `factory-fresh:${process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3'}:siobhan`,
+        }
+      : resolveTtsConfig({
+          testProfile,
+          orgVoiceId: resolveOrgVoiceId(org),
+        });
     const useCartesiaInference = ttsConfig.provider === 'cartesia-inference';
     const activeTtsModel = ttsConfig.model;
     const activeVoiceId = ttsConfig.voiceId;
@@ -530,9 +536,10 @@ export default defineAgent({
       seed: personaSeed,
       ...(localHour != null && Number.isFinite(localHour) ? { localHour } : {}),
     });
-    const useDemoPersonaGreeting = testCall;
-    const playbackGreetingText =
-      useDemoPersonaGreeting && callPersona
+    const useDemoPersonaGreeting = testCall && !factoryFreshLine;
+    const playbackGreetingText = factoryFreshLine
+      ? greetingText || "Hello, you're through to Cara."
+      : useDemoPersonaGreeting && callPersona
         ? buildDemoPersonaGreeting(callPersona, personaSeed)
         : greetingText;
     const skipGreetingCache = useDemoPersonaGreeting && Boolean(playbackGreetingText);
@@ -556,7 +563,7 @@ export default defineAgent({
       businessType: org.agent_business_type,
       openingGreetingDelivered: Boolean(playbackGreetingText),
       structuredHoursBlock,
-      demoMode: testCall,
+      demoMode: testCall && !factoryFreshLine,
       ...(callPersona ? { persona: callPersona } : {}),
       ...(testCall
         ? { demoPlaybookBlock: demoPlaybookBlockFromScenarios(demoScenarios) }
@@ -686,6 +693,7 @@ export default defineAgent({
       },
       disclosureConfirmed: greetingIncludesAiDisclosure(greetingText),
       demoLine: testCall,
+      factoryFreshLine,
       ...(callPersona ? { callPersona } : {}),
       ...(endCallTarget ? { endCallTarget } : {}),
     };
@@ -1110,34 +1118,6 @@ export default defineAgent({
       safeGenerateReply(instructions, { force: true, skipBeatHint: true });
     };
 
-    const executeDemoOpeningAction = (action: DemoOpeningAction, meta?: Record<string, unknown>) => {
-      if (isCallEnding() || action.kind === 'none') return;
-      clearGreetingInterruptFallbackTimer();
-      clearDemoReplyGuaranteeTimers();
-      clearCallerReplyNudgeTimer();
-      cancelInFlightReply();
-      demoOpeningTurnCommitted = true;
-      demoSteerHandledThisTurn = true;
-      diag.push('info', 'demo_opening_action', {
-        ...formatDemoOpeningDiagMeta(action, syncDemoOpeningPhase(session.userData.sessionFlags)),
-        ...meta,
-      });
-      if (action.kind === 'programmatic') {
-        diag.push('info', action.event, meta ?? {});
-        if (action.event === 'demo_after_consent_reply') {
-          session.userData.sessionFlags.demoAwaitingWellbeingReply = true;
-        }
-        programmaticSpeechPending += 1;
-        sayPrepared(session, action.text, {
-          allowInterruptions: true,
-          addToChatCtx: true,
-        });
-        return;
-      }
-      diag.push('info', action.event, meta ?? {});
-      steerReply(action.instructions);
-    };
-
     const appendDemoBeatHint = (instructions: string): string => {
       if (!testCall) return instructions;
       if (/\[Demo playbook/i.test(instructions)) return instructions;
@@ -1399,6 +1379,29 @@ export default defineAgent({
       sayPrepared(session, text, { addToChatCtx: false, ...opts });
     };
 
+    const demoSpeechDeps = {
+      flags: session.userData.sessionFlags,
+      isCallEnding,
+      cancelInFlightReply,
+      clearDemoReplyGuaranteeTimers,
+      clearCallerReplyNudgeTimer,
+      clearGreetingInterruptFallbackTimer,
+      sayPrepared: (text: string, opts?: { allowInterruptions?: boolean; addToChatCtx?: boolean }) => {
+        programmaticSpeechPending += 1;
+        sayPrepared(session, text, { addToChatCtx: false, ...opts });
+      },
+      steerReply,
+      onDisclosureConfirmed: () => {
+        session.userData.disclosureConfirmed = true;
+      },
+      onWellbeingQuestionAsked: () => {
+        session.userData.sessionFlags.demoAwaitingWellbeingReply = true;
+      },
+      pushDiag: (level: 'info' | 'warn', event: string, meta?: Record<string, unknown>) => {
+        diag.push(level, event, meta);
+      },
+    };
+
     const ingestCallerFinalText = (
       text: string,
       bumpReason: string,
@@ -1481,141 +1484,26 @@ export default defineAgent({
         void safeGenerateReply(
           'That last utterance may be STT garble — do not treat it as a confirmed booking request. Ask one short clarifying question about what they need.',
         );
-      } else if (
-        testCall &&
-        !isDemoOpeningComplete(session.userData.sessionFlags) &&
-        !isCallEnding()
-      ) {
-        const flags = session.userData.sessionFlags;
-        const priorPhase = syncDemoOpeningPhase(flags);
-        const wasOpen = flags.demoChitchatOpened === true;
-        const result = advanceDemoOpening({ callerText: text, flags });
-        if (!wasOpen && flags.demoChitchatOpened) {
-          session.userData.disclosureConfirmed = true;
-        }
-        const nextPhase = syncDemoOpeningPhase(flags);
-        if (result.nextPhase && result.nextPhase !== priorPhase) {
-          diag.push('info', 'demo_opening_phase', {
-            from: priorPhase,
-            to: result.nextPhase,
-            event: result.action.event,
-          });
-        }
-        const actionMeta =
-          result.action.event === 'demo_recording_consent_reply'
-            ? { name: flags.demoCallerName }
-            : result.action.event === 'demo_ask_name_steer'
-              ? {
-                  kind:
-                    callerSoundsLikeAudioCheck(text) ? 'audio_check' : 'awaiting_name',
-                  attempt: flags.demoNameAskCount,
-                }
-              : result.action.event === 'demo_after_consent_deferred_chitchat' ||
-                  result.action.event === 'demo_after_consent_reply'
-                ? { name: flags.demoCallerName ?? 'there' }
-                : result.action.event === 'demo_ask_name_programmatic'
-                  ? { attempts: flags.demoNameAskCount }
-                  : undefined;
-        executeDemoOpeningAction(result.action, actionMeta);
-      } else if (
-        testCall &&
-        session.userData.sessionFlags.demoChitchatOpened &&
-        session.userData.sessionFlags.demoAwaitingWellbeingReply &&
-        !isCallEnding()
-      ) {
-        session.userData.sessionFlags.demoAwaitingWellbeingReply = false;
-        demoSteerHandledThisTurn = true;
-        clearDemoReplyGuaranteeTimers();
-        clearCallerReplyNudgeTimer();
-        cancelInFlightReply();
-        sayProgrammatic(buildDemoWellbeingAckReply(text));
-      } else if (
-        testCall &&
-        session.userData.sessionFlags.demoChitchatOpened &&
-        !session.userData.sessionFlags.demoScenarioSlug &&
-        !session.userData.sessionFlags.demoAwaitingWellbeingReply &&
-        !callerSoundsLikeVagueDemoOpening(text) &&
-        !callerAsksDemoMenu(text) &&
-        !classifyHelloCaraAboutQuestion(text) &&
-        !callerSoundsLikeHelloCaraMotivation(text) &&
-        !detectDemoScenario(text, demoScenarios) &&
-        !isCallEnding() &&
-        text.trim().length > 0
-      ) {
-        steerReply(buildDemoConversationalReplySteer(text));
-      } else if (
-        testCall &&
-        classifyHelloCaraAboutQuestion(text) &&
-        session.userData.sessionFlags.demoChitchatOpened &&
-        !isCallEnding()
-      ) {
-        const about = classifyHelloCaraAboutQuestion(text)!;
-        const flags = session.userData.sessionFlags;
-        if (!flags.demoScenarioSlug) {
-          flags.demoScenarioSlug = 'general';
-          flags.demoScenarioBeat = about === 'who-made' ? 2 : 1;
-          diag.push('info', 'demo_scenario_start', {
-            slug: 'general',
-            snippet: text.slice(0, 120),
-            about,
-          });
-        }
-        steerReply(helloCaraAboutSteerInstructions(about));
-      } else if (
-        testCall &&
-        callerAsksDemoMenu(text) &&
-        session.userData.sessionFlags.demoChitchatOpened &&
-        !session.userData.sessionFlags.demoScenarioSlug &&
-        !isCallEnding()
-      ) {
-        const flags = session.userData.sessionFlags;
-        flags.demoScenarioSlug = 'general';
-        flags.demoScenarioBeat = 1;
-        diag.push('info', 'demo_scenario_start', {
-          slug: 'general',
-          snippet: text.slice(0, 120),
+      } else if (testCall && !isCallEnding()) {
+        demoSpeechDeps.flags = session.userData.sessionFlags;
+        const resolution = resolveDemoTurnAction({
+          callerText: text,
+          flags: session.userData.sessionFlags,
+          demoScenarios,
+          callEnding: isCallEnding(),
+          agentSpeaking:
+            session.agentState === 'speaking' ||
+            session.userState === 'speaking' ||
+            programmaticSpeechPending > 0,
         });
-        steerReply(
-          'The caller asked what they can demo. ONE warm conversational line (~18 words). Do NOT list trades. Continue naturally — reflect the chat so far, then gently explore what kind of business they have in mind.',
-        );
-      } else if (
-        testCall &&
-        session.userData.sessionFlags.demoChitchatOpened &&
-        !session.userData.sessionFlags.demoScenarioSlug &&
-        callerSoundsLikeVagueDemoOpening(text) &&
-        !isCallEnding()
-      ) {
-        session.userData.sessionFlags.demoAwaitingWellbeingReply = false;
-        steerReply(buildDemoConversationalReplySteer(text));
-      } else if (
-        testCall &&
-        session.userData.sessionFlags.demoChitchatOpened &&
-        !session.userData.sessionFlags.demoScenarioSlug &&
-        !callerSoundsLikeVagueDemoOpening(text) &&
-        !callerAsksDemoMenu(text) &&
-        !classifyHelloCaraAboutQuestion(text) &&
-        !isCallEnding() &&
-        (callerSoundsLikeHelloCaraMotivation(text) || detectDemoScenario(text, demoScenarios))
-      ) {
-        const flags = session.userData.sessionFlags;
-        const detected = detectDemoScenario(text, demoScenarios);
-        flags.demoScenarioSlug = detected ?? 'general';
-        flags.demoScenarioBeat = 1;
-        diag.push('info', 'demo_motivation_steer', {
-          slug: flags.demoScenarioSlug,
-          snippet: text.slice(0, 120),
-        });
-        steerReply(buildDemoFollowMotivationSteer(text, detected));
-      } else if (
-        testCall &&
-        !isCallEnding()
-      ) {
-        const flags = session.userData.sessionFlags;
-        if (
-          flags.demoScenarioSlug &&
-          (flags.demoScenarioBeat ?? 0) === 3 &&
-          caraTypingSoundEnabled()
-        ) {
+        const speechStarted = executeDemoTurnAction(resolution, demoSpeechDeps);
+        if (speechStarted || resolution.action.handled) {
+          demoSteerHandledThisTurn = true;
+          if (resolution.action.kind === 'opening') {
+            demoOpeningTurnCommitted = true;
+          }
+        }
+        if (resolution.action.kind === 'typing_sound' && caraTypingSoundEnabled()) {
           playTypingSound(session);
         }
       }
@@ -1808,6 +1696,8 @@ export default defineAgent({
     const resetDeadAirTimer = () => {
       clearDeadAirTimers();
       if (isCallEnding()) return;
+      // Demo line: never auto-prompt or auto-hangup on silence — callers explore at their pace.
+      if (testCall) return;
       const f = session.userData.sessionFlags;
       if (testCall && !f.demoChitchatOpened) return;
       if (testCall && f.demoAwaitingWellbeingReply) return;
@@ -2049,6 +1939,7 @@ export default defineAgent({
         testCall &&
         role === 'assistant' &&
         assistantSoundsLikeTradeMenu(text) &&
+        flags.demoChitchatOpened &&
         !flags.endPhoneCallUsed
       ) {
         console.warn('[agent] blocked demo trade menu list');
@@ -2061,6 +1952,7 @@ export default defineAgent({
         testCall &&
         role === 'assistant' &&
         assistantOffersRedundantSampleCall(text) &&
+        flags.demoChitchatOpened &&
         !flags.endPhoneCallUsed
       ) {
         console.warn('[agent] blocked redundant sample-call offer on demo line');
@@ -2120,10 +2012,17 @@ export default defineAgent({
         corporateAssistCorrectedEpoch !== replyTurnEpoch
       ) {
         corporateAssistCorrectedEpoch = replyTurnEpoch;
-        console.warn('[agent] blocked corporate assist phrasing');
-        steerReply(
-          'Do NOT say "I\'m here to assist" or "What can I assist you with". Reply like a friendly Irish shop worker — e.g. "I\'m good thanks — yourself?" if they asked how you are, otherwise answer their question in one warm line.',
-        );
+        if (testCall && !flags.demoChitchatOpened) {
+          console.warn('[agent] ignored corporate assist phrasing during demo opening');
+          diag.push('warn', 'demo_opening_corporate_assist_ignored', {
+            snippet: text.slice(0, 120),
+          });
+        } else {
+          console.warn('[agent] blocked corporate assist phrasing');
+          steerReply(
+            'Do NOT say "I\'m here to assist" or "What can I assist you with". Reply like a friendly Irish shop worker — e.g. "I\'m good thanks — yourself?" if they asked how you are, otherwise answer their question in one warm line.',
+          );
+        }
       }
 
       if (
@@ -2533,6 +2432,9 @@ export default defineAgent({
           this.session.userData.preparedSpeechSingleUtteranceNext === true;
         this.singleUtteranceTtsNext = false;
         this.session.userData.preparedSpeechSingleUtteranceNext = false;
+        if (this.session.userData.factoryFreshLine) {
+          return voice.Agent.default.ttsNode(this, text, modelSettings);
+        }
         return voice.Agent.default.ttsNode(
           this,
           buildTtsNodeInputStream(text, {

@@ -7,9 +7,23 @@ import {
 } from './sync_latest_call_transcript.js';
 
 describe('exportWaitOptionsFromArgv', () => {
-  it('defaults to wait with minCreatedAt filter', () => {
+  it('defaults to no wait unless CARA_TRANSCRIPT_WAIT=1', () => {
+    const prev = process.env.CARA_TRANSCRIPT_WAIT;
+    delete process.env.CARA_TRANSCRIPT_WAIT;
+    try {
+      const opts = exportWaitOptionsFromArgv([]);
+      assert.equal(opts.wait, false);
+      assert.ok(Number.isNaN(opts.minCreatedAtMs));
+      assert.equal(opts.requireComplete, true);
+    } finally {
+      if (prev === undefined) delete process.env.CARA_TRANSCRIPT_WAIT;
+      else process.env.CARA_TRANSCRIPT_WAIT = prev;
+    }
+  });
+
+  it('--wait enables wait with minCreatedAt filter', () => {
     const before = Date.now();
-    const opts = exportWaitOptionsFromArgv([]);
+    const opts = exportWaitOptionsFromArgv(['--wait']);
     assert.equal(opts.wait, true);
     assert.ok(Number.isFinite(opts.minCreatedAtMs));
     assert.ok((opts.minCreatedAtMs as number) <= before);
