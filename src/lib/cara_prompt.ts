@@ -1,3 +1,4 @@
+import { DEFAULT_ELEVEN_TTS_MODEL } from './tts_config.js';
 import { isElevenV3Model } from './elevenlabs-v3-http-tts.js';
 import type { CallerLineInfo } from './phone_classify.js';
 import { formatDemoScenariosForPrompt } from './demo_scenarios.js';
@@ -44,7 +45,7 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
     niche: input.niche,
     businessType: input.businessType,
   });
-  const ttsModel = input.ttsModel?.trim() || 'eleven_turbo_v2_5';
+  const ttsModel = input.ttsModel?.trim() || DEFAULT_ELEVEN_TTS_MODEL;
   const v3TagHint = isElevenV3Model(ttsModel)
     ? '\nWhen speaking (not legal disclosure): sparing v3 tags [warm] or [pause] only — never in the AI/recording notice.'
     : '';

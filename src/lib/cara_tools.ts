@@ -73,6 +73,12 @@ export type CaraSessionFlags = {
   demoDeferredChitchat?: string | null;
   /** Spoken/steered name asks while still waiting for a plausible first name. */
   demoNameAskCount?: number;
+  /** Spoken/steered consent retries while still waiting for a clear yes/no. */
+  demoConsentRetryCount?: number;
+  /** Derived opening phase for diagnostics — greeting → await_name → await_consent → open. */
+  demoOpeningPhase?: 'greeting' | 'await_name' | 'await_consent' | 'open';
+  /** Waiting for caller to answer "how are you keeping?" — suppress dead-air hangup. */
+  demoAwaitingWellbeingReply?: boolean;
   /** Casual "who am I talking to?" moment already used. */
   demoPersonalityNameAskUsed?: boolean;
 };

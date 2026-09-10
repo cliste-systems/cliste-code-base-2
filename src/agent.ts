@@ -85,18 +85,16 @@ import {
   helloCaraAboutSteerInstructions,
 } from './lib/hello_cara_website_facts.js';
 import {
-  buildDemoAfterConsentAckOnly,
-  buildDemoAfterConsentReply,
-  buildDemoAskNameAgainReply,
-  buildDemoAskNameSteer,
+  advanceDemoOpening,
+  formatDemoOpeningDiagMeta,
+  isDemoOpeningComplete,
+  syncDemoOpeningPhase,
+  type DemoOpeningAction,
+} from './lib/demo_opening_orchestrator.js';
+import {
   buildDemoConversationalReplySteer,
   buildDemoFollowMotivationSteer,
-  buildDemoRecordingConsentReminderSteer,
-  buildDemoRecordingConsentReply,
-  buildDemoRecordingConsentRetrySteer,
-  buildDemoRecordingDeclineSteer,
   callerSoundsLikeHelloCaraMotivation,
-  extractDemoCallerNameResponse,
 } from './lib/demo_personality.js';
 import {
   buildDemoCallerReplyNudgeSteer,
@@ -121,10 +119,7 @@ import {
   callerExplicitlyRequestedHangup,
   callerPivotedFromSmsConsent,
   callerSaidNothingElse,
-  callerSoundsLikeAffirmativeConsent,
   callerSoundsLikeAudioCheck,
-  callerSoundsLikeRecordingDecline,
-  callerSoundsLikeSocialChitchat,
   callerSoundsLikeVagueDemoOpening,
   callerWindingDownCall,
   assistantSoundsLikeTradeMenu,
@@ -683,6 +678,9 @@ export default defineAgent({
         demoChitchatOpened: false,
         demoDeferredChitchat: null,
         demoNameAskCount: 0,
+        demoConsentRetryCount: 0,
+        demoOpeningPhase: 'greeting',
+        demoAwaitingWellbeingReply: false,
         demoPersonalityNameAskUsed: false,
       },
       disclosureConfirmed: greetingIncludesAiDisclosure(greetingText),
@@ -1021,6 +1019,7 @@ export default defineAgent({
     let lastCallerUtterance = '';
     let llmReplySpeechQueued = false;
     let demoSteerHandledThisTurn = false;
+    let demoOpeningTurnCommitted = false;
     let demoCallerTurnPendingAnswer = false;
 
     let thinkingStartedAt: number | null = null;
@@ -1090,6 +1089,34 @@ export default defineAgent({
       clearCallerReplyNudgeTimer();
       cancelInFlightReply();
       safeGenerateReply(instructions, { force: true, skipBeatHint: true });
+    };
+
+    const executeDemoOpeningAction = (action: DemoOpeningAction, meta?: Record<string, unknown>) => {
+      if (isCallEnding() || action.kind === 'none') return;
+      clearGreetingInterruptFallbackTimer();
+      clearDemoReplyGuaranteeTimers();
+      clearCallerReplyNudgeTimer();
+      cancelInFlightReply();
+      demoOpeningTurnCommitted = true;
+      demoSteerHandledThisTurn = true;
+      diag.push('info', 'demo_opening_action', {
+        ...formatDemoOpeningDiagMeta(action, syncDemoOpeningPhase(session.userData.sessionFlags)),
+        ...meta,
+      });
+      if (action.kind === 'programmatic') {
+        diag.push('info', action.event, meta ?? {});
+        if (action.event === 'demo_after_consent_reply') {
+          session.userData.sessionFlags.demoAwaitingWellbeingReply = true;
+        }
+        programmaticSpeechPending += 1;
+        sayPrepared(session, action.text, {
+          allowInterruptions: true,
+          addToChatCtx: true,
+        });
+        return;
+      }
+      diag.push('info', action.event, meta ?? {});
+      steerReply(action.instructions);
     };
 
     const appendDemoBeatHint = (instructions: string): string => {
@@ -1208,6 +1235,7 @@ export default defineAgent({
 
     const retryFailedReplyOnce = (source: string) => {
       if (replyRetryUsedForTurn || isCallEnding()) return;
+      if (testCall && !session.userData.sessionFlags.demoChitchatOpened) return;
       if (!canPlayRecoverySpeech()) return;
       if (session.userState === 'speaking') return;
       replyRetryUsedForTurn = true;
@@ -1309,9 +1337,11 @@ export default defineAgent({
     const scheduleGreetingInterruptFallback = () => {
       clearGreetingInterruptFallbackTimer();
       if (GREETING_INTERRUPT_FALLBACK_MS <= 0 || isCallEnding()) return;
+      if (testCall && !session.userData.sessionFlags.demoChitchatOpened) return;
       greetingInterruptFallbackTimer = setTimeout(() => {
         greetingInterruptFallbackTimer = null;
         if (isCallEnding()) return;
+        if (testCall && demoOpeningTurnCommitted) return;
         if (session.agentState === 'thinking' || session.agentState === 'speaking') return;
         if (generateReplyInFlight) return;
         console.warn('[agent] greeting_interrupt_fallback_reply');
@@ -1354,6 +1384,7 @@ export default defineAgent({
       at: number,
     ): boolean => {
       demoSteerHandledThisTurn = false;
+      demoOpeningTurnCommitted = false;
       if (testCall && allowBookingAutomation) {
         demoCallerTurnPendingAnswer = true;
       }
@@ -1431,43 +1462,62 @@ export default defineAgent({
         );
       } else if (
         testCall &&
-        session.userData.sessionFlags.demoRecordingConsentAsked &&
-        !session.userData.sessionFlags.demoChitchatOpened &&
+        !isDemoOpeningComplete(session.userData.sessionFlags) &&
         !isCallEnding()
       ) {
         const flags = session.userData.sessionFlags;
-        const name = flags.demoCallerName ?? 'there';
-        if (callerSoundsLikeAffirmativeConsent(text)) {
-          flags.demoChitchatOpened = true;
+        const priorPhase = syncDemoOpeningPhase(flags);
+        const wasOpen = flags.demoChitchatOpened === true;
+        const result = advanceDemoOpening({ callerText: text, flags });
+        if (!wasOpen && flags.demoChitchatOpened) {
           session.userData.disclosureConfirmed = true;
-          const deferred = flags.demoDeferredChitchat?.trim();
-          flags.demoDeferredChitchat = null;
-          if (deferred) {
-            diag.push('info', 'demo_after_consent_deferred_chitchat', { name });
-            programmaticSpeechPending += 1;
-            sayPrepared(session, buildDemoAfterConsentAckOnly(name), {
-              allowInterruptions: true,
-              addToChatCtx: true,
-            });
-            steerReply(buildDemoConversationalReplySteer(deferred));
-          } else {
-            diag.push('info', 'demo_after_consent_reply', { name });
-            programmaticSpeechPending += 1;
-            sayPrepared(session, buildDemoAfterConsentReply(name), {
-              allowInterruptions: true,
-              addToChatCtx: true,
-            });
-          }
-          demoSteerHandledThisTurn = true;
-        } else if (callerSoundsLikeRecordingDecline(text)) {
-          steerReply(buildDemoRecordingDeclineSteer());
-        } else if (callerSoundsLikeSocialChitchat(text)) {
-          flags.demoDeferredChitchat = text.trim();
-          steerReply(buildDemoRecordingConsentReminderSteer());
-          demoSteerHandledThisTurn = true;
-        } else {
-          steerReply(buildDemoRecordingConsentRetrySteer());
         }
+        const nextPhase = syncDemoOpeningPhase(flags);
+        if (result.nextPhase && result.nextPhase !== priorPhase) {
+          diag.push('info', 'demo_opening_phase', {
+            from: priorPhase,
+            to: result.nextPhase,
+            event: result.action.event,
+          });
+        }
+        const actionMeta =
+          result.action.event === 'demo_recording_consent_reply'
+            ? { name: flags.demoCallerName }
+            : result.action.event === 'demo_ask_name_steer'
+              ? {
+                  kind:
+                    callerSoundsLikeAudioCheck(text) ? 'audio_check' : 'awaiting_name',
+                  attempt: flags.demoNameAskCount,
+                }
+              : result.action.event === 'demo_after_consent_deferred_chitchat' ||
+                  result.action.event === 'demo_after_consent_reply'
+                ? { name: flags.demoCallerName ?? 'there' }
+                : result.action.event === 'demo_ask_name_programmatic'
+                  ? { attempts: flags.demoNameAskCount }
+                  : undefined;
+        executeDemoOpeningAction(result.action, actionMeta);
+      } else if (
+        testCall &&
+        session.userData.sessionFlags.demoChitchatOpened &&
+        session.userData.sessionFlags.demoAwaitingWellbeingReply &&
+        !isCallEnding()
+      ) {
+        session.userData.sessionFlags.demoAwaitingWellbeingReply = false;
+        steerReply(buildDemoConversationalReplySteer(text));
+      } else if (
+        testCall &&
+        session.userData.sessionFlags.demoChitchatOpened &&
+        !session.userData.sessionFlags.demoScenarioSlug &&
+        !session.userData.sessionFlags.demoAwaitingWellbeingReply &&
+        !callerSoundsLikeVagueDemoOpening(text) &&
+        !callerAsksDemoMenu(text) &&
+        !classifyHelloCaraAboutQuestion(text) &&
+        !callerSoundsLikeHelloCaraMotivation(text) &&
+        !detectDemoScenario(text, demoScenarios) &&
+        !isCallEnding() &&
+        text.trim().length > 0
+      ) {
+        steerReply(buildDemoConversationalReplySteer(text));
       } else if (
         testCall &&
         classifyHelloCaraAboutQuestion(text) &&
@@ -1486,52 +1536,6 @@ export default defineAgent({
           });
         }
         steerReply(helloCaraAboutSteerInstructions(about));
-      } else if (
-        testCall &&
-        !session.userData.sessionFlags.demoRecordingConsentAsked &&
-        !session.userData.sessionFlags.demoChitchatOpened &&
-        !isCallEnding()
-      ) {
-        const flags = session.userData.sessionFlags;
-        const volunteeredName = extractDemoCallerNameResponse(text);
-        if (volunteeredName) {
-          flags.demoCallerName = volunteeredName;
-          flags.demoNameBanterUsed = true;
-          flags.demoPostNameSteerUsed = true;
-          flags.demoRecordingConsentAsked = true;
-          diag.push('info', 'demo_recording_consent_reply', { name: volunteeredName });
-          programmaticSpeechPending += 1;
-          sayPrepared(session, buildDemoRecordingConsentReply(volunteeredName), {
-            allowInterruptions: true,
-            addToChatCtx: true,
-          });
-          demoSteerHandledThisTurn = true;
-        } else if (callerSoundsLikeAudioCheck(text)) {
-          flags.demoNameAskCount = (flags.demoNameAskCount ?? 0) + 1;
-          diag.push('info', 'demo_ask_name_steer', { kind: 'audio_check' });
-          steerReply(buildDemoAskNameSteer(text, { audioCheck: true }));
-          demoSteerHandledThisTurn = true;
-        } else {
-          if (callerSoundsLikeSocialChitchat(text)) {
-            flags.demoDeferredChitchat = text.trim();
-          }
-          flags.demoNameAskCount = (flags.demoNameAskCount ?? 0) + 1;
-          if ((flags.demoNameAskCount ?? 0) >= 3) {
-            diag.push('info', 'demo_ask_name_programmatic', { attempts: flags.demoNameAskCount });
-            programmaticSpeechPending += 1;
-            sayPrepared(session, buildDemoAskNameAgainReply(), {
-              allowInterruptions: true,
-              addToChatCtx: true,
-            });
-          } else {
-            diag.push('info', 'demo_ask_name_steer', {
-              kind: 'awaiting_name',
-              attempt: flags.demoNameAskCount,
-            });
-            steerReply(buildDemoAskNameSteer(text));
-          }
-          demoSteerHandledThisTurn = true;
-        }
       } else if (
         testCall &&
         callerAsksDemoMenu(text) &&
@@ -1556,6 +1560,7 @@ export default defineAgent({
         callerSoundsLikeVagueDemoOpening(text) &&
         !isCallEnding()
       ) {
+        session.userData.sessionFlags.demoAwaitingWellbeingReply = false;
         steerReply(buildDemoConversationalReplySteer(text));
       } else if (
         testCall &&
@@ -1771,6 +1776,8 @@ export default defineAgent({
       clearDeadAirTimers();
       if (isCallEnding()) return;
       const f = session.userData.sessionFlags;
+      if (testCall && !f.demoChitchatOpened) return;
+      if (testCall && f.demoAwaitingWellbeingReply) return;
       if (f.askedAnythingElse && f.callerRespondedAfterAnythingElse) return;
       if (f.bookingLinkSendInFlight) return;
       if (callerAwaitingReply) return;
@@ -2070,6 +2077,7 @@ export default defineAgent({
         role === 'assistant' &&
         assistantSoundsLikeCorporateAssist(text) &&
         !flags.endPhoneCallUsed &&
+        (!testCall || flags.demoChitchatOpened) &&
         corporateAssistCorrectedEpoch !== replyTurnEpoch
       ) {
         corporateAssistCorrectedEpoch = replyTurnEpoch;
@@ -2457,6 +2465,18 @@ export default defineAgent({
     class CaraVoiceAgent extends voice.Agent<CaraAgentUserData> {
       /** Next session.say() TTS should be one Cartesia synthesis (greeting). */
       singleUtteranceTtsNext = false;
+
+      override async onUserTurnCompleted(): Promise<void> {
+        if (
+          this.session.userData.demoLine &&
+          !isDemoOpeningComplete(this.session.userData.sessionFlags)
+        ) {
+          diag.push('info', 'demo_opening_suppressed_auto_reply', {
+            phase: syncDemoOpeningPhase(this.session.userData.sessionFlags),
+          });
+          throw new voice.StopResponse();
+        }
+      }
 
       override async ttsNode(
         text: ReadableStream<string>,

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { AudioByteStream, tokenize } from '@livekit/agents';
 import { AudioFrame } from '@livekit/rtc-node';
 
+import { DEFAULT_ELEVEN_TTS_MODEL } from './tts_config.js';
 import {
   type ElevenLabsHttpV3Config,
   isElevenV3Model,
@@ -16,7 +17,7 @@ import { prepareGreetingForTts } from './tts_text_sanitize.js';
 const GREETING_TTS_MODEL =
   process.env.GREETING_TTS_MODEL?.trim() ||
   process.env.ELEVEN_TTS_MODEL?.trim() ||
-  'eleven_turbo_v2_5';
+  DEFAULT_ELEVEN_TTS_MODEL;
 const DEFAULT_CACHE_DIR = '/tmp/greeting-cache';
 
 export function greetingAudioCacheKey(

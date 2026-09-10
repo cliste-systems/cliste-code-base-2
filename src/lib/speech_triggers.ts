@@ -246,10 +246,33 @@ export function callerSoundsLikeSocialChitchat(text: string): boolean {
   );
 }
 
+/** How-are-you / wellbeing small talk — not a consent answer or business question. */
+export function callerSoundsLikeWellbeingReply(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[!?.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  if (/\b(book|booking|appointment|schedule|cancel|reschedule|electrician|salon|demo an|hello cara)\b/.test(t)) {
+    return false;
+  }
+  return (
+    /\b(not too bad|not doing too bad|doing well|doing good|doing very good|i'?m good|very well|not bad|keeping well|keeping good|i'?m keeping|i'?m fine|i'?m alright)\b/.test(
+      t,
+    ) ||
+    /\b(how are you keeping|how are you doing|how are you today|how'?s it going|how'?s your day)\b/.test(
+      t,
+    )
+  );
+}
+
 /** Short hello / how-are-you reply at the start of a demo call — not a product question yet. */
 export function callerSoundsLikeVagueDemoOpening(text: string): boolean {
   if (callerAsksDemoMenu(text)) return false;
   if (callerSoundsLikeSocialChitchat(text)) return true;
+  if (callerSoundsLikeWellbeingReply(text)) return true;
   const t = text
     .trim()
     .toLowerCase()

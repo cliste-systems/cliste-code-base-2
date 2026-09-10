@@ -16,6 +16,8 @@ import {
 import type { AudioFrame } from '@livekit/rtc-node';
 import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 
+import { DEFAULT_ELEVEN_TTS_MODEL } from './tts_config.js';
+
 const AUTHORIZATION_HEADER = 'xi-api-key';
 const DEFAULT_BASE_URL = 'https://api.elevenlabs.io/v1';
 
@@ -70,7 +72,7 @@ export function resolveElevenLabsHttpV3Config(
   if (useWebsocket) {
     return null;
   }
-  const model = String(opts.model ?? 'eleven_turbo_v2_5');
+  const model = String(opts.model ?? DEFAULT_ELEVEN_TTS_MODEL);
   const encoding = opts.encoding ?? 'pcm_24000';
   const baseURL = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/$/, '');
   const apiKey =

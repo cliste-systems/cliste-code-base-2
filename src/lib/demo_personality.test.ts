@@ -69,6 +69,11 @@ describe('demo_personality', () => {
         `talking to ${name}`,
       );
       assert.equal(
+        extractDemoCallerNameResponse(`Hey, you're speaking with ${name}.`),
+        expected,
+        `speaking with ${name}`,
+      );
+      assert.equal(
         extractDemoCallerNameResponse(`My name is ${name}`),
         expected,
         `my name is ${name}`,

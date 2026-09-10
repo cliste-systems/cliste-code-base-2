@@ -3,6 +3,7 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 
 import {
   CARTESIA_SIOBHAN_VOICE_ID,
+  DEFAULT_ELEVEN_TTS_MODEL,
   DEFAULT_ELEVEN_VOICE_ID,
   resolveTtsConfig,
 } from './tts_config.js';
@@ -26,7 +27,7 @@ const elevenProfile = {
   voice_id: DEFAULT_ELEVEN_VOICE_ID,
   llm_model: null,
   stt_model: null,
-  tts_model: 'eleven_turbo_v2_5',
+  tts_model: 'eleven_v3',
   llm_provider: null,
   is_active: true,
 };
@@ -50,7 +51,7 @@ describe('resolveTtsConfig', () => {
     const cfg = resolveTtsConfig({ testProfile: cartesiaProfile, orgVoiceId: null });
     assert.equal(cfg.provider, 'elevenlabs');
     assert.equal(cfg.voiceId, DEFAULT_ELEVEN_VOICE_ID);
-    assert.equal(cfg.model, 'eleven_turbo_v2_5');
+    assert.equal(cfg.model, DEFAULT_ELEVEN_TTS_MODEL);
   });
 
   it('uses Cartesia when profile model is cartesia and env is not elevenlabs', () => {
@@ -63,6 +64,6 @@ describe('resolveTtsConfig', () => {
     const cfg = resolveTtsConfig({ testProfile: elevenProfile, orgVoiceId: null });
     assert.equal(cfg.provider, 'elevenlabs');
     assert.equal(cfg.voiceId, DEFAULT_ELEVEN_VOICE_ID);
-    assert.equal(cfg.model, 'eleven_turbo_v2_5');
+    assert.equal(cfg.model, DEFAULT_ELEVEN_TTS_MODEL);
   });
 });

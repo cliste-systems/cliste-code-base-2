@@ -26,6 +26,7 @@ const NOT_NAMES = new Set([
   'ireland',
   'keeping',
   'doing',
+  'very',
   'feeling',
   'having',
   'getting',
@@ -107,10 +108,10 @@ function scanDemoCallerName(text: string): string | null {
     new RegExp(`\\bname(?:'?s| is)\\s+(${NAME_TOKEN})\\b`, 'i'),
     new RegExp(`\\b(?:i'?m|i am)\\s+called\\s+(${NAME_TOKEN})\\b`, 'i'),
     new RegExp(`\\b(?:you'?re\\s+)?(?:speaking|talking) to\\s+(${NAME_TOKEN})\\b`, 'i'),
+    new RegExp(`\\b(?:you'?re\\s+)?(?:speaking|talking) with\\s+(${NAME_TOKEN})\\b`, 'i'),
     new RegExp(`\\bthrough to\\s+(${NAME_TOKEN})\\b`, 'i'),
     new RegExp(`\\b(?:i'?m|this is|it'?s)\\s+(${NAME_TOKEN})\\s+here\\b`, 'i'),
     new RegExp(`\\b(${NAME_TOKEN})\\s+here\\b`, 'i'),
-    new RegExp(`\\bwith\\s+(${NAME_TOKEN})\\b`, 'i'),
   ];
 
   for (const re of patterns) {
@@ -176,6 +177,22 @@ export function buildDemoAfterConsentReply(name: string): string {
 export function buildDemoAfterConsentAckOnly(name: string): string {
   const firstName = formatDemoFirstName(name);
   return `Great, thanks ${firstName}.`;
+}
+
+/** Single steer when consent is granted but chitchat was deferred — avoids programmatic + steer double-speak. */
+export function buildDemoAfterConsentDeferredSteer(name: string, deferredChitchat: string): string {
+  const firstName = formatDemoFirstName(name);
+  const snippet = deferredChitchat.trim().slice(0, 200);
+  return (
+    `Recording consent is confirmed. Say exactly: "Great, thanks ${firstName}." then ONE warm Irish line (~22 words) ` +
+    `responding to what they said: "${snippet}". LISTEN → ACKNOWLEDGE → RESPOND. ` +
+    'Do NOT ask "how are you keeping today?" again. Do not say "grand".'
+  );
+}
+
+/** Fixed programmatic reminder after consent steer cap — no further LLM consent retries. */
+export function buildDemoRecordingConsentProgrammaticReminder(): string {
+  return 'Just before we chat properly — is it okay if this call is recorded and transcribed?';
 }
 
 export function buildDemoRecordingConsentReminderSteer(): string {

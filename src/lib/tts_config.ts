@@ -6,6 +6,9 @@ export const CARTESIA_SIOBHAN_VOICE_ID = 'd79d2b77-9192-4e10-9407-5d43ca034803';
 /** Demo line ElevenLabs Irish female — override via ELEVEN_VOICE_ID. */
 export const DEFAULT_ELEVEN_VOICE_ID = 'odyUrTN5HMVKujvVAgWW';
 
+/** Default ElevenLabs model for live calls and cached greetings. */
+export const DEFAULT_ELEVEN_TTS_MODEL = 'eleven_v3';
+
 export type TtsProviderKind = 'elevenlabs' | 'cartesia-inference';
 
 export type ResolvedTtsConfig =
@@ -45,13 +48,19 @@ function resolveElevenVoiceId(input: {
   );
 }
 
+function resolveElevenModel(profileModel: string | null | undefined): string {
+  const envElevenModel = process.env.ELEVEN_TTS_MODEL?.trim();
+  if (envElevenModel) return envElevenModel;
+  if (profileModel && !isCartesiaInferenceTtsModel(profileModel)) return profileModel;
+  return DEFAULT_ELEVEN_TTS_MODEL;
+}
+
 export function resolveTtsConfig(input: {
   testProfile: CallTestProfile | null;
   orgVoiceId: string | null;
 }): ResolvedTtsConfig {
   const profileModel = input.testProfile?.tts_model?.trim();
   const envInferenceModel = process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim();
-  const envElevenModel = process.env.ELEVEN_TTS_MODEL?.trim();
   const envProvider = process.env.CARA_TTS_PROVIDER?.trim().toLowerCase();
 
   const elevenVoiceId = resolveElevenVoiceId({
@@ -62,10 +71,7 @@ export function resolveTtsConfig(input: {
 
   // CARA_TTS_PROVIDER=elevenlabs must win over a stale Cartesia profile row (silence bug).
   if (envProvider === 'elevenlabs') {
-    const model =
-      profileModel && !isCartesiaInferenceTtsModel(profileModel)
-        ? profileModel
-        : envElevenModel || 'eleven_turbo_v2_5';
+    const model = resolveElevenModel(profileModel);
     return {
       provider: 'elevenlabs',
       model,
@@ -89,7 +95,7 @@ export function resolveTtsConfig(input: {
   }
 
   if (profileModel && !isCartesiaInferenceTtsModel(profileModel)) {
-    const model = profileModel || envElevenModel || 'eleven_turbo_v2_5';
+    const model = resolveElevenModel(profileModel);
     return {
       provider: 'elevenlabs',
       model,

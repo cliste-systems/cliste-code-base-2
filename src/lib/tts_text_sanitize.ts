@@ -5,6 +5,7 @@
  */
 import { tokenize } from '@livekit/agents';
 
+import { DEFAULT_ELEVEN_TTS_MODEL } from './tts_config.js';
 import { isElevenV3Model } from './elevenlabs-v3-http-tts.js';
 import { softenSpokenFarewell } from './natural_phrasing.js';
 import { isCartesiaInferenceTtsModel } from './tts_config.js';
@@ -35,11 +36,11 @@ const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
 ];
 
 let activeTtsModel =
-  process.env.ELEVEN_TTS_MODEL?.trim() || 'eleven_turbo_v2_5';
+  process.env.ELEVEN_TTS_MODEL?.trim() || DEFAULT_ELEVEN_TTS_MODEL;
 
 /** Set once per call from agent pipeline so streaming sanitizer knows the live model. */
 export function setActiveTtsModelForSanitizer(model: string): void {
-  activeTtsModel = model.trim() || 'eleven_turbo_v2_5';
+  activeTtsModel = model.trim() || DEFAULT_ELEVEN_TTS_MODEL;
 }
 
 export function getActiveTtsModelForSanitizer(): string {
