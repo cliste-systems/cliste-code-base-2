@@ -71,6 +71,8 @@ export type CaraSessionFlags = {
   demoPostNameSteerUsed?: boolean;
   /** Chitchat the caller said before consent finished — respond after consent instead of re-asking. */
   demoDeferredChitchat?: string | null;
+  /** Spoken/steered name asks while still waiting for a plausible first name. */
+  demoNameAskCount?: number;
   /** Casual "who am I talking to?" moment already used. */
   demoPersonalityNameAskUsed?: boolean;
 };

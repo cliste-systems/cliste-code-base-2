@@ -87,6 +87,7 @@ import {
 import {
   buildDemoAfterConsentAckOnly,
   buildDemoAfterConsentReply,
+  buildDemoAskNameAgainReply,
   buildDemoAskNameSteer,
   buildDemoConversationalReplySteer,
   buildDemoFollowMotivationSteer,
@@ -681,6 +682,7 @@ export default defineAgent({
         demoRecordingConsentAsked: false,
         demoChitchatOpened: false,
         demoDeferredChitchat: null,
+        demoNameAskCount: 0,
         demoPersonalityNameAskUsed: false,
       },
       disclosureConfirmed: greetingIncludesAiDisclosure(greetingText),
@@ -1505,6 +1507,7 @@ export default defineAgent({
           });
           demoSteerHandledThisTurn = true;
         } else if (callerSoundsLikeAudioCheck(text)) {
+          flags.demoNameAskCount = (flags.demoNameAskCount ?? 0) + 1;
           diag.push('info', 'demo_ask_name_steer', { kind: 'audio_check' });
           steerReply(buildDemoAskNameSteer(text, { audioCheck: true }));
           demoSteerHandledThisTurn = true;
@@ -1512,8 +1515,21 @@ export default defineAgent({
           if (callerSoundsLikeSocialChitchat(text)) {
             flags.demoDeferredChitchat = text.trim();
           }
-          diag.push('info', 'demo_ask_name_steer', { kind: 'awaiting_name' });
-          steerReply(buildDemoAskNameSteer(text));
+          flags.demoNameAskCount = (flags.demoNameAskCount ?? 0) + 1;
+          if ((flags.demoNameAskCount ?? 0) >= 3) {
+            diag.push('info', 'demo_ask_name_programmatic', { attempts: flags.demoNameAskCount });
+            programmaticSpeechPending += 1;
+            sayPrepared(session, buildDemoAskNameAgainReply(), {
+              allowInterruptions: true,
+              addToChatCtx: true,
+            });
+          } else {
+            diag.push('info', 'demo_ask_name_steer', {
+              kind: 'awaiting_name',
+              attempt: flags.demoNameAskCount,
+            });
+            steerReply(buildDemoAskNameSteer(text));
+          }
           demoSteerHandledThisTurn = true;
         }
       } else if (

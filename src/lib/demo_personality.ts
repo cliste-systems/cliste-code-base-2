@@ -43,53 +43,56 @@ const NOT_NAMES = new Set([
 const JOKE_NAME_PATTERN =
   /\b(mickey mouse|minnie mouse|donald duck|batman|superman|spider\s*man|joe bloggs|john doe|jane doe|test test|harry potter|your man|your one)\b/i;
 
+/** Any reasonable first-name token STT might return — not a fixed name list. */
+const NAME_TOKEN = "[a-z][a-z'\\-]{1,24}";
+
+const DEMO_NAME_BLOCKLIST = new Set([
+  ...NOT_NAMES,
+  'cara',
+  'hello',
+  'hi',
+  'hey',
+  'thanks',
+  'thank',
+  'yes',
+  'no',
+  'nope',
+  'nah',
+  'right',
+  'sorry',
+  'please',
+]);
+
 export function formatDemoFirstName(name: string): string {
   const first = name.trim().split(/\s+/)[0] ?? name.trim();
   return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
 }
 
-function normalizeNameCandidate(raw: string): string | null {
+/** True when a token looks like a real first name, not chitchat or greeting debris. */
+export function isPlausibleDemoFirstName(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) return null;
+  if (!trimmed || trimmed.length < 2 || trimmed.length > 25) return false;
+  if (!/^[a-z][a-z'-]*$/i.test(trimmed)) return false;
   const lower = trimmed.toLowerCase();
-  if (NOT_NAMES.has(lower) || /^cara$/i.test(trimmed) || /^hello$/i.test(trimmed)) return null;
-  return formatDemoFirstName(trimmed);
+  if (DEMO_NAME_BLOCKLIST.has(lower)) return false;
+  if (/^(mr|mrs|ms|dr)\b/i.test(trimmed)) return false;
+  return true;
 }
 
-export function extractDemoCallerNameResponse(text: string): string | null {
-  const introduced = extractCallerIntroducedName(text);
-  if (introduced) return introduced;
-
-  const bare = text.trim().replace(/[.!?,]+$/g, '').trim();
-  if (/^[a-z][a-z'-]{1,19}$/i.test(bare)) {
-    return normalizeNameCandidate(bare);
-  }
-
-  // STT echo of the greeting — "hello you're through to Brendan/Brandon"
-  const throughTo = text.match(/\bthrough to\s+([a-z][a-z'-]{1,19})\b/i);
-  if (throughTo?.[1]) {
-    const name = normalizeNameCandidate(throughTo[1]);
-    if (name) return name;
-  }
-
-  // "you're speaking to Brendan", "speaking to John"
-  const speakingTo = text.match(/\b(?:you'?re\s+)?(?:speaking|talking) to\s+([a-z][a-z'-]{1,19})\b/i);
-  if (speakingTo?.[1]) {
-    const name = normalizeNameCandidate(speakingTo[1]);
-    if (name) return name;
-  }
-
-  // Trailing name after filler — "uh Brendan"
-  const trailing = text.match(/\b(?:uh|um|er|ah|well|so|like)[,\s]+([a-z][a-z'-]{1,19})\s*$/i);
-  if (trailing?.[1]) {
-    const name = normalizeNameCandidate(trailing[1]);
-    if (name) return name;
-  }
-
-  return null;
+function normalizeNameCandidate(raw: string): string | null {
+  if (!isPlausibleDemoFirstName(raw)) return null;
+  return formatDemoFirstName(raw);
 }
 
-export function extractCallerIntroducedName(text: string): string | null {
+function firstNameMatch(text: string, re: RegExp): string | null {
+  const match = text.match(re);
+  const raw = match?.[1]?.trim();
+  if (!raw) return null;
+  return normalizeNameCandidate(raw);
+}
+
+/** Scan common ways callers introduce themselves — works for any plausible first name. */
+function scanDemoCallerName(text: string): string | null {
   const t = text
     .trim()
     .replace(/^(uh|um|er|ah|well|so|like)[,\s]+/i, '')
@@ -97,22 +100,45 @@ export function extractCallerIntroducedName(text: string): string | null {
   if (!t) return null;
 
   const patterns = [
-    /\b(?:i'?m|i am)\s+([a-z][a-z'-]{1,19})\b/i,
-    /\bmy name(?:'?s| is)\s+([a-z][a-z'-]{1,19})\b/i,
-    /\b(?:this is|it'?s)\s+([a-z][a-z'-]{1,19})\b/i,
-    /\bcall me\s+([a-z][a-z'-]{1,19})\b/i,
-    /\bname(?:'?s| is)\s+([a-z][a-z'-]{1,19})\b/i,
+    new RegExp(`\\b(?:i'?m|i am)\\s+(${NAME_TOKEN})\\b`, 'i'),
+    new RegExp(`\\bmy name(?:'?s| is)\\s+(${NAME_TOKEN})\\b`, 'i'),
+    new RegExp(`\\b(?:this is|it'?s)\\s+(${NAME_TOKEN})\\b`, 'i'),
+    new RegExp(`\\bcall me\\s+(${NAME_TOKEN})\\b`, 'i'),
+    new RegExp(`\\bname(?:'?s| is)\\s+(${NAME_TOKEN})\\b`, 'i'),
+    new RegExp(`\\b(?:i'?m|i am)\\s+called\\s+(${NAME_TOKEN})\\b`, 'i'),
+    new RegExp(`\\b(?:you'?re\\s+)?(?:speaking|talking) to\\s+(${NAME_TOKEN})\\b`, 'i'),
+    new RegExp(`\\bthrough to\\s+(${NAME_TOKEN})\\b`, 'i'),
+    new RegExp(`\\b(?:i'?m|this is|it'?s)\\s+(${NAME_TOKEN})\\s+here\\b`, 'i'),
+    new RegExp(`\\b(${NAME_TOKEN})\\s+here\\b`, 'i'),
+    new RegExp(`\\bwith\\s+(${NAME_TOKEN})\\b`, 'i'),
   ];
 
   for (const re of patterns) {
-    const match = t.match(re);
-    const raw = match?.[1]?.trim();
-    if (!raw) continue;
-    const lower = raw.toLowerCase();
-    if (NOT_NAMES.has(lower)) continue;
-    return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+    const name = firstNameMatch(t, re);
+    if (name) return name;
   }
   return null;
+}
+
+export function extractDemoCallerNameResponse(text: string): string | null {
+  const scanned = scanDemoCallerName(text);
+  if (scanned) return scanned;
+
+  const bare = text.trim().replace(/[.!?,]+$/g, '').trim();
+  if (/^[a-z][a-z'-]{1,24}$/i.test(bare)) {
+    return normalizeNameCandidate(bare);
+  }
+
+  const trailing = text.match(new RegExp(`\\b(?:uh|um|er|ah|well|so|like)[,\\s]+(${NAME_TOKEN})\\s*$`, 'i'));
+  if (trailing?.[1]) {
+    return normalizeNameCandidate(trailing[1]);
+  }
+
+  return null;
+}
+
+export function extractCallerIntroducedName(text: string): string | null {
+  return scanDemoCallerName(text);
 }
 
 export function looksLikeJokeName(name: string): boolean {
@@ -177,6 +203,11 @@ export function buildDemoRecordingDeclineSteer(): string {
     'Say we can still chat, but the demo works best with recording on. Ask gently once more if they are okay to continue with it. ' +
     'Do not say "grand".'
   );
+}
+
+/** Programmatic name re-ask when LLM steers did not land — avoids infinite loops. */
+export function buildDemoAskNameAgainReply(): string {
+  return "Sorry — I didn't catch that. Who am I speaking with?";
 }
 
 /** Opening phase — still waiting for the caller's name. */

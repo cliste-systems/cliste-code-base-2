@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   buildDemoAfterConsentReply,
+  buildDemoAskNameAgainReply,
   buildDemoConversationalReplySteer,
   buildDemoFollowMotivationSteer,
   buildDemoNameBanterSteer,
@@ -13,6 +14,8 @@ import {
   extractCallerIntroducedName,
   extractDemoCallerNameResponse,
   formatDemoConversationalBehaviourForPrompt,
+  formatDemoFirstName,
+  isPlausibleDemoFirstName,
   looksLikeJokeName,
 } from './demo_personality.js';
 import { buildDemoCallerReplyNudgeSteer } from './demo_reply_guarantee.js';
@@ -21,6 +24,29 @@ import {
   callerSoundsLikeRecordingDecline,
 } from './speech_triggers.js';
 
+const SAMPLE_NAMES = [
+  'Brendan',
+  'John',
+  'Mary',
+  'Sarah',
+  'Patrick',
+  'Niamh',
+  'Siobhan',
+  "O'Brien",
+  'Jean-Pierre',
+  'Muhammad',
+  'Li',
+  'Aoife',
+  'Cillian',
+  'Roisin',
+  'Declan',
+  'Fatima',
+  'Yuki',
+  'Priya',
+  'Seamus',
+  'Orla',
+];
+
 describe('demo_personality', () => {
   it('extracts volunteered first names', () => {
     assert.equal(extractCallerIntroducedName("I'm Brendan"), 'Brendan');
@@ -28,26 +54,47 @@ describe('demo_personality', () => {
     assert.equal(extractCallerIntroducedName('This is Mickey'), 'Mickey');
   });
 
+  it('extracts any plausible first name from common intro phrases', () => {
+    for (const name of SAMPLE_NAMES) {
+      const expected = formatDemoFirstName(name);
+      assert.equal(extractDemoCallerNameResponse(`I'm ${name}`), expected, `I'm ${name}`);
+      assert.equal(
+        extractDemoCallerNameResponse(`Hello, you're speaking to ${name}.`),
+        expected,
+        `speaking to ${name}`,
+      );
+      assert.equal(
+        extractDemoCallerNameResponse(`You're talking to ${name}`),
+        expected,
+        `talking to ${name}`,
+      );
+      assert.equal(
+        extractDemoCallerNameResponse(`My name is ${name}`),
+        expected,
+        `my name is ${name}`,
+      );
+      assert.equal(extractDemoCallerNameResponse(`${expected} here`), expected, `${expected} here`);
+    }
+  });
+
   it('extracts bare single-word name replies', () => {
     assert.equal(extractDemoCallerNameResponse('John'), 'John');
     assert.equal(extractDemoCallerNameResponse('John.'), 'John');
   });
 
-  it('extracts name from greeting echo mishears', () => {
-    assert.equal(
-      extractDemoCallerNameResponse("Hello, you're through to Brandon."),
-      'Brandon',
-    );
-    assert.equal(
-      extractDemoCallerNameResponse("Hello there, you're speaking to Brendan."),
-      'Brendan',
-    );
-    assert.equal(extractDemoCallerNameResponse('Uh, my name is Brendan.'), 'Brendan');
-  });
-
   it('does not treat how-are-you replies as names', () => {
     assert.equal(extractDemoCallerNameResponse("I'm keeping good, yeah, and you?"), null);
     assert.equal(extractCallerIntroducedName("I'm good thanks"), null);
+    assert.equal(extractDemoCallerNameResponse('Hello there'), null);
+    assert.equal(extractDemoCallerNameResponse('Yeah'), null);
+  });
+
+  it('validates plausible first names generically', () => {
+    assert.equal(isPlausibleDemoFirstName('Brendan'), true);
+    assert.equal(isPlausibleDemoFirstName('Li'), true);
+    assert.equal(isPlausibleDemoFirstName('keeping'), false);
+    assert.equal(isPlausibleDemoFirstName('Cara'), false);
+    assert.equal(isPlausibleDemoFirstName('a'), false);
   });
 
   it('ignores non-name im phrases', () => {
@@ -77,6 +124,10 @@ describe('demo_personality', () => {
       buildDemoAfterConsentReply('John'),
       'Great, thanks John. So, how are you keeping today?',
     );
+  });
+
+  it('programmatic name re-ask is fixed copy', () => {
+    assert.match(buildDemoAskNameAgainReply(), /Who am I speaking with/i);
   });
 
   it('ask-name steer keeps caller on name before other topics', () => {
