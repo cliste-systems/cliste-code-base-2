@@ -3,8 +3,8 @@ import type { CallTestProfile } from './test_profile.js';
 /** Cartesia "Siobhan - Warm Welcomer" — approachable Irish female for voice agents. */
 export const CARTESIA_SIOBHAN_VOICE_ID = 'd79d2b77-9192-4e10-9407-5d43ca034803';
 
-/** Demo line ElevenLabs Irish female — override via ELEVEN_VOICE_ID. */
-export const DEFAULT_ELEVEN_VOICE_ID = 'odyUrTN5HMVKujvVAgWW';
+/** Demo line ElevenLabs voice — override via ELEVEN_VOICE_ID. */
+export const DEFAULT_ELEVEN_VOICE_ID = 'UwtFVYnvYG6hxAbc4I6T';
 
 export type TtsProviderKind = 'elevenlabs' | 'cartesia-inference';
 
