@@ -3,6 +3,8 @@ import { describe, it } from 'node:test';
 
 import {
   buildDemoPersonaGreeting,
+  countDemoOpeningWords,
+  DEMO_OPENING_MAX_WORDS,
   measurePersonaSpread,
   pickCallPersona,
   personaVarietyEnabled,
@@ -72,11 +74,36 @@ describe('persona', () => {
     }
   });
 
-  it('builds demo greeting with name ask', () => {
+  it('builds lively demo greeting with name ask', () => {
     const persona = pickCallPersona({ businessName: 'Hello Cara', seed: 'demo-1' });
     const line = buildDemoPersonaGreeting(persona, 'demo-1');
-    assert.match(line, /Hello Cara/i);
-    assert.match(line, /name|Who/i);
+    assert.match(line, /Hello Cara|Cara here|through to Cara/i);
+    assert.match(line, /name|Who|chatting|line/i);
+    assert.match(line, /Hiya|Hey|hiya|Ah sure/i);
+  });
+
+  it('keeps demo spoken opening under word cap', () => {
+    for (let i = 0; i < 200; i += 1) {
+      const persona = pickCallPersona({
+        businessName: 'Hello Cara',
+        seed: `demo-word-cap-${i}`,
+        localHour: i % 24,
+      });
+      const line = buildDemoPersonaGreeting(persona, `demo-word-cap-${i}`);
+      assert.ok(
+        countDemoOpeningWords(line) <= DEMO_OPENING_MAX_WORDS,
+        `opening too long (${countDemoOpeningWords(line)} words): ${line}`,
+      );
+    }
+  });
+
+  it('spreads demo opening hooks across seeds', () => {
+    const hooks = new Set<string>();
+    for (let i = 0; i < 50; i += 1) {
+      const persona = pickCallPersona({ businessName: 'Hello Cara', seed: `hook-${i}` });
+      hooks.add(buildDemoPersonaGreeting(persona, `hook-${i}`));
+    }
+    assert.ok(hooks.size > 5, 'demo openings should vary by seed');
   });
 
   it('hashPersonaSeed avalanches similar strings', () => {

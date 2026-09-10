@@ -6,9 +6,19 @@
 
 ## Pre-call
 
-- [ ] Worker deployed with demo playbook changes (Railway latest commit)
-- [ ] Greeting unchanged: *"You're through to Hello Cara, the demo line… What would you like to try?"*
+- [ ] Worker deployed with demo playbook + lively opening changes (Railway latest commit)
+- [ ] Opening: high-energy Irish hook + name ask (seed-varied — run `npm run preview:persona -- "Hello Cara" 10`)
 - [ ] No duplicate greeting at call start
+
+## Path 0 — Lively opening + name lead
+
+1. Call **+353749389378** — expect energetic Irish hook ending with a **name question** (not formal *"how can I help?"* alone)
+2. Give your name: *"I'm Brendan"*
+3. Expect **one** playful name beat + *"What brought you to Hello Cara?"* — **not** a trade menu yet
+4. Say what brought you (e.g. *"Just curious about it"* or *"I run a garage"*)
+5. Expect natural steer into product answer or trade playbook beat 1
+
+**Fail if:** stiff receptionist opening, no name ask, trade list before motivation question, repeated full greeting
 
 ## Path 1 — Electrician trade demo
 

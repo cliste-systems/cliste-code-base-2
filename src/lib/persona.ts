@@ -55,6 +55,32 @@ const SIGN_OFF_TEMPLATES = [
 
 const BANK_PREFIXES = ['manner', 'greeting', 'ack', 'signoff'] as const;
 
+/** Hello Cara demo — high-energy Irish host hooks (demo TTS only, not production). */
+const DEMO_OPENING_HOOKS = [
+  'Hiya — Hello Cara here! Bit lively today',
+  "Hey — you're through to Cara!",
+  'Ah sure, hiya! Cara here',
+  "Hiya hiya — you're through to Hello Cara!",
+  'Hey there — Hello Cara, Cara speaking!',
+  "Well hiya — you've reached Hello Cara!",
+  "Hey! You're through to Cara — love that you rang",
+  'Hiya — Cara here at Hello Cara, all good on your end?',
+  'Hey — Hello Cara here, bit of buzz in the voice today',
+  "Ah hiya — you're through to Cara, lovely to hear from you",
+] as const;
+
+/** Lively name asks — always ends the demo spoken opening. */
+const DEMO_NAME_ASKS = [
+  'Who am I chatting to?',
+  "And who've I got on the line?",
+  "What's your name anyway?",
+  'Quick one — who am I talking to?',
+  "Who's on the line there?",
+  'Tell me your name before we get going?',
+] as const;
+
+export const DEMO_OPENING_MAX_WORDS = 32;
+
 /** FNV-1a with murmur3-style final avalanche — `% 6` must not read weak low bits. */
 export function hashPersonaSeed(input: string): number {
   let h = 2166136261;
@@ -122,16 +148,19 @@ export function pickCallPersona(input: PickCallPersonaInput): CallPersona {
   };
 }
 
-/** Empirical spread check — exported for tests and preview script. */
+export function countDemoOpeningWords(text: string): number {
+  return text
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+/** Spoken Hello Cara demo opening — high-energy hook + name ask (single TTS utterance). */
 export function buildDemoPersonaGreeting(persona: CallPersona, seed: string): string {
-  const nameAsks = [
-    'Can I get your name?',
-    'Can I get your name please?',
-    'Who am I speaking to?',
-    "Who's calling?",
-  ] as const;
-  const idx = pickBankIndex(seed, 'demo_name_ask', nameAsks.length);
-  return `${persona.greeting} — ${nameAsks[idx]!}`;
+  void persona;
+  const hookIdx = pickBankIndex(seed, 'demo_hook', DEMO_OPENING_HOOKS.length);
+  const nameIdx = pickBankIndex(seed, 'demo_name_ask', DEMO_NAME_ASKS.length);
+  return `${DEMO_OPENING_HOOKS[hookIdx]!} — ${DEMO_NAME_ASKS[nameIdx]!}`;
 }
 
 export function measurePersonaSpread(sampleCount: number): {

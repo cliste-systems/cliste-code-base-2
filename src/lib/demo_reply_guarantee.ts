@@ -42,9 +42,17 @@ export function buildDemoSilenceWatchdogSteer(callerText: string): string {
 
 export function buildDemoCallerReplyNudgeSteer(callerText: string): string {
   const snippet = callerText.trim().slice(0, 200);
+  const t = snippet.toLowerCase();
+  const audioCheck =
+    /\b(can you hear me|can you hear|hear me ok|hear me okay|are you there|you there)\b/.test(t) ||
+    /^(hello|hi)\s+(can you hear|are you there)\b/.test(t);
+  const hearMeLine = audioCheck
+    ? 'If they asked whether you can hear them, say yes warmly — then ask what brought them to Hello Cara (one open question). '
+    : '';
   return (
     `The caller said: "${snippet}". Reply in **one short spoken sentence** (~25 words max). ` +
     `${NEVER_SILENT} Do not repeat your opening greeting or any AI/recording disclosure. ` +
-    'Do not say "grand". If they asked whether you can hear them, say yes warmly and ask how you can help.'
+    `Do not say "grand". ${hearMeLine}` +
+    (hearMeLine ? '' : 'Acknowledge them and continue the demo naturally.')
   );
 }

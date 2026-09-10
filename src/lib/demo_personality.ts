@@ -71,6 +71,34 @@ export function buildDemoNameBanterSteer(name: string): string {
   );
 }
 
+/** After the spoken opening — playful name beat + lead with what brought them here. */
+export function buildDemoNameThenMotivationSteer(name: string): string {
+  const banter = looksLikeJokeName(name)
+    ? `ONE playful Irish tease about "${name}" (e.g. "Are you sure that's your name?" — warm, not mean). `
+    : `ONE warm line using "${name}" — optional light humour (e.g. "Lovely to meet you, ${name}"). `;
+  return (
+    `They gave their name on the demo call. ${banter}` +
+    'Then ask ONLY one open question: what brought them to Hello Cara (natural variation). ' +
+    'Two short sentences max (~25 words total). Do not list trades or pitch role-play yet. Do not say "grand".'
+  );
+}
+
+/** First reply after opening when they did not give a name — still lead the call. */
+export function buildDemoPostNameMotivationSteer(opts?: { audioCheck?: boolean }): string {
+  if (opts?.audioCheck) {
+    return (
+      'They asked if you can hear them. ONE warm Irish line that you hear them fine — ' +
+      'then ask ONLY what brought them to Hello Cara (one open question). ' +
+      'Do not repeat the opening greeting. Do not nag for their name again. Do not say "grand".'
+    );
+  }
+  return (
+    'ONE warm line acknowledging them — match their energy (lively if they sound upbeat). ' +
+    'Then ask ONLY what brought them to Hello Cara (one open question). ' +
+    'Do not repeat the opening greeting. Do not nag for their name again. Do not list trades. Do not say "grand".'
+  );
+}
+
 export function buildDemoPersonalityNameAskSteer(): string {
   return (
     'Optional personality moment — ONE casual, slightly cheeky line asking who you are talking to ' +

@@ -63,6 +63,8 @@ export type CaraSessionFlags = {
   demoCallerName?: string | null;
   /** Playful name banter already used this call. */
   demoNameBanterUsed?: boolean;
+  /** Turn-2 "what brought you to Hello Cara?" steer already handled. */
+  demoPostNameSteerUsed?: boolean;
   /** Casual "who am I talking to?" moment already used. */
   demoPersonalityNameAskUsed?: boolean;
 };

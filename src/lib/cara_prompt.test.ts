@@ -58,7 +58,7 @@ describe('buildCaraCallPrompt', () => {
 
     assert.match(prompt, /Hello Cara demo line/i);
     assert.match(prompt, /not a real shop/i);
-    assert.match(prompt, /recorded and transcribed|recording\/transcription notice/i);
+    assert.match(prompt, /Never.*add an AI assistant or call-recording disclosure/i);
     assert.match(prompt, /do not guess names like Patricia/i);
     assert.doesNotMatch(prompt, /Murphy/i);
   });
@@ -72,6 +72,8 @@ describe('buildCaraCallPrompt', () => {
     });
 
     assert.match(prompt, /Host personality \(chatty demo host\)/i);
+    assert.match(prompt, /Opening arc \(spoken \+ turn 2\)/i);
+    assert.match(prompt, /What brought you to Hello Cara/i);
     assert.match(prompt, /Intent routing/i);
     assert.match(prompt, /Explore.*can you hear me/i);
     assert.match(prompt, /Human speech \(not a phone menu\)/i);
@@ -92,7 +94,7 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /### Mechanic/i);
     assert.match(prompt, /### Shop \/ retail/i);
     assert.match(prompt, /### General Hello Cara/i);
-    assert.match(prompt, /How are you keeping today/i);
+    assert.match(prompt, /what brought them/i);
     assert.match(prompt, /paraphrase/i);
   });
 

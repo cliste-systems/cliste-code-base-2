@@ -5,10 +5,13 @@ import {
   buildDemoChitchatSteer,
   buildDemoFollowMotivationSteer,
   buildDemoNameBanterSteer,
+  buildDemoNameThenMotivationSteer,
+  buildDemoPostNameMotivationSteer,
   callerSoundsLikeHelloCaraMotivation,
   extractCallerIntroducedName,
   looksLikeJokeName,
 } from './demo_personality.js';
+import { buildDemoCallerReplyNudgeSteer } from './demo_reply_guarantee.js';
 
 describe('demo_personality', () => {
   it('extracts volunteered first names', () => {
@@ -30,6 +33,24 @@ describe('demo_personality', () => {
   it('steer includes playful are-you-sure prompt', () => {
     assert.match(buildDemoNameBanterSteer('Brendan'), /Are you sure/i);
     assert.match(buildDemoNameBanterSteer('Mickey Mouse'), /nearly believe/i);
+  });
+
+  it('name-then-motivation steer asks what brought them', () => {
+    assert.match(buildDemoNameThenMotivationSteer('Brendan'), /what brought them to Hello Cara/i);
+    assert.match(buildDemoNameThenMotivationSteer('Mickey Mouse'), /Are you sure/i);
+  });
+
+  it('post-name motivation steer leads without nagging name', () => {
+    assert.match(buildDemoPostNameMotivationSteer(), /what brought them to Hello Cara/i);
+    assert.match(buildDemoPostNameMotivationSteer(), /Do not nag for their name/i);
+    assert.match(buildDemoPostNameMotivationSteer({ audioCheck: true }), /hear them fine/i);
+  });
+
+  it('caller reply nudge steers hear-me to what brought you', () => {
+    assert.match(
+      buildDemoCallerReplyNudgeSteer('Can you hear me?'),
+      /what brought them to Hello Cara/i,
+    );
   });
 
   it('chitchat steer asks what brought them without role-play pitch', () => {

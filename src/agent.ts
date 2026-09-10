@@ -85,10 +85,10 @@ import {
   helloCaraAboutSteerInstructions,
 } from './lib/hello_cara_website_facts.js';
 import {
-  buildDemoNameBanterSteer,
+  buildDemoNameThenMotivationSteer,
+  buildDemoPostNameMotivationSteer,
   buildDemoChitchatSteer,
   buildDemoFollowMotivationSteer,
-  buildDemoPersonalityNameAskSteer,
   callerSoundsLikeHelloCaraMotivation,
   extractCallerIntroducedName,
 } from './lib/demo_personality.js';
@@ -668,6 +668,7 @@ export default defineAgent({
         demoScenarioBeat: 0,
         demoCallerName: null,
         demoNameBanterUsed: false,
+        demoPostNameSteerUsed: false,
         demoPersonalityNameAskUsed: false,
       },
       disclosureConfirmed: greetingIncludesAiDisclosure(greetingText),
@@ -1447,6 +1448,33 @@ export default defineAgent({
         );
       } else if (
         testCall &&
+        !session.userData.sessionFlags.demoPostNameSteerUsed &&
+        !session.userData.sessionFlags.demoScenarioSlug &&
+        !isCallEnding() &&
+        !classifyHelloCaraAboutQuestion(text) &&
+        !callerAsksDemoMenu(text) &&
+        !detectDemoScenario(text, demoScenarios) &&
+        !callerSoundsLikeHelloCaraMotivation(text)
+      ) {
+        const flags = session.userData.sessionFlags;
+        const volunteeredName = extractCallerIntroducedName(text);
+        if (volunteeredName) {
+          flags.demoCallerName = volunteeredName;
+          flags.demoNameBanterUsed = true;
+          flags.demoPostNameSteerUsed = true;
+          diag.push('info', 'demo_name_motivation_steer', { name: volunteeredName });
+          steerReply(buildDemoNameThenMotivationSteer(volunteeredName));
+        } else if (callerSoundsLikeAudioCheck(text)) {
+          flags.demoPostNameSteerUsed = true;
+          diag.push('info', 'demo_post_name_steer', { kind: 'audio_check' });
+          steerReply(buildDemoPostNameMotivationSteer({ audioCheck: true }));
+        } else if (callerSoundsLikeLineEngagement(text)) {
+          flags.demoPostNameSteerUsed = true;
+          diag.push('info', 'demo_post_name_steer', { kind: 'opening_reply' });
+          steerReply(buildDemoPostNameMotivationSteer());
+        }
+      } else if (
+        testCall &&
         !session.userData.sessionFlags.demoScenarioSlug &&
         callerSoundsLikeVagueDemoOpening(text) &&
         !isCallEnding()
@@ -1475,28 +1503,7 @@ export default defineAgent({
         !isCallEnding()
       ) {
         const flags = session.userData.sessionFlags;
-        const volunteeredName = extractCallerIntroducedName(text);
-        if (volunteeredName && !flags.demoNameBanterUsed) {
-          flags.demoCallerName = volunteeredName;
-          flags.demoNameBanterUsed = true;
-          diag.push('info', 'demo_name_banter', { name: volunteeredName });
-          steerReply(buildDemoNameBanterSteer(volunteeredName));
-        } else if (
-          !volunteeredName &&
-          !flags.demoPersonalityNameAskUsed &&
-          !flags.demoCallerName &&
-          !flags.demoNameBanterUsed &&
-          !classifyHelloCaraAboutQuestion(text) &&
-          !detectDemoScenario(text, demoScenarios) &&
-          text.trim().length > 6 &&
-          !callerAsksDemoMenu(text) &&
-          transcriptParts.filter((p) => p.line.startsWith('Caller:')).length >= 2 &&
-          (!flags.demoScenarioSlug ||
-            (flags.demoScenarioSlug === 'general' && (flags.demoScenarioBeat ?? 0) <= 1))
-        ) {
-          flags.demoPersonalityNameAskUsed = true;
-          steerReply(buildDemoPersonalityNameAskSteer());
-        } else if (
+        if (
           flags.demoScenarioSlug &&
           (flags.demoScenarioBeat ?? 0) === 3 &&
           caraTypingSoundEnabled()
