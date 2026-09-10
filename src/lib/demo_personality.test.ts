@@ -6,6 +6,7 @@ import {
   buildDemoConversationalReplySteer,
   buildDemoFollowMotivationSteer,
   buildDemoNameBanterSteer,
+  buildDemoAskNameSteer,
   buildDemoPreNameSteer,
   buildDemoRecordingConsentReply,
   callerSoundsLikeHelloCaraMotivation,
@@ -30,6 +31,14 @@ describe('demo_personality', () => {
   it('extracts bare single-word name replies', () => {
     assert.equal(extractDemoCallerNameResponse('John'), 'John');
     assert.equal(extractDemoCallerNameResponse('John.'), 'John');
+  });
+
+  it('extracts name from greeting echo mishears', () => {
+    assert.equal(
+      extractDemoCallerNameResponse("Hello, you're through to Brandon."),
+      'Brandon',
+    );
+    assert.equal(extractDemoCallerNameResponse('Uh, my name is Brendan.'), 'Brendan');
   });
 
   it('ignores non-name im phrases', () => {
@@ -61,10 +70,13 @@ describe('demo_personality', () => {
     );
   });
 
-  it('pre-name steer asks who they are without repeating opening', () => {
+  it('ask-name steer keeps caller on name before other topics', () => {
+    assert.match(
+      buildDemoAskNameSteer('What are you able to help with?'),
+      /Do not answer their question yet/i,
+    );
+    assert.match(buildDemoAskNameSteer('', { audioCheck: true }), /hear them fine/i);
     assert.match(buildDemoPreNameSteer(), /who you are speaking with/i);
-    assert.match(buildDemoPreNameSteer(), /Do not repeat the opening greeting/i);
-    assert.match(buildDemoPreNameSteer({ audioCheck: true }), /hear them fine/i);
   });
 
   it('caller reply nudge steers hear-me to ask who is on the line', () => {

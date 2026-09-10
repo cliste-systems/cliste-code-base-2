@@ -29,19 +29,50 @@ const NOT_NAMES = new Set([
 const JOKE_NAME_PATTERN =
   /\b(mickey mouse|minnie mouse|donald duck|batman|superman|spider\s*man|joe bloggs|john doe|jane doe|test test|harry potter|your man|your one)\b/i;
 
+export function formatDemoFirstName(name: string): string {
+  const first = name.trim().split(/\s+/)[0] ?? name.trim();
+  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+}
+
+function normalizeNameCandidate(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  if (NOT_NAMES.has(lower) || /^cara$/i.test(trimmed) || /^hello$/i.test(trimmed)) return null;
+  return formatDemoFirstName(trimmed);
+}
+
 export function extractDemoCallerNameResponse(text: string): string | null {
   const introduced = extractCallerIntroducedName(text);
   if (introduced) return introduced;
 
   const bare = text.trim().replace(/[.!?,]+$/g, '').trim();
-  if (/^[a-z][a-z'-]{1,19}$/i.test(bare) && !NOT_NAMES.has(bare.toLowerCase())) {
-    return bare.charAt(0).toUpperCase() + bare.slice(1).toLowerCase();
+  if (/^[a-z][a-z'-]{1,19}$/i.test(bare)) {
+    return normalizeNameCandidate(bare);
   }
+
+  // STT echo of the greeting — "hello you're through to Brendan/Brandon"
+  const throughTo = text.match(/\bthrough to\s+([a-z][a-z'-]{1,19})\b/i);
+  if (throughTo?.[1]) {
+    const name = normalizeNameCandidate(throughTo[1]);
+    if (name) return name;
+  }
+
+  // Trailing name after filler — "uh Brendan"
+  const trailing = text.match(/\b(?:uh|um|er|ah|well|so|like)[,\s]+([a-z][a-z'-]{1,19})\s*$/i);
+  if (trailing?.[1]) {
+    const name = normalizeNameCandidate(trailing[1]);
+    if (name) return name;
+  }
+
   return null;
 }
 
 export function extractCallerIntroducedName(text: string): string | null {
-  const t = text.trim();
+  const t = text
+    .trim()
+    .replace(/^(uh|um|er|ah|well|so|like)[,\s]+/i, '')
+    .trim();
   if (!t) return null;
 
   const patterns = [
@@ -82,11 +113,6 @@ export function buildDemoNameBanterSteer(name: string): string {
   );
 }
 
-export function formatDemoFirstName(name: string): string {
-  const first = name.trim().split(/\s+/)[0] ?? name.trim();
-  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
-}
-
 /** Fixed turn-2 reply after the caller gives their name on the demo line. */
 export function buildDemoRecordingConsentReply(name: string): string {
   const firstName = formatDemoFirstName(name);
@@ -119,20 +145,26 @@ export function buildDemoRecordingDeclineSteer(): string {
   );
 }
 
-/** First reply after opening when they did not give a name — ask again naturally. */
-export function buildDemoPreNameSteer(opts?: { audioCheck?: boolean }): string {
+/** Opening phase — still waiting for the caller's name. */
+export function buildDemoAskNameSteer(callerText: string, opts?: { audioCheck?: boolean }): string {
   if (opts?.audioCheck) {
     return (
       'They asked if you can hear them. ONE warm Irish line that you hear them fine — ' +
       'then ask who you are speaking with (one short question). ' +
-      'Do not repeat the opening greeting. Do not say "grand".'
+      'Do not repeat the opening greeting. Do not answer other questions yet. Do not say "grand".'
     );
   }
+  const snippet = callerText.trim().slice(0, 200);
   return (
-    'They spoke but did not give their name. ONE warm Irish line acknowledging them — ' +
-    'then ask who you are speaking with (one short question). ' +
-    'Do not repeat the opening greeting. Do not say "grand".'
+    `They said: "${snippet}" but have not given their name yet. ONE warm Irish line — ` +
+    'acknowledge them briefly if needed, then ask who you are speaking with. ' +
+    'Do not answer their question yet. Do not repeat the full opening greeting. Do not say "grand".'
   );
+}
+
+/** @deprecated Use buildDemoAskNameSteer */
+export function buildDemoPreNameSteer(opts?: { audioCheck?: boolean }): string {
+  return buildDemoAskNameSteer('', opts);
 }
 
 export function buildDemoPersonalityNameAskSteer(): string {
