@@ -3,6 +3,8 @@ import { RoomServiceClient } from 'livekit-server-sdk';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { phoneHangupToneFrameStream } from './hangup_tone.js';
+
 function livekitServiceHttpsHost(): string | null {
   const u = process.env.LIVEKIT_URL?.trim();
   if (!u) return null;
@@ -163,6 +165,7 @@ export async function disconnectCallerLeg(
 
   try {
     await beforeAudio();
+    await waitForAgentSpeechPlayout(session);
 
     const resolvedPath = resolveHangupSoundPath();
 
@@ -178,10 +181,22 @@ export async function disconnectCallerLeg(
         await waitForSpeechHandlePlayout(handle);
         playedSound = true;
       } catch (e) {
-        console.error('[end_call] hang-up sound', e);
+        console.error('[end_call] hang-up sound file', e);
       }
-    } else if (!hangupSoundDisabled()) {
-      console.warn('[end_call] hang-up sound enabled but file missing');
+    }
+
+    if (!playedSound && !hangupSoundDisabled()) {
+      try {
+        const handle = session.say('', {
+          audio: phoneHangupToneFrameStream(),
+          addToChatCtx: false,
+          allowInterruptions: false,
+        });
+        await waitForSpeechHandlePlayout(handle);
+        playedSound = true;
+      } catch (e) {
+        console.error('[end_call] generated hang-up tone', e);
+      }
     }
 
     const postSoundMs = Number.parseInt(process.env.LIVEKIT_END_CALL_POST_SOUND_MS ?? '80', 10);

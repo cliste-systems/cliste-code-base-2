@@ -316,6 +316,10 @@ export function assistantSoundsLikeCorporateAssist(text: string): boolean {
   if (!t) return false;
   return (
     /\bi'?m here to help\b/.test(t) ||
+    /\bready to help out\b/.test(t) ||
+    /\bjust here, ready to help\b/.test(t) ||
+    /\bthanks for asking\b/.test(t) ||
+    /\banything in particular on your mind\b/.test(t) ||
     /\bwhat can i assist\b/.test(t) ||
     /\bhow can i assist you\b/.test(t) ||
     /\bwhat can i help you with today\b/.test(t) ||

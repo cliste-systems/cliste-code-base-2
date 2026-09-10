@@ -13,6 +13,7 @@ describe('hello_cara_website_facts', () => {
     assert.equal(classifyHelloCaraAboutQuestion('Who made you?'), 'who-made');
     assert.equal(classifyHelloCaraAboutQuestion('What do you do?'), 'what-we-do');
     assert.equal(classifyHelloCaraAboutQuestion('What is it that you do?'), 'what-we-do');
+    assert.equal(classifyHelloCaraAboutQuestion('So how do you work?'), 'what-we-do');
     assert.equal(classifyHelloCaraAboutQuestion('What can we demo?'), null);
   });
 

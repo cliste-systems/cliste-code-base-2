@@ -67,6 +67,13 @@ describe('tts_text_sanitize', () => {
     assert.match(out, /Fresh-ah/i);
   });
 
+  it('maps Cara to Irish Kara for TTS', () => {
+    setActiveTtsModelForSanitizer('cartesia/sonic-3');
+    const out = prepareHardcodedSpeechForTts("Hello, you're through to Cara.");
+    assert.match(out, /Kara/);
+    assert.doesNotMatch(out, /\bCara\b/);
+  });
+
   it('strips v3 audio tags when model is turbo', () => {
     setActiveTtsModelForSanitizer('eleven_turbo_v2_5');
     const out = prepareHardcodedSpeechForTts('Grand — [pause] lovely.');
@@ -192,7 +199,7 @@ describe('tts_text_sanitize', () => {
     const greeting =
       "Hi — you're through to Hello Cara. I'm your AI assistant, and this call may be recorded and transcribed. How are you keeping today?";
     const out = prepareCartesiaGreetingChunk(greeting);
-    assert.match(out, /Hello Cara<break time="120ms"\/> I'm your AI assistant, and this call may be recorded and transcribed/);
+    assert.match(out, /Hello Kara<break time="120ms"\/> I'm your AI assistant, and this call may be recorded and transcribed/);
     assert.match(out, /<break time="120ms"\/> How are you keeping today\?/);
     assert.doesNotMatch(out, /<break time="240ms"\/>/);
     assert.doesNotMatch(out, /<break time="320ms"\/>/);

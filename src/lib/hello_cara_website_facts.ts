@@ -67,7 +67,7 @@ export function classifyHelloCaraAboutQuestion(
   }
 
   if (
-    (/\b(what do you do|what is it that you do|what is it you do|what's it that you do|what does hello cara do|what is hello cara|what can you do for my business|tell me about hello cara|what are you|how does it work|how does this work)\b/.test(
+    (/\b(what do you do|what is it that you do|what is it you do|what's it that you do|what does hello cara do|what is hello cara|what can you do for my business|tell me about hello cara|what are you|how does it work|how does this work|how do you work|how you work)\b/.test(
       t,
     ) ||
       /\bwhat\b.*\b(you do|hello cara do|this do|it do)\b/.test(t)) &&

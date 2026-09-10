@@ -28,6 +28,8 @@ const V3_AUDIO_TAG = /\[(?:warm|pause|softly|laughs|\w+)\]/gi;
 
 /** Tricky terms → TTS-friendly spellings (word-boundary replacements). */
 const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
+ [/\bHello Cara\b/gi, 'Hello Kara'],
+ [/\bCara\b/g, 'Kara'],
  [/\bFresha\b/gi, 'Fresh-ah'],
  [/\bshellac\b/gi, 'shel-lack'],
  [/\bkeratin\b/gi, 'care-ah-tin'],

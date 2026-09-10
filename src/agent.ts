@@ -1688,13 +1688,21 @@ export default defineAgent({
 
       flags.closingCall = true;
       clearAllGuardTimers();
-      try {
-        session.interrupt();
-      } catch {
-        /* ignore */
-      }
       void (async () => {
         try {
+          if (session.agentState === 'speaking') {
+            try {
+              await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
+            } catch {
+              /* best effort */
+            }
+          } else {
+            try {
+              session.interrupt();
+            } catch {
+              /* ignore */
+            }
+          }
           const handle = sayPrepared(session, buildDemoCallClosingLine(callSidAttr), {
             allowInterruptions: false,
           });
@@ -1792,6 +1800,8 @@ export default defineAgent({
           if (inListenGrace() && !testCall) return;
           if (session.agentState !== 'listening' || session.userState === 'speaking') return;
           if (deadAirPromptCount >= deadAirMaxPrompts) {
+            if (session.agentState === 'speaking' || session.agentState === 'thinking') return;
+            if (callerAwaitingReply) return;
             gracefulDisconnect();
             return;
           }
@@ -1801,7 +1811,9 @@ export default defineAgent({
             deadAirCloseTimer = null;
             try {
               if (isCallEnding()) return;
-              if (session.agentState !== 'listening' || session.userState === 'speaking') return;
+              if (callerAwaitingReply) return;
+              if (session.agentState === 'speaking' || session.agentState === 'thinking') return;
+              if (session.userState === 'speaking') return;
               gracefulDisconnect();
             } catch (e) {
               console.error('[AgentSession] dead-air close failed', e);
@@ -2582,6 +2594,7 @@ export default defineAgent({
         const handle = sayPrepared(session, playbackGreetingText, {
           greeting: true,
           greetingCommaFlow: false,
+          addToChatCtx: false,
           allowInterruptions: testCall,
         });
         greetingPlayedFlag = true;
