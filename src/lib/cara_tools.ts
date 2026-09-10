@@ -2,6 +2,7 @@ import { llm, voice } from '@livekit/agents';
 import { z } from 'zod';
 
 import type { OrgVertical } from './org_vertical.js';
+import type { CallPersona } from './persona.js';
 import {
   callRoutingAllowsHumanTransfer,
   parseCallRoutingMode,
@@ -80,6 +81,8 @@ export type CaraAgentUserData = {
   /** Hello Cara demo line — stricter tool and closing rules. */
   demoLine?: boolean;
   endCallTarget?: { roomName: string; callerIdentity: string };
+  /** Per-call conversational persona — production calls only. */
+  callPersona?: CallPersona;
 };
 
 function readCaraUserData(ctx: { userData: unknown }): CaraAgentUserData {
@@ -280,7 +283,7 @@ async function createCallbackViaWebhook(
   return {
     ok: true,
     message:
-      'Message logged for the team. Tell the caller someone will follow up — do not promise an exact time unless your instructions say so.',
+      'Message logged for the team. Tell the caller someone will follow up in your own words — confirm what you captured in one warm line. Do not promise an exact callback time unless your instructions say so.',
   };
 }
 
@@ -346,7 +349,7 @@ export class CaraTools {
       });
       return {
         ok: true,
-        message: `Link sent for "${routeTrigger(route)}". Confirm it was received.`,
+        message: `Link sent for "${routeTrigger(route)}". Confirm they received it in your own words — do not reuse a confirmation line you already said this call.`,
       };
     },
   });
@@ -508,7 +511,9 @@ export class CaraTools {
 
       return {
         ok: true,
-        message: messages.join(' ') || 'Link sent.',
+        message:
+          messages.join(' ') ||
+          'Link sent. Confirm they received it in your own words — vary the wording from earlier confirmations this call.',
       };
     },
   });
@@ -567,7 +572,7 @@ export class CaraTools {
       ud.sessionFlags.smsSent += 1;
       return {
         ok: true,
-        message: `File "${file.file_name}" sent. Confirm they received the text.`,
+        message: `File "${file.file_name}" sent. Confirm they received the text in your own words.`,
       };
     },
   });
@@ -711,7 +716,8 @@ export class CaraTools {
       ud.sessionFlags.smsSent += 1;
       return {
         ok: true,
-        message: 'WhatsApp details sent. Confirm they received the text.',
+        message:
+          'WhatsApp details sent. Confirm they received the text in your own words — do not read the URL aloud.',
       };
     },
   });

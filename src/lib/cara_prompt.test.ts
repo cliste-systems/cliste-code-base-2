@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { buildCaraCallPrompt } from './cara_prompt.js';
+import { pickCallPersona } from './persona.js';
 
 const baseInput = {
   businessName: 'Murphy\'s SuperValu Killarney',
@@ -119,5 +120,61 @@ describe('buildCaraCallPrompt', () => {
 
     assert.match(prompt, /Custom playbook/);
     assert.doesNotMatch(prompt, /### Electrician/);
+  });
+
+  it('includes conversational sections and persona block last on production calls', () => {
+    const persona = pickCallPersona({
+      businessName: baseInput.businessName,
+      seed: 'org-1:+353871234567:room-a',
+      localHour: 14,
+    });
+    const prompt = buildCaraCallPrompt({
+      ...baseInput,
+      niche: 'retail',
+      persona,
+    });
+
+    assert.match(prompt, /## Who you are/i);
+    assert.match(prompt, /## How you talk/i);
+    assert.match(prompt, /## Never sound like a machine/i);
+    assert.match(prompt, /## Your manner on this call/i);
+    assert.match(prompt, /endPhoneCall in the same turn/i);
+    assert.ok(prompt.includes(persona.greeting));
+    assert.doesNotMatch(prompt, /\{business\}|\{timeOfDay\}/);
+    assert.ok(
+      prompt.lastIndexOf('## Your manner on this call') >
+        prompt.indexOf('## Active routes'),
+    );
+  });
+
+  it('keeps a large shared prefix across different caller personas', () => {
+    const shared = {
+      ...baseInput,
+      niche: 'retail',
+      customPrompt: 'We are a grocery store with a deli counter.',
+      routingLinks: [],
+    };
+    const p1 = buildCaraCallPrompt({
+      ...shared,
+      callerLine: { ...baseInput.callerLine, display: '087 111 1111', e164: '+353871111111' },
+      persona: pickCallPersona({
+        businessName: shared.businessName,
+        seed: 'org:+353871111111:room-1',
+      }),
+    });
+    const p2 = buildCaraCallPrompt({
+      ...shared,
+      callerLine: { ...baseInput.callerLine, display: '087 222 2222', e164: '+353872222222' },
+      persona: pickCallPersona({
+        businessName: shared.businessName,
+        seed: 'org:+353872222222:room-2',
+      }),
+    });
+
+    let prefix = 0;
+    const limit = Math.min(p1.length, p2.length);
+    while (prefix < limit && p1[prefix] === p2[prefix]) prefix += 1;
+    const ratio = prefix / Math.max(p1.length, p2.length);
+    assert.ok(ratio >= 0.75, `shared prefix ratio ${ratio.toFixed(2)} below 0.75`);
   });
 });

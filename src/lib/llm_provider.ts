@@ -9,6 +9,8 @@ export type CreateCaraLlmInput = {
   profileLlmProvider?: string | null;
   temperature?: number;
   maxCompletionTokens?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
 };
 
 export type ResolvedCaraLlm = {
@@ -20,8 +22,13 @@ export type ResolvedCaraLlm = {
 const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5-mini';
 const DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 /** gpt-5-mini burns completion budget on reasoning — 120 tokens often yields empty speech. */
-const DEFAULT_VOICE_MAX_COMPLETION_TOKENS = 280;
-const GPT5_MIN_VOICE_COMPLETION_TOKENS = 280;
+const DEFAULT_VOICE_MAX_COMPLETION_TOKENS = 320;
+const GPT5_MIN_VOICE_COMPLETION_TOKENS = 320;
+
+function parseOptionalPenalty(envKey: string): number {
+  const parsed = Number.parseFloat(process.env[envKey] ?? '');
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 function voiceMaxCompletionTokens(fallback = DEFAULT_VOICE_MAX_COMPLETION_TOKENS): number {
   const parsed = Number.parseInt(process.env.LIVEKIT_LLM_MAX_TOKENS ?? '', 10);
@@ -139,8 +146,12 @@ export function resolveCaraLlmProvider(input?: {
 }
 
 export function createCaraLlm(input: CreateCaraLlmInput): ResolvedCaraLlm {
-  const temperature = input.temperature ?? 0.55;
+  const temperature = input.temperature ?? 0.7;
   const maxCompletionTokens = input.maxCompletionTokens ?? voiceMaxCompletionTokens();
+  const frequencyPenalty =
+    input.frequencyPenalty ?? parseOptionalPenalty('LIVEKIT_LLM_FREQUENCY_PENALTY');
+  const presencePenalty =
+    input.presencePenalty ?? parseOptionalPenalty('LIVEKIT_LLM_PRESENCE_PENALTY');
   const provider = resolveCaraLlmProvider({ profileLlmProvider: input.profileLlmProvider });
 
   if (provider === 'openrouter') {
@@ -158,7 +169,13 @@ export function createCaraLlm(input: CreateCaraLlmInput): ResolvedCaraLlm {
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey) {
       console.warn('[llm] openai-direct requested but OPENAI_API_KEY missing — falling back to gateway');
-      return createGatewayLlm(input.inferenceLlmModel, temperature, maxCompletionTokens);
+      return createGatewayLlm(
+        input.inferenceLlmModel,
+        temperature,
+        maxCompletionTokens,
+        frequencyPenalty,
+        presencePenalty,
+      );
     }
     const model = input.inferenceLlmModel.replace(/^openai\//, '');
     const instance = new openai.LLM({
@@ -170,19 +187,29 @@ export function createCaraLlm(input: CreateCaraLlmInput): ResolvedCaraLlm {
     return { provider: 'openai-direct', label: `openai-direct:${model}`, instance };
   }
 
-  return createGatewayLlm(input.inferenceLlmModel, temperature, maxCompletionTokens);
+  return createGatewayLlm(
+    input.inferenceLlmModel,
+    temperature,
+    maxCompletionTokens,
+    frequencyPenalty,
+    presencePenalty,
+  );
 }
 
 function createGatewayLlm(
   inferenceLlmModel: string,
   temperature: number,
   maxCompletionTokens: number,
+  frequencyPenalty = 0,
+  presencePenalty = 0,
 ): ResolvedCaraLlm {
   const instance = new inference.LLM({
     model: inferenceLlmModel as inference.LLMModels,
     modelOptions: {
       temperature,
       max_completion_tokens: maxCompletionTokens,
+      ...(frequencyPenalty !== 0 ? { frequency_penalty: frequencyPenalty } : {}),
+      ...(presencePenalty !== 0 ? { presence_penalty: presencePenalty } : {}),
     },
   });
   return {

@@ -101,6 +101,7 @@ import {
   DEMO_SILENCE_WATCHDOG_MS,
   DEMO_THINKING_STALL_MS,
 } from './lib/demo_reply_guarantee.js';
+import { pickCallPersona, type CallPersona } from './lib/persona.js';
 import { resolveSpokenBusinessName } from './lib/spoken_business_name.js';
 import { orgVerticalLabel } from './lib/org_vertical.js';
 import { sayPrepared } from './lib/say_prepared.js';
@@ -184,7 +185,7 @@ const CALLER_REPLY_NUDGE_MS = 2200;
 const RESPONSE_FILLER_PHRASES = ['Let me see now…'] as const;
 
 const REPLY_RETRY_INSTRUCTIONS =
-  'Your last reply did not reach the caller. One short warm line — acknowledge what they asked — then continue. No service menu. If waiting on SMS yes/no, do not re-offer the link.';
+  'Your last reply did not reach the caller. React like a person to a dropped line — vary the wording (e.g. "Sorry, you went quiet there — are you still with me?" or "Ah, the line dipped on me — where were we?"). One short warm line that acknowledges what they asked, then continue. No service menu.';
 
 /** Tools that may block on HTTP/SMS — only these arm the thinking micro-ack. */
 const SLOW_TOOL_ACK_NAMES = new Set([
@@ -503,6 +504,32 @@ export default defineAgent({
       businessType: org.agent_business_type,
     });
 
+    let callPersona: CallPersona | undefined;
+    if (!testCall) {
+      let localHour: number | undefined;
+      try {
+        localHour = Number.parseInt(
+          new Intl.DateTimeFormat('en-IE', {
+            hour: 'numeric',
+            hour12: false,
+            timeZone: bookingTz,
+          }).format(new Date()),
+          10,
+        );
+      } catch {
+        localHour = undefined;
+      }
+      callPersona = pickCallPersona({
+        businessName: spokenBusinessName,
+        seed: `${org.id}:${callerNumberRaw}:${ctx.room.name || 'room'}`,
+        ...(localHour != null && Number.isFinite(localHour) ? { localHour } : {}),
+      });
+      console.info('[agent] call_persona', {
+        variant: callPersona.variant,
+        greetingPreview: callPersona.greeting.slice(0, 60),
+      });
+    }
+
     const systemPrompt = buildCaraCallPrompt({
       businessName: spokenBusinessName,
       customPrompt: custom,
@@ -517,6 +544,7 @@ export default defineAgent({
       openingGreetingDelivered: Boolean(greetingText),
       structuredHoursBlock,
       demoMode: testCall,
+      ...(callPersona ? { persona: callPersona } : {}),
       ...(testCall
         ? { demoPlaybookBlock: demoPlaybookBlockFromScenarios(demoScenarios) }
         : {}),
@@ -637,6 +665,7 @@ export default defineAgent({
       },
       disclosureConfirmed: greetingIncludesAiDisclosure(greetingText),
       demoLine: testCall,
+      ...(callPersona ? { callPersona } : {}),
       ...(endCallTarget ? { endCallTarget } : {}),
     };
 
@@ -784,9 +813,9 @@ export default defineAgent({
       ? Number.parseFloat(process.env.LIVEKIT_STT_EOT_CONFIDENCE ?? '')
       : silenceDefaults.eotConfidence;
 
-    // 0.55 adds phrasing variety; >0.6 risks rule-breaking — validate on 5+ test calls.
-    const llmTemperature = Number.parseFloat(process.env.LIVEKIT_LLM_TEMPERATURE ?? '0.55');
-    const llmMaxCompletionTokens = Number.parseInt(process.env.LIVEKIT_LLM_MAX_TOKENS ?? '280', 10);
+    // 0.7 adds phrasing variety; still reliable for tool selection on gpt-4o-mini / gpt-5-mini.
+    const llmTemperature = Number.parseFloat(process.env.LIVEKIT_LLM_TEMPERATURE ?? '0.7');
+    const llmMaxCompletionTokens = Number.parseInt(process.env.LIVEKIT_LLM_MAX_TOKENS ?? '320', 10);
 
     const resolvedLlm = createCaraLlm({
       inferenceLlmModel,
@@ -2532,9 +2561,10 @@ export default defineAgent({
       }
     } else {
       allowBookingAutomation = true;
-      await session.generateReply({
-        instructions: `The caller just connected. Speak first with ONE short greeting for ${org.name}. Max 35 words. Include the AI and call-recording notice exactly as specified in your instructions.`,
-      });
+      const openInstructions = callPersona
+        ? `The caller just connected. Open with ONE short greeting: "${callPersona.greeting}". Include the AI and call-recording notice exactly as specified in your instructions. Max 35 words.`
+        : `The caller just connected. Speak first with ONE short greeting for ${org.name}. Max 35 words. Include the AI and call-recording notice exactly as specified in your instructions.`;
+      await session.generateReply({ instructions: openInstructions });
       session.userData.disclosureConfirmed = true;
     }
   },
