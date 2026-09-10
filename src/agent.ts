@@ -829,7 +829,9 @@ export default defineAgent({
 
     // 0.7 adds phrasing variety; still reliable for tool selection on gpt-4o-mini / gpt-5-mini.
     const llmTemperature = Number.parseFloat(process.env.LIVEKIT_LLM_TEMPERATURE ?? '0.7');
-    const llmMaxCompletionTokens = Number.parseInt(process.env.LIVEKIT_LLM_MAX_TOKENS ?? '320', 10);
+    const llmMaxCompletionTokens = testCall
+      ? Number.parseInt(process.env.LIVEKIT_TEST_LLM_MAX_TOKENS ?? '150', 10)
+      : Number.parseInt(process.env.LIVEKIT_LLM_MAX_TOKENS ?? '320', 10);
 
     const resolvedLlm = createCaraLlm({
       inferenceLlmModel,
@@ -960,7 +962,7 @@ export default defineAgent({
     });
 
     const deadAirMs = testCall
-      ? Number.parseInt(process.env.DEMO_DEAD_AIR_MS ?? '6000', 10)
+      ? Number.parseInt(process.env.DEMO_DEAD_AIR_MS ?? '20000', 10)
       : Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MS ?? '10000', 10);
     const deadAirCloseMs = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_CLOSE_MS ?? '8000', 10);
     const deadAirMaxPrompts = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MAX_PROMPTS ?? '2', 10);
@@ -1378,7 +1380,7 @@ export default defineAgent({
                   name: org.name,
                   greeting: org.greeting,
                 },
-                callSidAttr,
+                callSidAttr ?? undefined,
               );
           const handle = sayPrepared(session, closingLine, {
             allowInterruptions: false,
@@ -1461,8 +1463,6 @@ export default defineAgent({
     const resetDeadAirTimer = () => {
       clearDeadAirTimers();
       if (isCallEnding()) return;
-      // Demo line: never auto-prompt or auto-hangup on silence — callers explore at their pace.
-      if (testCall) return;
       const f = session.userData.sessionFlags;
       if (f.askedAnythingElse && f.callerRespondedAfterAnythingElse) return;
       if (f.bookingLinkSendInFlight) return;

@@ -52,4 +52,27 @@ describe('demo conversational line', () => {
     assert.match(prompt, /paraphrase/i);
     assert.match(prompt, /endPhoneCall/i);
   });
+
+  it('requires one idea per turn and no feature dump plus question', () => {
+    const prompt = buildCaraCallPrompt({
+      ...baseInput,
+      demoMode: true,
+      openingGreetingDelivered: true,
+    });
+
+    assert.match(prompt, /One capability or idea per turn/i);
+    assert.match(prompt, /Never rattle off features and end with a question/i);
+  });
+
+  it('winds down and endPhoneCall when caller sounds finished without waiting for bye', () => {
+    const prompt = buildCaraCallPrompt({
+      ...baseInput,
+      demoMode: true,
+      openingGreetingDelivered: true,
+    });
+
+    assert.match(prompt, /that's all/i);
+    assert.match(prompt, /endPhoneCall in the same turn/i);
+    assert.match(prompt, /Do not wait for \*"bye"\*/i);
+  });
 });

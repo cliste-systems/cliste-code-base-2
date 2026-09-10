@@ -164,7 +164,7 @@ describe('buildCaraCallPrompt', () => {
     });
 
     assert.match(prompt, /## Your manner on this call/i);
-    assert.match(prompt, /sign-off shape from \*\*Your manner on this call\*\*/i);
+    assert.match(prompt, /warm goodbye from \*\*Your manner on this call\*\*/i);
     assert.ok(prompt.includes(persona.manner));
   });
 });

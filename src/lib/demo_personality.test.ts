@@ -18,6 +18,12 @@ describe('demo_personality prompt blocks', () => {
     assert.match(block, /not \*"ah I get you"\*/i);
   });
 
+  it('forbids capability dump plus question in one breath', () => {
+    const block = formatDemoConversationalBehaviourForPrompt();
+    assert.match(block, /One idea, then stop/i);
+    assert.match(block, /what business are you in/i);
+  });
+
   it('puts the LLM in charge of the opening arc', () => {
     const block = formatDemoPersonalityForPrompt();
     assert.match(block, /You own the opening arc/i);
