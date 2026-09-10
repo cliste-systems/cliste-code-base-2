@@ -7,7 +7,7 @@ export const CARTESIA_SIOBHAN_VOICE_ID = 'd79d2b77-9192-4e10-9407-5d43ca034803';
 export const DEFAULT_ELEVEN_VOICE_ID = 'odyUrTN5HMVKujvVAgWW';
 
 /** Default ElevenLabs model for live calls and cached greetings. */
-export const DEFAULT_ELEVEN_TTS_MODEL = 'eleven_turbo_v2_5';
+export const DEFAULT_ELEVEN_TTS_MODEL = 'eleven_v3';
 
 export type TtsProviderKind = 'elevenlabs' | 'cartesia-inference';
 

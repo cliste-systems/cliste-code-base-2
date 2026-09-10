@@ -13,7 +13,7 @@ import {
   tokenize,
   tts,
 } from '@livekit/agents';
-import type { AudioFrame } from '@livekit/rtc-node';
+import { AudioFrame } from '@livekit/rtc-node';
 import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 
 import { DEFAULT_ELEVEN_TTS_MODEL } from './tts_config.js';
@@ -23,6 +23,23 @@ const DEFAULT_BASE_URL = 'https://api.elevenlabs.io/v1';
 
 export function isElevenV3Model(model: string): boolean {
   return model === 'eleven_v3' || model.startsWith('eleven_v3_');
+}
+
+/** v3 rejects turbo-only voice_settings fields (speed, speaker_boost) — strip before HTTP calls. */
+export function sanitizeVoiceSettingsForModel(
+  model: string,
+  settings?: elevenlabs.VoiceSettings,
+): elevenlabs.VoiceSettings | undefined {
+  if (!settings) return undefined;
+  if (!isElevenV3Model(model)) {
+    return stripUndefined(settings) as elevenlabs.VoiceSettings;
+  }
+  const { speed: _speed, use_speaker_boost: _boost, ...v3Settings } = settings as Record<
+    string,
+    unknown
+  >;
+  const cleaned = stripUndefined(v3Settings as elevenlabs.VoiceSettings);
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined;
 }
 
 export type ElevenLabsHttpV3Config = {
@@ -57,7 +74,10 @@ function buildHttpStreamUrl(config: ElevenLabsHttpV3Config): string {
     `?model_id=${encodeURIComponent(config.model)}` +
     `&output_format=${encodeURIComponent(config.encoding)}` +
     `&apply_text_normalization=auto`;
-  if (config.streamingLatency !== undefined) {
+  if (
+    config.streamingLatency !== undefined &&
+    !isElevenV3Model(config.model)
+  ) {
     url += `&optimize_streaming_latency=${config.streamingLatency}`;
   }
   return url;
@@ -114,15 +134,15 @@ export async function fetchV3SentencePcm(
     return new Uint8Array();
   }
 
-  const voiceSettings = config.voiceSettings
-    ? stripUndefined(config.voiceSettings)
-    : undefined;
+  const voiceSettings = sanitizeVoiceSettingsForModel(config.model, config.voiceSettings);
 
   const body: Record<string, unknown> = {
     text: trimmed,
     model_id: config.model,
-    voice_settings: voiceSettings,
   };
+  if (voiceSettings) {
+    body.voice_settings = voiceSettings;
+  }
   const allowSentenceContext = !isElevenV3Model(config.model);
   if (allowSentenceContext && context?.previousText?.trim()) {
     body.previous_text = context.previousText.trim();
@@ -254,7 +274,8 @@ class V3HttpSynthesizeStream extends tts.SynthesizeStream {
         this.queue.put({ requestId, segmentId, frame: lastFrame, final });
         lastFrame = undefined;
       } else if (final) {
-        // Segment ended with no audio (e.g. whitespace-only sentence).
+        const silent = new AudioFrame(new Int16Array(0), this.#config.sampleRate, 1, 0);
+        this.queue.put({ requestId, segmentId, frame: silent, final: true });
       }
     };
 
@@ -302,6 +323,14 @@ class V3HttpSynthesizeStream extends tts.SynthesizeStream {
         if (trimmed) {
           sentences.push(trimmed);
         }
+      }
+
+      if (isElevenV3Model(this.#config.model)) {
+        const fullText = sentences.join(' ').trim();
+        if (fullText) {
+          await synthesizeSentence(fullText);
+        }
+        return;
       }
 
       for (let i = 0; i < sentences.length; i++) {
