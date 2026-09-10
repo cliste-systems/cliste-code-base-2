@@ -7,9 +7,9 @@ import {
   helloCaraAboutSteerInstructions,
 } from './hello_cara_website_facts.js';
 
-export const DEMO_REPLY_FAST_GUARANTEE_MS = 1200;
-export const DEMO_SILENCE_WATCHDOG_MS = 2500;
-export const DEMO_CALLER_REPLY_NUDGE_MS = 1500;
+export const DEMO_REPLY_FAST_GUARANTEE_MS = 2200;
+export const DEMO_SILENCE_WATCHDOG_MS = 4000;
+export const DEMO_CALLER_REPLY_NUDGE_MS = 2800;
 export const DEMO_THINKING_STALL_MS = 2000;
 
 const NEVER_SILENT =

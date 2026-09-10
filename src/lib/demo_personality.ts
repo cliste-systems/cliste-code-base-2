@@ -213,6 +213,17 @@ export function buildDemoRecordingConsentReply(name: string, seed?: string): str
   return DEMO_CONSENT_REPLIES[idx]!(firstName);
 }
 
+/** Fixed ack after caller answers "how are you keeping?" — no follow-up question same turn. */
+export function buildDemoWellbeingAckReply(seed?: string): string {
+  const lines = [
+    'Not too bad at all, thanks.',
+    'Ah, not too bad, thanks for asking.',
+    'Yeah, not too bad — thanks.',
+  ] as const;
+  const idx = pickDemoPhraseIndex(seed ?? 'wellbeing-ack', lines.length);
+  return lines[idx]!;
+}
+
 const DEMO_AFTER_CONSENT_REPLIES = [
   () => 'How are you keeping?',
   () => 'How are you keeping yourself?',

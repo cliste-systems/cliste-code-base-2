@@ -109,7 +109,7 @@ describe('tts_text_sanitize', () => {
       "Yeah, I can hear you fine. What would you like to try?",
     );
     assert.match(out, /Yeah, I can hear you fine/);
-    assert.match(out, /<break time="120ms"\/> What would you like to try\?/);
+    assert.match(out, /<break time="160ms"\/> What would you like to try\?/);
     assert.doesNotMatch(out, /\./);
     assert.doesNotMatch(out, /<break time="240ms"\/>/);
   });
@@ -120,7 +120,7 @@ describe('tts_text_sanitize', () => {
       'Sure — I can help an electrician by answering calls, taking messages, and sending out appointment reminders. What would you like to try?',
     );
     assert.match(out, /Sure — I can help an electrician by answering calls, taking messages/);
-    assert.match(out, /<break time="120ms"\/> What would you like to try\?/);
+    assert.match(out, /<break time="160ms"\/> What would you like to try\?/);
     assert.doesNotMatch(out, /<break time="240ms"\/>/);
     assert.doesNotMatch(out, /<break time="320ms"\/>/);
   });
@@ -190,7 +190,7 @@ describe('tts_text_sanitize', () => {
     assert.ok(chunks.length >= 1);
     assert.match(chunks.join(' '), /One clause/);
     assert.match(chunks.join(' '), /Two clause/);
-    assert.match(chunks.join(' '), /<break time="120ms"\/>/);
+    assert.match(chunks.join(' '), /<break time="160ms"\/>/);
     assert.doesNotMatch(chunks.join(' '), /\./);
   });
 
@@ -199,8 +199,8 @@ describe('tts_text_sanitize', () => {
     const greeting =
       "Hi — you're through to Hello Cara. I'm your AI assistant, and this call may be recorded and transcribed. How are you keeping today?";
     const out = prepareCartesiaGreetingChunk(greeting);
-    assert.match(out, /Hello Kara<break time="120ms"\/> I'm your AI assistant, and this call may be recorded and transcribed/);
-    assert.match(out, /<break time="120ms"\/> How are you keeping today\?/);
+    assert.match(out, /Hello Kara<break time="160ms"\/> I'm your AI assistant, and this call may be recorded and transcribed/);
+    assert.match(out, /<break time="160ms"\/> How are you keeping today\?/);
     assert.doesNotMatch(out, /<break time="240ms"\/>/);
     assert.doesNotMatch(out, /<break time="320ms"\/>/);
     assert.doesNotMatch(out, /Hello Cara.*Hello Cara/);

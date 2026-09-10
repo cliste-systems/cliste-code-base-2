@@ -159,9 +159,9 @@ function normalizeTtsChunk(text: string, ttsModel = activeTtsModel): string {
 }
 
 /** Brief pause between sentences — replaces periods so Cartesia does not say "dot". */
-const CARTESIA_SENTENCE_BREAK = '<break time="120ms"/>';
+const CARTESIA_SENTENCE_BREAK = '<break time="160ms"/>';
 /** Greeting-only — same light sentence boundary pause, no comma micro-pauses. */
-const CARTESIA_GREETING_SENTENCE_BREAK = '<break time="120ms"/>';
+const CARTESIA_GREETING_SENTENCE_BREAK = '<break time="160ms"/>';
 
 function normalizeCartesiaBase(text: string, ttsModel = activeTtsModel): string {
   let out = normalizeTtsChunk(text, ttsModel).trim();

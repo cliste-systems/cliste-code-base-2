@@ -94,6 +94,7 @@ import {
 import {
   buildDemoConversationalReplySteer,
   buildDemoFollowMotivationSteer,
+  buildDemoWellbeingAckReply,
   callerSoundsLikeHelloCaraMotivation,
 } from './lib/demo_personality.js';
 import {
@@ -756,7 +757,13 @@ export default defineAgent({
     // u3-rt-pro: LiveKit turn detector + tuned silence — STT-owned EOT interrupts TTS mid-reply.
     const useSttNeuralTurnDetection =
       !isU3RtProStt && process.env.LIVEKIT_STT_NEURAL_TURN?.trim() === '1';
-    const latencyProfile = resolveSttLatencyProfile(process.env.LIVEKIT_STT_LATENCY_PROFILE);
+    const latencyProfile = resolveSttLatencyProfile(
+      testCall
+        ? process.env.LIVEKIT_TEST_STT_LATENCY_PROFILE?.trim() ||
+            process.env.LIVEKIT_STT_LATENCY_PROFILE ||
+            'balanced'
+        : process.env.LIVEKIT_STT_LATENCY_PROFILE,
+    );
     const silenceDefaults = assemblyAiTurnSilenceDefaults(inferenceSttModel, latencyProfile);
     const endpointDefaults = endpointingDefaults(latencyProfile, useSttNeuralTurnDetection);
 
@@ -770,7 +777,7 @@ export default defineAgent({
     )
       ? Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '', 10)
       : testCall
-        ? Number.parseInt(process.env.LIVEKIT_TEST_ENDPOINTING_MAX_MS ?? '700', 10)
+        ? Number.parseInt(process.env.LIVEKIT_TEST_ENDPOINTING_MAX_MS ?? '1200', 10)
         : endpointDefaults.maxDelayMs;
     const endpointMode = (process.env.LIVEKIT_ENDPOINTING_MODE?.trim() || 'dynamic') as
       | 'fixed'
@@ -817,16 +824,28 @@ export default defineAgent({
             niche: org.niche,
             businessType: org.agent_business_type,
           }));
-    const sttMinTurnSilenceMs = Number.isFinite(
+    let sttMinTurnSilenceMs = Number.isFinite(
       Number.parseInt(process.env.LIVEKIT_STT_MIN_TURN_SILENCE_MS ?? '', 10),
     )
       ? Number.parseInt(process.env.LIVEKIT_STT_MIN_TURN_SILENCE_MS ?? '', 10)
       : silenceDefaults.minTurnSilenceMs;
-    const sttMaxTurnSilenceMs = Number.isFinite(
+    let sttMaxTurnSilenceMs = Number.isFinite(
       Number.parseInt(process.env.LIVEKIT_STT_MAX_TURN_SILENCE_MS ?? '', 10),
     )
       ? Number.parseInt(process.env.LIVEKIT_STT_MAX_TURN_SILENCE_MS ?? '', 10)
       : silenceDefaults.maxTurnSilenceMs;
+    if (testCall && isU3RtProStt && !process.env.LIVEKIT_STT_MIN_TURN_SILENCE_MS?.trim()) {
+      sttMinTurnSilenceMs = Number.parseInt(
+        process.env.LIVEKIT_TEST_STT_MIN_TURN_SILENCE_MS ?? '400',
+        10,
+      );
+    }
+    if (testCall && isU3RtProStt && !process.env.LIVEKIT_STT_MAX_TURN_SILENCE_MS?.trim()) {
+      sttMaxTurnSilenceMs = Number.parseInt(
+        process.env.LIVEKIT_TEST_STT_MAX_TURN_SILENCE_MS ?? '1400',
+        10,
+      );
+    }
     const sttEotConfidence = Number.isFinite(
       Number.parseFloat(process.env.LIVEKIT_STT_EOT_CONFIDENCE ?? ''),
     )
@@ -1505,7 +1524,11 @@ export default defineAgent({
         !isCallEnding()
       ) {
         session.userData.sessionFlags.demoAwaitingWellbeingReply = false;
-        steerReply(buildDemoConversationalReplySteer(text));
+        demoSteerHandledThisTurn = true;
+        clearDemoReplyGuaranteeTimers();
+        clearCallerReplyNudgeTimer();
+        cancelInFlightReply();
+        sayProgrammatic(buildDemoWellbeingAckReply(text));
       } else if (
         testCall &&
         session.userData.sessionFlags.demoChitchatOpened &&
@@ -1963,7 +1986,9 @@ export default defineAgent({
       if (!text) return;
 
       if (role === 'user') {
-        ingestCallerFinalText(text, 'caller_conversation_item', ev.createdAt);
+        if (!session.userData.demoLine) {
+          ingestCallerFinalText(text, 'caller_conversation_item', ev.createdAt);
+        }
       }
 
       if (isCallEnding()) {
@@ -2484,20 +2509,19 @@ export default defineAgent({
         _chatCtx: Parameters<voice.Agent<CaraAgentUserData>['onUserTurnCompleted']>[0],
         newMessage: Parameters<voice.Agent<CaraAgentUserData>['onUserTurnCompleted']>[1],
       ): Promise<void> {
-        if (
-          this.session.userData.demoLine &&
-          !isDemoOpeningComplete(this.session.userData.sessionFlags)
-        ) {
-          const text = newMessage.textContent?.trim();
-          if (text) {
-            // StopResponse returns before ConversationItemAdded — run opening ingest here.
-            ingestCallerFinalText(text, 'demo_opening_user_turn', Date.now());
-          }
+        if (!this.session.userData.demoLine) return;
+
+        const text = newMessage.textContent?.trim();
+        if (text) {
+          // Demo line owns every turn programmatically — StopResponse blocks parallel framework replies.
+          ingestCallerFinalText(text, 'demo_user_turn', Date.now());
+        }
+        if (!isDemoOpeningComplete(this.session.userData.sessionFlags)) {
           diag.push('info', 'demo_opening_suppressed_auto_reply', {
             phase: syncDemoOpeningPhase(this.session.userData.sessionFlags),
           });
-          throw new voice.StopResponse();
         }
+        throw new voice.StopResponse();
       }
 
       override async ttsNode(

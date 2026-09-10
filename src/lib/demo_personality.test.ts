@@ -10,6 +10,7 @@ import {
   buildDemoAskNameSteer,
   buildDemoPreNameSteer,
   buildDemoRecordingConsentReply,
+  buildDemoWellbeingAckReply,
   callerSoundsLikeHelloCaraMotivation,
   extractCallerIntroducedName,
   extractDemoCallerNameResponse,
@@ -131,6 +132,13 @@ describe('demo_personality', () => {
     assert.match(out, /how are you keeping/i);
     assert.doesNotMatch(out, /Great, thanks/i);
     assert.doesNotMatch(out, /assist/i);
+  });
+
+  it('wellbeing ack is short with no follow-up question', () => {
+    const out = buildDemoWellbeingAckReply('mary');
+    assert.match(out, /not too bad|thanks/i);
+    assert.doesNotMatch(out, /\?/);
+    assert.doesNotMatch(out, /business|mind today|assist/i);
   });
 
   it('programmatic name re-ask is fixed copy', () => {
