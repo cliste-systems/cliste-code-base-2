@@ -60,10 +60,20 @@ describe('resolveTtsConfig', () => {
     assert.equal(cfg.voiceId, CARTESIA_SIOBHAN_VOICE_ID);
   });
 
-  it('uses Eleven profile voice and model', () => {
+  it('uses Cartesia Siobhan when CARA_TTS_PROVIDER=cartesia-inference even if profile is Eleven', () => {
+    process.env.CARA_TTS_PROVIDER = 'cartesia-inference';
+    process.env.LIVEKIT_INFERENCE_TTS_VOICE = CARTESIA_SIOBHAN_VOICE_ID;
+    const cfg = resolveTtsConfig({ testProfile: elevenProfile, orgVoiceId: null });
+    assert.equal(cfg.provider, 'cartesia-inference');
+    assert.equal(cfg.model, 'cartesia/sonic-3');
+    assert.equal(cfg.voiceId, CARTESIA_SIOBHAN_VOICE_ID);
+  });
+
+  it('uses Eleven profile voice and model when provider is unset', () => {
+    delete process.env.CARA_TTS_PROVIDER;
     const cfg = resolveTtsConfig({ testProfile: elevenProfile, orgVoiceId: null });
     assert.equal(cfg.provider, 'elevenlabs');
     assert.equal(cfg.voiceId, DEFAULT_ELEVEN_VOICE_ID);
-    assert.equal(cfg.model, DEFAULT_ELEVEN_TTS_MODEL);
+    assert.equal(cfg.model, 'eleven_v3');
   });
 });

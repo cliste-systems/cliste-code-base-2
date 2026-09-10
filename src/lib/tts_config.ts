@@ -55,6 +55,33 @@ function resolveElevenModel(profileModel: string | null | undefined): string {
   return DEFAULT_ELEVEN_TTS_MODEL;
 }
 
+function resolveCartesiaConfig(input: {
+  testProfile: CallTestProfile | null;
+  profileModel: string | null | undefined;
+  envInferenceModel: string | undefined;
+}): Extract<ResolvedTtsConfig, { provider: 'cartesia-inference' }> {
+  const profileModel = input.profileModel;
+  const cartesiaModel =
+    (profileModel && isCartesiaInferenceTtsModel(profileModel) && profileModel) ||
+    (isCartesiaInferenceTtsModel(input.envInferenceModel) && input.envInferenceModel) ||
+    'cartesia/sonic-3';
+
+  const voiceId =
+    (profileModel && isCartesiaInferenceTtsModel(profileModel)
+      ? input.testProfile?.voice_id?.trim()
+      : undefined) ||
+    process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() ||
+    CARTESIA_SIOBHAN_VOICE_ID;
+
+  return {
+    provider: 'cartesia-inference',
+    model: cartesiaModel,
+    voiceId,
+    language: process.env.LIVEKIT_INFERENCE_TTS_LANGUAGE?.trim() || 'en',
+    label: `${cartesiaModel}:${voiceId}`,
+  };
+}
+
 export function resolveTtsConfig(input: {
   testProfile: CallTestProfile | null;
   orgVoiceId: string | null;
@@ -80,18 +107,21 @@ export function resolveTtsConfig(input: {
     };
   }
 
+  // CARA_TTS_PROVIDER=cartesia-inference must win over a stale Eleven profile row.
+  if (envProvider === 'cartesia-inference') {
+    return resolveCartesiaConfig({
+      testProfile: input.testProfile,
+      profileModel,
+      envInferenceModel,
+    });
+  }
+
   if (profileModel && isCartesiaInferenceTtsModel(profileModel)) {
-    const voiceId =
-      input.testProfile?.voice_id?.trim() ||
-      process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() ||
-      CARTESIA_SIOBHAN_VOICE_ID;
-    return {
-      provider: 'cartesia-inference',
-      model: profileModel,
-      voiceId,
-      language: process.env.LIVEKIT_INFERENCE_TTS_LANGUAGE?.trim() || 'en',
-      label: `${profileModel}:${voiceId}`,
-    };
+    return resolveCartesiaConfig({
+      testProfile: input.testProfile,
+      profileModel,
+      envInferenceModel,
+    });
   }
 
   if (profileModel && !isCartesiaInferenceTtsModel(profileModel)) {
@@ -104,20 +134,9 @@ export function resolveTtsConfig(input: {
     };
   }
 
-  const cartesiaModel =
-    (isCartesiaInferenceTtsModel(envInferenceModel) && envInferenceModel) ||
-    'cartesia/sonic-3';
-
-  const voiceId =
-    input.testProfile?.voice_id?.trim() ||
-    process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() ||
-    CARTESIA_SIOBHAN_VOICE_ID;
-
-  return {
-    provider: 'cartesia-inference',
-    model: cartesiaModel,
-    voiceId,
-    language: process.env.LIVEKIT_INFERENCE_TTS_LANGUAGE?.trim() || 'en',
-    label: `${cartesiaModel}:${voiceId}`,
-  };
+  return resolveCartesiaConfig({
+    testProfile: input.testProfile,
+    profileModel,
+    envInferenceModel,
+  });
 }
