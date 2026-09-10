@@ -13,6 +13,28 @@ function defaultPhoneHangupPath(): string {
   return fileURLToPath(new URL('../assets/phone-hangup.mp3', import.meta.url));
 }
 
+function hangupSoundDisabled(): boolean {
+  const v = process.env.PHONE_HANGUP_SOUND?.trim().toLowerCase();
+  return v === '0' || v === 'false' || v === 'off';
+}
+
+function resolveHangupSoundPath(): string | null {
+  if (hangupSoundDisabled()) return null;
+  const envPath = process.env.PHONE_HANGUP_SOUND_PATH?.trim();
+  if (envPath && existsSync(envPath)) return envPath;
+  const defaultPath = defaultPhoneHangupPath();
+  return existsSync(defaultPath) ? defaultPath : null;
+}
+
+/** Bundled phone-hangup.mp3 is 24 kHz mono — wrong rate sounds crackly/static. */
+function hangupAudioOptions() {
+  return {
+    sampleRate: 24000,
+    numChannels: 1,
+    format: 'mp3' as const,
+  };
+}
+
 export function waitForSpeechHandlePlayout(handle: {
   done(): boolean;
   addDoneCallback: (cb: (sh: unknown) => void) => void;
@@ -33,23 +55,70 @@ export function assistantTextSoundsLikeFakeHangup(text: string): boolean {
 }
 
 export function assistantTextSoundsLikeGoodbye(text: string): boolean {
-  const t = text
+  const t = normalizeGoodbyeText(text);
+  if (!t) return false;
+  if (t.split(' ').length > 16) return false;
+  return (
+    /\b(talk soon|talk to you soon|take care|see you (soon|then|tomorrow|next time)|see ya|cheers now|bye for now|bye bye|goodbye|grand so bye|all the best|have a (good|great|lovely|grand) (day|one|evening|weekend))\b/.test(
+      t,
+    ) ||
+    (/\bthanks for (ringing|calling|trying|the call)\b/.test(t) && !/\?/.test(text)) ||
+    /^(grand|lovely|perfect|brilliant|no bother|cheers),?\s*(talk soon|thanks|thank you|bye)\b/.test(t) ||
+    /^lovely,?\s*thanks for ringing\b/.test(t) ||
+    /\bbye\b/.test(t)
+  );
+}
+
+/** Farewell that should end the line — explicit bye/thanks-for-calling, never a dangling "have a great day". */
+export function assistantTextSoundsLikeTerminalHangup(text: string): boolean {
+  if (/\?/.test(text)) return false;
+  const t = normalizeGoodbyeText(text);
+  if (!t) return false;
+  if (t.split(' ').length > 18) return false;
+  if (/\b(take care|have a good one|talk soon|lovely speaking)\b/.test(t)) {
+    if (/\bthanks for (ringing|calling|trying)\b/.test(t)) return true;
+  }
+  if (/\b(bye|goodbye|bye for now|bye bye)\b/.test(t)) return true;
+  if (/\bthanks for (ringing|calling|trying)\b/.test(t)) return true;
+  return /^lovely,?\s*thanks for (ringing|calling|trying)\b/.test(t);
+}
+
+function normalizeGoodbyeText(text: string): string {
+  return text
     .replace(/\*+/g, ' ')
     .replace(/`+/g, ' ')
     .replace(/[!?.,]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
-  if (!t) return false;
-  if (t.split(' ').length > 14) return false;
-  return (
-    /\b(talk soon|talk to you soon|take care|see you (soon|then|tomorrow|next time)|see ya|cheers now|bye for now|bye bye|goodbye|grand so bye|all the best|have a (good|lovely|grand) (day|one|evening|weekend))\b/.test(
-      t,
-    ) ||
-    (/\bthanks for (ringing|calling|the call)\b/.test(t) && !/\?/.test(text)) ||
-    /^(grand|lovely|perfect|brilliant|no bother|cheers),?\s*(talk soon|thanks|thank you|bye)\b/.test(t) ||
-    /^lovely,?\s*thanks for ringing\b/.test(t)
-  );
+}
+
+export { buildWarmCallClosingLine, softenSpokenFarewell } from './natural_phrasing.js';
+
+export async function waitForAgentSpeechPlayout(
+  session: voice.AgentSession<EndCallUserData>,
+  recentHandle?: {
+    done(): boolean;
+    addDoneCallback: (cb: (sh: unknown) => void) => void;
+  } | null,
+): Promise<void> {
+  if (recentHandle && !recentHandle.done()) {
+    try {
+      await waitForSpeechHandlePlayout(recentHandle);
+    } catch {
+      /* fall through to agentState poll */
+    }
+  }
+  const maxMs = Number.parseInt(process.env.LIVEKIT_DISCONNECT_PLAYOUT_MS ?? '2400', 10);
+  const pollMs = 60;
+  const started = Date.now();
+  while (session.agentState === 'speaking' && Date.now() - started < maxMs) {
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  const tailMs = Number.parseInt(process.env.LIVEKIT_END_CALL_POST_SPEECH_MS ?? '120', 10);
+  if (Number.isFinite(tailMs) && tailMs > 0) {
+    await new Promise((r) => setTimeout(r, Math.min(Math.max(tailMs, 80), 800)));
+  }
 }
 
 export type EndCallUserData = {
@@ -58,11 +127,9 @@ export type EndCallUserData = {
 };
 
 export async function waitForSessionPlayout(
-  _session: voice.AgentSession<EndCallUserData>,
+  session: voice.AgentSession<EndCallUserData>,
 ): Promise<void> {
-  const ms = Number.parseInt(process.env.LIVEKIT_DISCONNECT_PLAYOUT_MS ?? '1200', 10);
-  const delay = Number.isFinite(ms) ? Math.min(Math.max(ms, 300), 5000) : 1200;
-  await new Promise((r) => setTimeout(r, delay));
+  await waitForAgentSpeechPlayout(session);
 }
 
 export async function disconnectCallerLeg(
@@ -97,19 +164,13 @@ export async function disconnectCallerLeg(
   try {
     await beforeAudio();
 
-    const envPath = process.env.PHONE_HANGUP_SOUND_PATH?.trim();
-    const resolvedPath =
-      envPath && existsSync(envPath) ? envPath : defaultPhoneHangupPath();
+    const resolvedPath = resolveHangupSoundPath();
 
     let playedSound = false;
-    if (existsSync(resolvedPath)) {
+    if (resolvedPath) {
       try {
-        const audio = audioFramesFromFile(resolvedPath, {
-          sampleRate: 48000,
-          numChannels: 1,
-          format: 'mp3',
-        });
-        const handle = session.say(' ', {
+        const audio = audioFramesFromFile(resolvedPath, hangupAudioOptions());
+        const handle = session.say('', {
           audio,
           addToChatCtx: false,
           allowInterruptions: false,
@@ -119,10 +180,12 @@ export async function disconnectCallerLeg(
       } catch (e) {
         console.error('[end_call] hang-up sound', e);
       }
+    } else if (!hangupSoundDisabled()) {
+      console.warn('[end_call] hang-up sound enabled but file missing');
     }
 
-    const postSoundMs = Number.parseInt(process.env.LIVEKIT_END_CALL_POST_SOUND_MS ?? '200', 10);
-    const fallbackPadMs = Number.parseInt(process.env.LIVEKIT_END_CALL_DELAY_MS ?? '1200', 10);
+    const postSoundMs = Number.parseInt(process.env.LIVEKIT_END_CALL_POST_SOUND_MS ?? '80', 10);
+    const fallbackPadMs = Number.parseInt(process.env.LIVEKIT_END_CALL_DELAY_MS ?? '250', 10);
     const extraMs = playedSound
       ? Number.isFinite(postSoundMs)
         ? Math.min(Math.max(postSoundMs, 0), 5000)

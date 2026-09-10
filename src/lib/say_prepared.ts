@@ -11,9 +11,10 @@ export function sayPrepared(
     addToChatCtx?: boolean;
   },
 ): ReturnType<voice.AgentSession<unknown>['say']> {
-  const { greeting, ttsModel, allowInterruptions, addToChatCtx } = options ?? {};
+  const { greeting, greetingCommaFlow, ttsModel, allowInterruptions, addToChatCtx } = options ?? {};
   const prepOptions: PrepareHardcodedSpeechOptions = {};
   if (greeting) prepOptions.greeting = true;
+  if (greetingCommaFlow !== undefined) prepOptions.greetingCommaFlow = greetingCommaFlow;
   if (ttsModel) prepOptions.ttsModel = ttsModel;
   return session.say(prepareHardcodedSpeechForTts(text, prepOptions), {
     ...(allowInterruptions !== undefined ? { allowInterruptions } : {}),

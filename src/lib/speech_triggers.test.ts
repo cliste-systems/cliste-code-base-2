@@ -5,20 +5,62 @@ import {
   assistantAskedAnythingElse,
   assistantAskedServiceIntake,
   assistantClaimsLinkWasSent,
+  assistantOffersRedundantSampleCall,
+  assistantSoundsLikeCorporateAssist,
+  assistantSoundsLikeTradeMenu,
   callerAskedNewQuestion,
   callerAskedPhoneOrHumanBooking,
+  callerAsksDemoMenu,
+  callerExplicitlyRequestedHangup,
   callerPivotedFromSmsConsent,
   callerSaidNothingElse,
+  callerSoundsLikeAudioCheck,
+  callerSoundsLikeLineEngagement,
   callerSoundsLikeSocialChitchat,
+  callerSoundsLikeVagueDemoOpening,
   callerWindingDownCall,
 } from './speech_triggers.js';
 
 describe('speech_triggers', () => {
+  it('detects demo menu questions', () => {
+    assert.equal(callerAsksDemoMenu('What can we demo?'), true);
+    assert.equal(callerAsksDemoMenu("I'm wondering what can we demo"), true);
+    assert.equal(callerAsksDemoMenu('Demo an electrician'), false);
+  });
+
+  it('detects redundant sample-call offers on the demo line', () => {
+    assert.equal(
+      assistantOffersRedundantSampleCall(
+        'Would you like to hear how I sound on a sample call?',
+      ),
+      true,
+    );
+    assert.equal(
+      assistantOffersRedundantSampleCall('Fancy pretending you\'re ringing a garage?'),
+      false,
+    );
+  });
+
+  it('detects robotic trade menu lists', () => {
+    assert.equal(
+      assistantSoundsLikeTradeMenu(
+        'Sure — you can demo a call for a trade like an electrician, salon, or shop.',
+      ),
+      true,
+    );
+    assert.equal(
+      assistantSoundsLikeTradeMenu('Fancy a quick electrician example?'),
+      false,
+    );
+  });
+
   it('matches the CALL FLOW anything-else spine phrase', () => {
     assert.equal(
       assistantAskedAnythingElse('Is there anything else I can help you with?'),
       true,
     );
+    assert.equal(assistantAskedAnythingElse('Is that everything for you?'), true);
+    assert.equal(assistantAskedAnythingElse('Are you all sorted?'), true);
   });
 
   it('does not match unrelated lines', () => {
@@ -29,6 +71,14 @@ describe('speech_triggers', () => {
     assert.equal(callerSaidNothingElse('No'), false);
     assert.equal(callerSaidNothingElse("No that's not possible"), false);
     assert.equal(callerSaidNothingElse("That's all, thanks"), true);
+    assert.equal(callerSaidNothingElse("No, I'm okay"), true);
+    assert.equal(callerSaidNothingElse("That's fine"), true);
+  });
+
+  it('detects explicit hang-up requests', () => {
+    assert.equal(callerExplicitlyRequestedHangup('End call'), true);
+    assert.equal(callerExplicitlyRequestedHangup('Can you hang up please?'), true);
+    assert.equal(callerExplicitlyRequestedHangup('What can you do?'), false);
   });
 
   it('treats bare no as wind-down only in anything-else context', () => {
@@ -36,6 +86,10 @@ describe('speech_triggers', () => {
     assert.equal(callerWindingDownCall('Nope, thanks'), true);
     assert.equal(callerWindingDownCall("No that's not possible"), false);
     assert.equal(callerWindingDownCall("That's all, thanks"), true);
+    assert.equal(callerWindingDownCall("No, that's everything. Thanks."), true);
+    assert.equal(callerWindingDownCall("No, I'm okay"), true);
+    assert.equal(callerWindingDownCall("I said I'm okay, thanks"), true);
+    assert.equal(callerWindingDownCall('End call'), true);
   });
 
   it('detects false link-sent claims', () => {
@@ -58,6 +112,28 @@ describe('speech_triggers', () => {
     assert.equal(callerPivotedFromSmsConsent(pivot), true);
   });
 
+  it('does not treat chitchat or hours questions as SMS consent pivot', () => {
+    assert.equal(callerPivotedFromSmsConsent('How are you keeping yourself?'), false);
+    assert.equal(
+      callerPivotedFromSmsConsent("I'm doing good. Yeah. Are you talking tomorrow?"),
+      false,
+    );
+    assert.equal(callerPivotedFromSmsConsent('Can you hear me?'), false);
+  });
+
+  it('detects audio check lines', () => {
+    assert.equal(callerSoundsLikeAudioCheck('Can you hear me?'), true);
+    assert.equal(callerSoundsLikeAudioCheck('What time are you open?'), false);
+  });
+
+  it('detects bare hello/hi line checks separately from social chitchat', () => {
+    assert.equal(callerSoundsLikeLineEngagement('Hello?'), true);
+    assert.equal(callerSoundsLikeLineEngagement('Hi there'), true);
+    assert.equal(callerSoundsLikeSocialChitchat('Hello?'), false);
+    assert.equal(callerSoundsLikeSocialChitchat('Hi there'), false);
+    assert.equal(callerSoundsLikeSocialChitchat('Hello, how are you keeping today?'), true);
+  });
+
   it('detects service intake questions', () => {
     assert.equal(
       assistantAskedServiceIntake(
@@ -75,10 +151,34 @@ describe('speech_triggers', () => {
 
   it('detects social chitchat without booking intent', () => {
     assert.equal(callerSoundsLikeSocialChitchat('Hello, how are you keeping today?'), true);
-    assert.equal(callerSoundsLikeSocialChitchat('Hi there'), true);
+    assert.equal(callerSoundsLikeSocialChitchat('You keeping?'), true);
+    assert.equal(
+      callerSoundsLikeSocialChitchat("I'm not too bad. Um, what's weather like with you?"),
+      true,
+    );
     assert.equal(
       callerSoundsLikeSocialChitchat("I'd like to book a root touch-up please"),
       false,
     );
+  });
+
+  it('detects vague demo openings with wellness plus small talk', () => {
+    assert.equal(
+      callerSoundsLikeVagueDemoOpening("I'm not too bad. Um, what's weather like with you?"),
+      true,
+    );
+    assert.equal(callerSoundsLikeVagueDemoOpening("I'm good thanks"), true);
+    assert.equal(
+      callerSoundsLikeVagueDemoOpening("Not too bad — I run a salon and I'm curious"),
+      false,
+    );
+  });
+
+  it('detects corporate assist phrasing', () => {
+    assert.equal(
+      assistantSoundsLikeCorporateAssist("I'm here to help! What can I assist you with today?"),
+      true,
+    );
+    assert.equal(assistantSoundsLikeCorporateAssist("I'm good thanks — yourself?"), false);
   });
 });

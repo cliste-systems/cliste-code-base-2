@@ -1,6 +1,7 @@
 /**
- * ElevenLabs TTS with HTTP /stream fallback for eleven_v3.
- * v3 is rejected (403) on the WebSocket multi-stream path the stock plugin uses.
+ * ElevenLabs TTS with HTTP /stream for live calls.
+ * The stock plugin WebSocket multi-stream path fails for some voices/settings
+ * (silent calls). HTTP /stream works for turbo, flash, and v3.
  */
 import {
   APIConnectionError,
@@ -35,7 +36,7 @@ export type ElevenLabsHttpV3Config = {
 
 function sampleRateFromEncoding(encoding: string): number {
   const match = encoding.match(/(\d+)$/);
-  return match ? Number.parseInt(match[1]!, 10) : 22050;
+  return match ? Number.parseInt(match[1]!, 10) : 24000;
 }
 
 function stripUndefined<T extends object>(obj: T): Partial<T> {
@@ -63,10 +64,13 @@ function buildHttpStreamUrl(config: ElevenLabsHttpV3Config): string {
 export function resolveElevenLabsHttpV3Config(
   opts: elevenlabs.TTSOptions,
 ): ElevenLabsHttpV3Config | null {
-  const model = String(opts.model ?? 'eleven_turbo_v2_5');
-  if (!isElevenV3Model(model)) {
+  const useWebsocket =
+    process.env.ELEVEN_TTS_WEBSOCKET?.trim().toLowerCase() === '1' ||
+    process.env.ELEVEN_TTS_WEBSOCKET?.trim().toLowerCase() === 'true';
+  if (useWebsocket) {
     return null;
   }
+  const model = String(opts.model ?? 'eleven_turbo_v2_5');
   const encoding = opts.encoding ?? 'pcm_24000';
   const baseURL = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/$/, '');
   const apiKey =
@@ -117,10 +121,11 @@ export async function fetchV3SentencePcm(
     model_id: config.model,
     voice_settings: voiceSettings,
   };
-  if (context?.previousText?.trim()) {
+  const allowSentenceContext = !isElevenV3Model(config.model);
+  if (allowSentenceContext && context?.previousText?.trim()) {
     body.previous_text = context.previousText.trim();
   }
-  if (context?.nextText?.trim()) {
+  if (allowSentenceContext && context?.nextText?.trim()) {
     body.next_text = context.nextText.trim();
   }
 
@@ -174,11 +179,20 @@ export async function fetchV3SentencePcm(
   return merged;
 }
 
-/** Offline render of full text via v3 HTTP (sentence continuity). */
+/** Offline render of full text via v3 HTTP. v3 = one synthesis; turbo uses sentence context. */
 export async function renderTextToPcmWithV3(
   config: ElevenLabsHttpV3Config,
   text: string,
 ): Promise<Uint8Array> {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return new Uint8Array();
+  }
+
+  if (isElevenV3Model(config.model)) {
+    return fetchV3SentencePcm(config, trimmed);
+  }
+
   const tokenizer = new tokenize.basic.SentenceTokenizer();
   const sentences = tokenizer
     .tokenize(text)
@@ -294,10 +308,12 @@ class V3HttpSynthesizeStream extends tts.SynthesizeStream {
         }
         const sentence = sentences[i]!;
         const ctx: V3SentenceContext = {};
-        const prev = i > 0 ? sentences[i - 1] : undefined;
-        const next = i < sentences.length - 1 ? sentences[i + 1] : undefined;
-        if (prev) ctx.previousText = prev;
-        if (next) ctx.nextText = next;
+        if (!isElevenV3Model(this.#config.model)) {
+          const prev = i > 0 ? sentences[i - 1] : undefined;
+          const next = i < sentences.length - 1 ? sentences[i + 1] : undefined;
+          if (prev) ctx.previousText = prev;
+          if (next) ctx.nextText = next;
+        }
         await synthesizeSentence(sentence, ctx);
       }
     };
@@ -324,7 +340,7 @@ class V3HttpSynthesizeStream extends tts.SynthesizeStream {
   }
 }
 
-/** ElevenLabs TTS — routes eleven_v3 through HTTP /stream instead of WebSocket. */
+/** ElevenLabs TTS — live calls use HTTP /stream unless ELEVEN_TTS_WEBSOCKET=1. */
 export class ElevenLabsQualityTts extends elevenlabs.TTS {
   readonly httpV3Config: ElevenLabsHttpV3Config | null;
 

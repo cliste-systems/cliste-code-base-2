@@ -1,6 +1,7 @@
 import { llm, voice } from '@livekit/agents';
 import { z } from 'zod';
 
+import type { OrgVertical } from './org_vertical.js';
 import {
   callRoutingAllowsHumanTransfer,
   parseCallRoutingMode,
@@ -23,6 +24,7 @@ import {
   type BusinessFileRow,
 } from './supabase.js';
 import { insertActionTicket } from './action_tickets.js';
+import { playTypingSound } from './callback_audio.js';
 import { disconnectCallerLeg, type EndCallUserData } from './end_call.js';
 import { normalizePhoneE164 } from './phone_normalize.js';
 import { sendTwilioSms, twilioSmsConfigured, caraSmsDryRunEnabled } from './twilio_sms.js';
@@ -51,6 +53,17 @@ export type CaraSessionFlags = {
   bookingLinkSendInFlight: boolean;
   closingCall: boolean;
   likelySttGarble: boolean;
+  demoCallerReadyToClose?: boolean;
+  /** Active Hello Cara demo playbook slug (electrician, salon, …). */
+  demoScenarioSlug?: string | null;
+  /** 1-based beat index within the active demo playbook (1–4). */
+  demoScenarioBeat?: number;
+  /** Caller volunteered their first name on the demo line. */
+  demoCallerName?: string | null;
+  /** Playful name banter already used this call. */
+  demoNameBanterUsed?: boolean;
+  /** Casual "who am I talking to?" moment already used. */
+  demoPersonalityNameAskUsed?: boolean;
 };
 
 export type CaraAgentUserData = {
@@ -64,6 +77,8 @@ export type CaraAgentUserData = {
   callRoutingMode: string | null;
   sessionFlags: CaraSessionFlags;
   disclosureConfirmed: boolean;
+  /** Hello Cara demo line — stricter tool and closing rules. */
+  demoLine?: boolean;
   endCallTarget?: { roomName: string; callerIdentity: string };
 };
 
@@ -576,6 +591,13 @@ export class CaraTools {
     }),
     execute: async ({ callerName, staffSummary, callbackPhone }, { ctx }) => {
       const ud = readCaraUserData(ctx);
+      if (ud.demoLine) {
+        return {
+          ok: false,
+          message:
+            'Demo line — do not take messages or invent caller names. Answer their question in speech only.',
+        };
+      }
       await maybeAcknowledgeToolStart(ctx.session as voice.AgentSession<CaraAgentUserData>);
       const name = callerName.trim();
       if (!name || /^(caller|unknown|n\/a|none)$/i.test(name)) {
@@ -588,6 +610,7 @@ export class CaraTools {
       if (!text) {
         return { ok: false, message: 'Provide a fuller staffSummary.' };
       }
+      playTypingSound(ctx.session as voice.AgentSession<CaraAgentUserData>);
       return createCallbackViaWebhook(ud, text, {
         ...(callbackPhone?.trim() ? { phone: callbackPhone } : {}),
         callerName: name,
@@ -774,10 +797,23 @@ export class CaraTools {
 
   readonly endPhoneCall = llm.tool({
     description:
-      'End the call after a short goodbye. Invoke in the same turn as your farewell — never say the tool name aloud.',
+      'End the call after a warm Irish goodbye (e.g. "Lovely — thanks for calling Murphy\'s SuperValu. Take care."). Invoke in the same turn as your farewell — never abrupt "ok bye", bare "bye", or "grand".',
     parameters: z.object({}),
     execute: async (_args, { ctx }) => {
       const ud = readCaraUserData(ctx);
+      if (ud.demoLine) {
+        const flags = ud.sessionFlags;
+        const mayClose =
+          flags.demoCallerReadyToClose ||
+          (flags.askedAnythingElse && flags.callerRespondedAfterAnythingElse);
+        if (!mayClose) {
+          return {
+            ok: false,
+            message:
+              'Demo line — ask the wrap beat (beat 4) or "anything else", wait for the caller to say they are done (thanks, goodbye, that\'s everything), then goodbye + endPhoneCall.',
+          };
+        }
+      }
       if (
         (ud.sessionFlags.askedAnythingElse || ud.sessionFlags.awaitingAnythingElseReply) &&
         !ud.sessionFlags.callerRespondedAfterAnythingElse
@@ -785,7 +821,7 @@ export class CaraTools {
         return {
           ok: false,
           message:
-            'Wait for the caller to answer "anything else?" before invoking endPhoneCall.',
+            'Wait for the caller to answer your wind-down question before invoking endPhoneCall.',
         };
       }
       return disconnectCallerLeg(
@@ -802,9 +838,13 @@ export class CaraTools {
     },
   });
 
-  toolContext() {
+  toolContext(options?: { vertical?: OrgVertical; demoLine?: boolean }) {
+    if (options?.demoLine) {
+      return {
+        endPhoneCall: this.endPhoneCall,
+      };
+    }
     return {
-      sendBookingLink: this.sendBookingLink,
       sendRoutingLink: this.sendRoutingLink,
       sendDirectionsLink: this.sendDirectionsLink,
       sendRoutingFile: this.sendRoutingFile,

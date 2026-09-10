@@ -1,4 +1,6 @@
-import { inference, llm } from '@livekit/agents';
+import { llm } from '@livekit/agents';
+
+import { createCaraLlm } from './llm_provider.js';
 
 /** Avoid overwhelming inference context on very long calls. */
 const MAX_VERBATIM_FOR_LLM = 48_000;
@@ -121,12 +123,10 @@ async function runPostprocessLlm(input: {
   outcome: string;
   inferenceLlmModel: string;
 }): Promise<CallPostprocessResult | null> {
-  const postprocessLlm = new inference.LLM({
-    model: input.inferenceLlmModel as inference.LLMModels,
-    modelOptions: {
-      temperature: 0.25,
-      max_completion_tokens: 2200,
-    },
+  const { instance: postprocessLlm } = createCaraLlm({
+    inferenceLlmModel: input.inferenceLlmModel,
+    temperature: 0.25,
+    maxCompletionTokens: 2200,
   });
 
   const userPrompt = `Business name: ${input.businessName}

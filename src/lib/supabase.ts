@@ -43,12 +43,12 @@ export function playgroundOrg(): OrgCallConfig {
   return {
     id: '00000000-0000-4000-8000-000000000001',
     account_id: null,
-    name: process.env.CARA_TRANSCRIPT_ORG_NAME?.trim() || 'Bloom Beauty Studio',
+    name: process.env.CARA_TRANSCRIPT_ORG_NAME?.trim() || "Murphy's SuperValu Killarney",
     slug:
       process.env.DEFAULT_ORG_SLUG?.trim() ||
       process.env.DEFAULT_SALON_SLUG?.trim() ||
       'playground',
-    niche: 'salon',
+    niche: 'retail',
     tier: 'starter',
     status: 'active',
     is_active: true,
@@ -58,7 +58,7 @@ export function playgroundOrg(): OrgCallConfig {
     greeting: null,
     assistant_display_name: 'Cara',
     agent_voice_id: process.env.ELEVEN_VOICE_ID?.trim() || null,
-    agent_business_type: 'salon',
+    agent_business_type: 'retail',
     agent_opening_hours: null,
     routing_links: null,
     fallback_number: null,

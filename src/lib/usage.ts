@@ -60,6 +60,7 @@ export async function startUsageRecord(input: StartUsageInput): Promise<string |
 export async function finishUsageRecord(input: {
   usageId: string;
   durationSeconds: number;
+  syncSkipReason?: string | null;
 }): Promise<void> {
   if (isOfflinePlayground() || !input.usageId) {
     return;
@@ -67,13 +68,15 @@ export async function finishUsageRecord(input: {
   // Bill actual talk time in minutes (2dp) — no per-call round-up.
   const seconds = Math.max(0, input.durationSeconds);
   const minutes = Math.round((seconds / 60) * 100) / 100;
+  const skipReason = input.syncSkipReason?.trim() || null;
   try {
     const supabase = getSupabaseClient();
     const { error } = await supabase
       .from('usage_records')
       .update({
         ended_at: new Date().toISOString(),
-        minutes_billable: minutes,
+        minutes_billable: skipReason ? 0 : minutes,
+        ...(skipReason ? { sync_skip_reason: skipReason } : {}),
       })
       .eq('id', input.usageId);
     if (error) {

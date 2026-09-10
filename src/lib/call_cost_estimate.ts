@@ -97,11 +97,13 @@ export function estimateCallCostUsd(input: {
     : llmVoiceFromTokens;
 
   /**
-   * TTS (ElevenLabs). Plan/character pricing varies; voice agents often land ~$0.10–0.18/min billed.
-   * Default: flat **USD per wall-clock minute** (simplest vs invoices).
-   * Set `CALL_COST_TTS_USD_PER_MIN=0` to use per‑character math (`CALL_COST_TTS_CHARS_PER_MIN` × `CALL_COST_TTS_USD_PER_1K_CHARS`) instead.
+   * TTS billing. Default flat USD/min depends on provider when CALL_COST_TTS_USD_PER_MIN unset.
+   * Cartesia via LiveKit Inference ~$50/1M chars (~$0.04/min). Eleven direct ~$0.13/min.
    */
-  const ttsUsdPerMin = envFloat('CALL_COST_TTS_USD_PER_MIN', 0.13);
+  let ttsUsdPerMin = envFloat('CALL_COST_TTS_USD_PER_MIN', Number.NaN);
+  if (!Number.isFinite(ttsUsdPerMin)) {
+    ttsUsdPerMin = input.ttsModel.toLowerCase().includes('cartesia') ? 0.04 : 0.13;
+  }
   let tts: number;
   if (ttsUsdPerMin > 0) {
     tts = durationMin * ttsUsdPerMin;

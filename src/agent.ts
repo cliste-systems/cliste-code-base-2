@@ -2,7 +2,7 @@ import 'dotenv/config';
 
 import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 import * as lkTurn from '@livekit/agents-plugin-livekit';
-import * as openai from '@livekit/agents-plugin-openai';
+import { createCaraLlm } from './lib/llm_provider.js';
 import * as silero from '@livekit/agents-plugin-silero';
 import {
   type JobContext,
@@ -18,18 +18,33 @@ import { RoomServiceClient } from 'livekit-server-sdk';
 import { fileURLToPath } from 'node:url';
 
 import { buildCaraCallPrompt } from './lib/cara_prompt.js';
+import { resolveAiDisclosure } from './lib/ai_disclosure.js';
 import { CaraTools, type CaraAgentUserData } from './lib/cara_tools.js';
 import { estimateCallCostUsd } from './lib/call_cost_estimate.js';
 import { postprocessCallTranscript } from './lib/call_postprocess.js';
 import { insertCallLog, updateCallLogEnrichment } from './lib/call_logs.js';
 import {
+  buildCloseDiagnosticsPayload,
+  createCallLatencyTracker,
+} from './lib/call_close_diagnostics.js';
+import { createCallDiagnosticSession } from './lib/call_diagnostic_bundle.js';
+import {
   assistantTextSoundsLikeFakeHangup,
   assistantTextSoundsLikeGoodbye,
+  assistantTextSoundsLikeTerminalHangup,
+  buildWarmCallClosingLine,
   disconnectCallerLeg,
+  waitForAgentSpeechPlayout,
   waitForSessionPlayout,
   waitForSpeechHandlePlayout,
 } from './lib/end_call.js';
-import { createElevenLabsTts } from './lib/elevenlabs-v3-http-tts.js';
+import {
+  resolveElevenVoiceSettings,
+  voiceSettingsCacheFingerprint,
+} from './lib/call_participant.js';
+import { createElevenLabsTts, isElevenV3Model } from './lib/elevenlabs-v3-http-tts.js';
+import { prewarmConfiguredGreetingCaches } from './lib/greeting_prewarm.js';
+import { resolveTtsConfig } from './lib/tts_config.js';
 import { greetingIncludesAiDisclosure } from './lib/greeting_compliance.js';
 import {
   ensureGreetingPcmCached,
@@ -47,19 +62,75 @@ import {
   stableCallSidFallback,
 } from './lib/caller_blocklist.js';
 import { classifyCallerLine, type CallerLineInfo } from './lib/phone_classify.js';
+import {
+  classifyPipelineErrorStage,
+  postPipelineIncident,
+} from './lib/pipeline_incident.js';
+import { isTestCall } from './lib/test_call.js';
+import { getActiveCallTestProfile } from './lib/test_profile.js';
+import {
+  detectDemoScenario,
+  formatDemoBeatHint,
+  type DemoScenario,
+} from './lib/demo_scenarios.js';
+import {
+  demoPlaybookBlockFromScenarios,
+  loadDemoScenarios,
+} from './lib/demo_scenarios_loader.js';
+import { buildDemoCallClosingLine, assistantAskedDemoWrap } from './lib/natural_phrasing.js';
+import { caraTypingSoundEnabled, playTypingSound } from './lib/callback_audio.js';
+import { persistTestCallReportFromWorker } from './lib/persist_test_call_report.js';
+import {
+  classifyHelloCaraAboutQuestion,
+  helloCaraAboutSteerInstructions,
+} from './lib/hello_cara_website_facts.js';
+import {
+  buildDemoNameBanterSteer,
+  buildDemoChitchatSteer,
+  buildDemoFollowMotivationSteer,
+  buildDemoPersonalityNameAskSteer,
+  callerSoundsLikeHelloCaraMotivation,
+  extractCallerIntroducedName,
+} from './lib/demo_personality.js';
+import {
+  buildDemoCallerReplyNudgeSteer,
+  buildDemoNeverSilentSteer,
+  buildDemoSilenceWatchdogSteer,
+  DEMO_CALLER_REPLY_NUDGE_MS,
+  DEMO_REPLY_FAST_GUARANTEE_MS,
+  DEMO_SILENCE_WATCHDOG_MS,
+  DEMO_THINKING_STALL_MS,
+} from './lib/demo_reply_guarantee.js';
+import { resolveSpokenBusinessName } from './lib/spoken_business_name.js';
+import { orgVerticalLabel } from './lib/org_vertical.js';
 import { sayPrepared } from './lib/say_prepared.js';
 import {
   assistantAskedAnythingElse,
   assistantAwaitingCallerReply,
+  assistantClaimsLinkWasSent,
+  assistantSoundsLikeCorporateAssist,
   callerAskedNewQuestion,
+  callerAsksDemoMenu,
+  callerExplicitlyRequestedHangup,
+  callerPivotedFromSmsConsent,
   callerSaidNothingElse,
+  callerSoundsLikeVagueDemoOpening,
   callerWindingDownCall,
+  assistantSoundsLikeTradeMenu,
+  assistantOffersRedundantSampleCall,
 } from './lib/speech_triggers.js';
 import {
   detectLikelySttGarble,
   isPhantomCallerTranscript,
+  soundsLikeBookingIntent,
   soundsLikeCancelOrChangeAppointment,
 } from './lib/stt_garble.js';
+import { callerSoundsLikeRetailStaffQuestion } from './lib/retail_staff_questions.js';
+import {
+  callerSoundsLikeWeekdayHoursCorrection,
+  callerSoundsLikeOpenHoursQuestion,
+  formatStructuredHoursForLivePrompt,
+} from './lib/retail_hours.js';
 import {
   getOrgForCall,
   getSendableBusinessFiles,
@@ -68,11 +139,13 @@ import {
 } from './lib/supabase.js';
 import {
   bufferTtsStreamBySentence,
+  buildTtsNodeInputStream,
   prepareHardcodedSpeechForTts,
   prepareTextForTtsStreaming,
   setActiveTtsModelForSanitizer,
 } from './lib/tts_text_sanitize.js';
 import {
+  assemblyAiTurnSilenceDefaults,
   buildAssemblyAiSttOptions,
   buildSttDomainPrompt,
   buildSttKeyterms,
@@ -80,7 +153,6 @@ import {
   isAssemblyAiSttModel,
   isU3RtProSttModel,
   resolveSttLatencyProfile,
-  sttTurnSilenceDefaults,
 } from './lib/stt_keyterms.js';
 import {
   canonicalCallOutcome,
@@ -97,6 +169,8 @@ import {
   sumUsageMinutesThisPeriod,
 } from './lib/usage.js';
 
+void reapZombieUsageRows();
+
 const DEFAULT_TEST_PHONE = '+15551234567';
 const MAX_TRANSCRIPT_CHARS = 120_000;
 const MAX_TOOL_SNIPPET_CHARS = 800;
@@ -104,6 +178,7 @@ const LLM_STALL_MS = 6000;
 const CALLER_TRANSCRIPT_DEDUPE_MS = 3000;
 const GREETING_INTERRUPT_FALLBACK_MS = 1500;
 const GREETING_PLAYBACK_FALLBACK_MS = 800;
+const CALLER_REPLY_NUDGE_MS = 2200;
 
 /** Optional slow-tool stall phrases — disabled by default (see LIVEKIT_RESPONSE_FILLER_MS). */
 const RESPONSE_FILLER_PHRASES = ['Let me see now…'] as const;
@@ -111,28 +186,8 @@ const RESPONSE_FILLER_PHRASES = ['Let me see now…'] as const;
 const REPLY_RETRY_INSTRUCTIONS =
   'Your last reply did not reach the caller. One short warm line — acknowledge what they asked — then continue. No service menu. If waiting on SMS yes/no, do not re-offer the link.';
 
-function resolveElevenVoiceSettings(): {
-  stability: number;
-  similarity_boost: number;
-  style: number;
-  use_speaker_boost?: true;
-} {
-  const speakerBoostRaw = process.env.ELEVEN_VOICE_SPEAKER_BOOST?.trim().toLowerCase();
-  const settings = {
-    // Slightly higher stability + lower style reduces turbo "screaming" / stretched vowels.
-    stability: Number.parseFloat(process.env.ELEVEN_VOICE_STABILITY ?? '0.55') || 0.55,
-    similarity_boost: Number.parseFloat(process.env.ELEVEN_VOICE_SIMILARITY ?? '0.8') || 0.8,
-    style: Number.parseFloat(process.env.ELEVEN_VOICE_STYLE ?? '0.22') || 0.22,
-  };
-  if (speakerBoostRaw === 'true' || speakerBoostRaw === '1') {
-    return { ...settings, use_speaker_boost: true };
-  }
-  return settings;
-}
-
 /** Tools that may block on HTTP/SMS — only these arm the thinking micro-ack. */
 const SLOW_TOOL_ACK_NAMES = new Set([
-  'sendBookingLink',
   'sendDirectionsLink',
   'sendRoutingLink',
   'sendRoutingFile',
@@ -141,8 +196,34 @@ const SLOW_TOOL_ACK_NAMES = new Set([
   'transferToTeam',
 ]);
 
+function normalizeSpokenLine(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+function lineMatchesGreeting(text: string, greeting: string): boolean {
+  if (!greeting.trim()) return false;
+  const a = normalizeSpokenLine(text);
+  const b = normalizeSpokenLine(greeting);
+  if (a === b) return true;
+  if (a.length > 24 && b.length > 24) {
+    const head = b.slice(0, Math.min(48, b.length));
+    return a.includes(head) || b.includes(a.slice(0, Math.min(48, a.length)));
+  }
+  return false;
+}
+
 function assistantAskedForPhoneNumber(text: string): boolean {
   return /\b((?:your |the )?phone number|what(?:'s| is) your number|provide (?:me with )?(?:your )?(?:phone )?number|mobile number|contact number|number you(?:'re| are) calling from|give me your number)\b/i.test(
+    text,
+  );
+}
+
+function assistantAskedForCallerIdentity(text: string): boolean {
+  return /\b(take your name|your name and number|name and number|what(?:'s| is) your name|can i take your name|may i take your name|who am i speaking to)\b/i.test(
     text,
   );
 }
@@ -288,6 +369,9 @@ async function disconnectParticipant(
 export default defineAgent({
   prewarm: async (proc: JobProcess) => {
     proc.userData.vad = await silero.VAD.load();
+    void prewarmConfiguredGreetingCaches().catch((e) => {
+      console.warn('[agent] greeting_prewarm_failed', e);
+    });
   },
   entry: async (ctx: JobContext) => {
     await ctx.connect();
@@ -325,7 +409,21 @@ export default defineAgent({
     const callerNumberRaw = callerNumberFromParticipant(participant);
     const callerE164 = callerE164ForBlocklist(callerNumberRaw);
     const calledNumber =
-      org.phone_number?.trim() || resolveCalledNumber(routing.phone, org.phone_number);
+      resolveCalledNumber(routing.phone, org.phone_number) ||
+      org.phone_number?.trim() ||
+      '';
+    const testCall =
+      isTestCall(calledNumber) ||
+      isTestCall(routing.phone) ||
+      isTestCall(org.phone_number);
+    const testProfile = testCall ? await getActiveCallTestProfile() : null;
+    const demoScenarios: DemoScenario[] = testCall ? await loadDemoScenarios() : [];
+    if (testCall) {
+      console.info('[agent] test_call', {
+        calledNumber: maskPhone(calledNumber),
+        profile: testProfile?.name ?? '(none)',
+      });
+    }
     const blockResult = await checkCallerBlocklist({
       organizationId: org.id,
       callerE164,
@@ -357,18 +455,6 @@ export default defineAgent({
     const caraTools = new CaraTools();
     const routingLinks = CaraTools.parseLinks(org.routing_links);
 
-    console.info('[agent] organization loaded', {
-      id: org.id,
-      slug: org.slug,
-      name: org.name,
-      phone: maskPhone(org.phone_number),
-      calledNumber: maskPhone(calledNumber),
-      niche: org.niche,
-      promptChars: org.custom_prompt?.length ?? 0,
-      greetingSet: Boolean(org.greeting?.trim()),
-      routeCount: routingLinks.length,
-    });
-
     const custom = org.custom_prompt?.trim() || 'Be professional, concise, and helpful.';
     const now = new Date();
     const nowUtcIso = now.toISOString();
@@ -390,21 +476,72 @@ export default defineAgent({
     const hasCallerIdOnFile =
       callerLine.kind !== 'unknown' && Boolean(callerLine.e164);
 
-    const elevenModelEarly =
-      (process.env.ELEVEN_TTS_MODEL?.trim() || 'eleven_turbo_v2_5') as elevenlabs.TTSModels;
+    const ttsConfig = resolveTtsConfig({
+      testProfile,
+      orgVoiceId: resolveOrgVoiceId(org),
+    });
+    const useCartesiaInference = ttsConfig.provider === 'cartesia-inference';
+    const activeTtsModel = ttsConfig.model;
+    const activeVoiceId = ttsConfig.voiceId;
+    const elevenModel = useCartesiaInference
+      ? activeTtsModel
+      : (activeTtsModel as elevenlabs.TTSModels);
+
+    const greetingText = org.greeting?.trim() ?? '';
+    const spokenBusinessName = resolveSpokenBusinessName({
+      name: org.name,
+      greeting: org.greeting,
+    });
+
+    const structuredHoursBlock =
+      org.niche === 'retail'
+        ? formatStructuredHoursForLivePrompt(org.business_hours, bookingTz, todayLocal)
+        : null;
+
+    const orgVertical = orgVerticalLabel({
+      niche: org.niche,
+      businessType: org.agent_business_type,
+    });
 
     const systemPrompt = buildCaraCallPrompt({
-      businessName: org.name,
+      businessName: spokenBusinessName,
       customPrompt: custom,
       callerLine,
       routingLinks,
       bookingTimeZone: bookingTz,
       nowUtcIso,
       todayLocal,
-      ttsModel: elevenModelEarly,
+      ttsModel: activeTtsModel,
+      niche: org.niche,
+      businessType: org.agent_business_type,
+      openingGreetingDelivered: Boolean(greetingText),
+      structuredHoursBlock,
+      demoMode: testCall,
+      ...(testCall
+        ? { demoPlaybookBlock: demoPlaybookBlockFromScenarios(demoScenarios) }
+        : {}),
+    });
+
+    console.info('[agent] organization loaded', {
+      id: org.id,
+      slug: org.slug,
+      name: org.name,
+      phone: maskPhone(org.phone_number),
+      calledNumber: maskPhone(calledNumber),
+      niche: org.niche,
+      promptChars: org.custom_prompt?.length ?? 0,
+      systemPromptChars: systemPrompt.length,
+      orgVertical,
+      greetingSet: Boolean(org.greeting?.trim()),
+      routeCount: routingLinks.length,
     });
 
     const callStartedAt = Date.now();
+    const diag = createCallDiagnosticSession();
+    const latencyTracker = createCallLatencyTracker(callStartedAt);
+    let greetingPlayedFlag = false;
+    let greetingSource: 'cached_pcm' | 'live_tts' | null = null;
+    const pipelineIncidentPosted = new Set<string>();
     const livekitJobId =
       typeof (ctx.job as { id?: string }).id === 'string'
         ? (ctx.job as { id: string }).id
@@ -422,7 +559,7 @@ export default defineAgent({
 
     const burstPctRaw = Number.parseFloat(process.env.CLISTE_QUOTA_BURST_PCT ?? '10');
     const burstFloor = Number.parseInt(process.env.CLISTE_QUOTA_BURST_FLOOR_MIN ?? '5', 10);
-    if (typeof planQuota === 'number' && planQuota > 0) {
+    if (typeof planQuota === 'number' && planQuota > 0 && !testCall) {
       const used = await sumUsageMinutesThisPeriod({
         organizationId: org.id,
         billingPeriodStart,
@@ -451,22 +588,23 @@ export default defineAgent({
       }
     }
 
-    const usageRecordIdPromise = startUsageRecord({
-      organizationId: org.id,
-      planTier: org.plan_tier ?? null,
-      planQuotaMinutes: planQuota,
-      callSid: callSidAttr,
-      roomName: roomName || null,
-      callerNumber: callerNumberRaw,
-      billingPeriodStart,
-    });
+    const usageRecordIdPromise = testCall
+      ? Promise.resolve(null)
+      : startUsageRecord({
+          organizationId: org.id,
+          planTier: org.plan_tier ?? null,
+          planQuotaMinutes: planQuota,
+          callSid: callSidAttr,
+          roomName: roomName || null,
+          callerNumber: callerNumberRaw,
+          billingPeriodStart,
+        });
 
     const endCallTarget =
       roomName && participant.identity
         ? { roomName, callerIdentity: participant.identity }
         : undefined;
 
-    const greetingText = org.greeting?.trim() ?? '';
     const sessionUserData: CaraAgentUserData = {
       organizationId: org.id,
       businessName: org.name,
@@ -490,65 +628,87 @@ export default defineAgent({
         bookingLinkSendInFlight: false,
         closingCall: false,
         likelySttGarble: false,
+        demoCallerReadyToClose: false,
+        demoScenarioSlug: null,
+        demoScenarioBeat: 0,
+        demoCallerName: null,
+        demoNameBanterUsed: false,
+        demoPersonalityNameAskUsed: false,
       },
       disclosureConfirmed: greetingIncludesAiDisclosure(greetingText),
+      demoLine: testCall,
       ...(endCallTarget ? { endCallTarget } : {}),
     };
 
     const elevenApiKey =
       process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
-    if (!elevenApiKey) {
-      console.error('[agent] ELEVENLABS_API_KEY (or ELEVEN_API_KEY) is required — ElevenLabs-only TTS');
+    if (!useCartesiaInference && !elevenApiKey) {
+      console.error('[agent] ELEVENLABS_API_KEY (or ELEVEN_API_KEY) is required for ElevenLabs TTS');
       ctx.shutdown('missing_elevenlabs_key');
       return;
     }
 
     const inferenceSttModel =
-      process.env.LIVEKIT_INFERENCE_STT_MODEL?.trim() || 'assemblyai/u3-rt-pro';
+      testProfile?.stt_model?.trim() ||
+      process.env.LIVEKIT_INFERENCE_STT_MODEL?.trim() ||
+      'assemblyai/u3-rt-pro';
     const inferenceSttLanguage = process.env.LIVEKIT_INFERENCE_STT_LANGUAGE?.trim() || 'en';
     const inferenceLlmModel =
-      process.env.LIVEKIT_INFERENCE_LLM_MODEL?.trim() || 'openai/gpt-4.1';
-    const llmProvider = process.env.CARA_LLM_PROVIDER?.trim().toLowerCase();
-    const openAiKey = process.env.OPENAI_API_KEY?.trim();
-    const useDirectOpenAiLlm = llmProvider !== 'gateway' && !!openAiKey;
+      testProfile?.llm_model?.trim() ||
+      process.env.LIVEKIT_INFERENCE_LLM_MODEL?.trim() ||
+      (testCall ? 'openai/gpt-4o-mini' : 'openai/gpt-4.1');
 
-    const elevenVoiceId =
-      resolveOrgVoiceId(org) || process.env.ELEVEN_VOICE_ID?.trim() || 'C92s6vssSLlabgIln1iY';
-    const elevenModel = elevenModelEarly;
+    const elevenVoiceId = activeVoiceId;
     const elevenEncoding = process.env.ELEVEN_TTS_ENCODING?.trim() || 'pcm_24000';
     const elevenBaseUrl =
       process.env.ELEVENLABS_BASE_URL?.trim() || 'https://api.elevenlabs.io/v1';
     const elevenVoiceSettings = resolveElevenVoiceSettings();
+    const greetingCacheKey =
+      !useCartesiaInference && greetingText
+        ? greetingAudioCacheKey(
+            org.id,
+            greetingText,
+            elevenVoiceId,
+            voiceSettingsCacheFingerprint(elevenVoiceSettings),
+          )
+        : null;
 
-    const greetingCacheKey = greetingText
-      ? greetingAudioCacheKey(org.id, greetingText, elevenVoiceId)
-      : null;
-
-    const greetingCacheWarmPromise = greetingText
-      ? ensureGreetingPcmCached({
-          orgId: org.id,
-          greetingText,
-          apiKey: elevenApiKey,
-          voiceId: elevenVoiceId,
-          encoding: elevenEncoding,
-          baseURL: elevenBaseUrl,
-          voiceSettings: elevenVoiceSettings,
-        })
+    const greetingCacheWarmPromise =
+      !useCartesiaInference && greetingText && elevenApiKey
+        ? ensureGreetingPcmCached({
+            orgId: org.id,
+            greetingText,
+            apiKey: elevenApiKey,
+            voiceId: elevenVoiceId,
+            encoding: elevenEncoding,
+            baseURL: elevenBaseUrl,
+            voiceSettings: elevenVoiceSettings,
+          })
           .then((pcm) => {
             console.info('[agent] greeting_pcm_warm', {
               orgId: org.id,
               bytes: pcm.byteLength,
               msSinceCallStart: Date.now() - callStartedAt,
             });
+            diag.push('info', 'greeting_pcm_warm', {
+              bytes: pcm.byteLength,
+              msSinceCallStart: Date.now() - callStartedAt,
+            });
           })
           .catch((e) => {
             console.error('[agent] greeting pcm warmup failed', e);
+            diag.push('error', 'greeting_pcm_warm_failed', {
+              message: e instanceof Error ? e.message : String(e),
+            });
           })
       : null;
 
-    const useSttNeuralTurnDetection = isU3RtProSttModel(inferenceSttModel);
+    const isU3RtProStt = isU3RtProSttModel(inferenceSttModel);
+    // u3-rt-pro: LiveKit turn detector + tuned silence — STT-owned EOT interrupts TTS mid-reply.
+    const useSttNeuralTurnDetection =
+      !isU3RtProStt && process.env.LIVEKIT_STT_NEURAL_TURN?.trim() === '1';
     const latencyProfile = resolveSttLatencyProfile(process.env.LIVEKIT_STT_LATENCY_PROFILE);
-    const silenceDefaults = sttTurnSilenceDefaults(latencyProfile);
+    const silenceDefaults = assemblyAiTurnSilenceDefaults(inferenceSttModel, latencyProfile);
     const endpointDefaults = endpointingDefaults(latencyProfile, useSttNeuralTurnDetection);
 
     const endpointMinMs = Number.isFinite(
@@ -560,7 +720,9 @@ export default defineAgent({
       Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '', 10),
     )
       ? Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '', 10)
-      : endpointDefaults.maxDelayMs;
+      : testCall
+        ? Number.parseInt(process.env.LIVEKIT_TEST_ENDPOINTING_MAX_MS ?? '700', 10)
+        : endpointDefaults.maxDelayMs;
     const endpointMode = (process.env.LIVEKIT_ENDPOINTING_MODE?.trim() || 'dynamic') as
       | 'fixed'
       | 'dynamic';
@@ -577,7 +739,11 @@ export default defineAgent({
       }
     }
 
-    const interruptionMinMs = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_MS ?? '200', 10);
+    const interruptionMinMs = Number.parseInt(
+      process.env.LIVEKIT_INTERRUPTION_MIN_MS ??
+        (testCall ? '450' : '200'),
+      10,
+    );
     const interruptionMinWords = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_WORDS ?? '1', 10);
     const interruptionModeRaw = process.env.LIVEKIT_INTERRUPTION_MODE?.trim().toLowerCase();
     const interruptionMode: 'adaptive' | 'vad' | undefined =
@@ -589,11 +755,19 @@ export default defineAgent({
         .filter((w) => w.length > 1) ?? [];
     const sttKeyterms = buildSttKeyterms({
       orgName: org.name,
-      customPrompt: org.custom_prompt,
+      customPrompt: testCall ? null : org.custom_prompt,
       extraTerms: envExtraKeyterms,
+      niche: testCall ? 'other' : org.niche,
+      businessType: testCall ? 'Hello Cara demo line' : org.agent_business_type,
     });
     const sttDomainPrompt =
-      process.env.LIVEKIT_STT_DOMAIN_PROMPT?.trim() || buildSttDomainPrompt(org.name);
+      process.env.LIVEKIT_STT_DOMAIN_PROMPT?.trim() ||
+      (testCall
+        ? 'Irish English phone calls to Hello Cara. Callers explore the AI assistant — no real shop hours, bookings, or business facts.'
+        : buildSttDomainPrompt(org.name, {
+            niche: org.niche,
+            businessType: org.agent_business_type,
+          }));
     const sttMinTurnSilenceMs = Number.isFinite(
       Number.parseInt(process.env.LIVEKIT_STT_MIN_TURN_SILENCE_MS ?? '', 10),
     )
@@ -612,7 +786,15 @@ export default defineAgent({
 
     // 0.55 adds phrasing variety; >0.6 risks rule-breaking — validate on 5+ test calls.
     const llmTemperature = Number.parseFloat(process.env.LIVEKIT_LLM_TEMPERATURE ?? '0.55');
-    const llmMaxCompletionTokens = Number.parseInt(process.env.LIVEKIT_LLM_MAX_TOKENS ?? '120', 10);
+    const llmMaxCompletionTokens = Number.parseInt(process.env.LIVEKIT_LLM_MAX_TOKENS ?? '280', 10);
+
+    const resolvedLlm = createCaraLlm({
+      inferenceLlmModel,
+      profileLlmProvider: testProfile?.llm_provider ?? null,
+      temperature: llmTemperature,
+      maxCompletionTokens: llmMaxCompletionTokens,
+    });
+    const llmInstance = resolvedLlm.instance;
 
     const sttModelOptions = isAssemblyAiSttModel(inferenceSttModel)
       ? buildAssemblyAiSttOptions({
@@ -628,37 +810,78 @@ export default defineAgent({
           ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
         };
 
-    const directOpenAiLlmModel = inferenceLlmModel.replace(/^openai\//, '');
-    const llmInstance = useDirectOpenAiLlm
-      ? new openai.LLM({
-          apiKey: process.env.OPENAI_API_KEY?.trim() ?? '',
-          model: directOpenAiLlmModel,
-          temperature: llmTemperature,
-          maxCompletionTokens: llmMaxCompletionTokens,
-        })
-      : new inference.LLM({
-          model: inferenceLlmModel as inference.LLMModels,
-          modelOptions: {
-            temperature: llmTemperature,
-            max_completion_tokens: llmMaxCompletionTokens,
-          },
-        });
-
-    console.info('[agent] pipeline', {
+    const pipelineLabel = {
       stt: inferenceSttModel,
       sttKeytermCount: sttKeyterms.length,
       sttNeuralTurn: useSttNeuralTurnDetection,
       latencyProfile,
-      sttMinTurnSilenceMs,
-      sttMaxTurnSilenceMs,
-      sttEotConfidence,
+      llm: resolvedLlm.label,
+      tts: ttsConfig.label,
+      voiceId: activeVoiceId,
+      ttsProvider: ttsConfig.provider,
       endpointMinMs,
       endpointMaxMs,
-      llm: useDirectOpenAiLlm ? `openai-direct:${directOpenAiLlmModel}` : inferenceLlmModel,
-      tts: `elevenlabs:${elevenModel}`,
-    });
+    };
 
-    setActiveTtsModelForSanitizer(elevenModel);
+    const configSnapshot = {
+      testProfile: testProfile
+        ? {
+            id: testProfile.id,
+            name: testProfile.name,
+            voice_id: testProfile.voice_id,
+            llm_model: testProfile.llm_model,
+            stt_model: testProfile.stt_model,
+            tts_model: testProfile.tts_model,
+            llm_provider: testProfile.llm_provider,
+          }
+        : null,
+      llmProvider: resolvedLlm.provider,
+      llmTemperature,
+      llmMaxCompletionTokens,
+      elevenStreamingLatency:
+        Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '1', 10) || 1,
+      elevenEncoding,
+      endpointMode,
+      interruptionMode,
+      latencyProfile,
+      sttLanguage: inferenceSttLanguage,
+      greetingCacheKey: greetingCacheKey ?? null,
+    };
+
+    console.info('[agent] pipeline', pipelineLabel);
+    diag.setPipeline(pipelineLabel);
+    diag.setIdentifiers({
+      organizationId: org.id,
+      calledNumber,
+      callSid: callSidAttr,
+      roomName: roomName || null,
+      livekitJobId,
+      disclosureConfirmed: sessionUserData.disclosureConfirmed,
+    });
+    if (testCall) {
+      diag.push('info', 'test_call', {
+        profileId: testProfile?.id ?? null,
+        variantLabel: testProfile?.name ?? null,
+      });
+    }
+
+    setActiveTtsModelForSanitizer(activeTtsModel);
+
+    const sessionTts = useCartesiaInference
+      ? new inference.TTS({
+          model: ttsConfig.model,
+          voice: ttsConfig.voiceId,
+          language: ttsConfig.language,
+        })
+      : createElevenLabsTts({
+          apiKey: elevenApiKey,
+          voiceId: elevenVoiceId,
+          model: elevenModel as elevenlabs.TTSModels,
+          encoding: elevenEncoding as elevenlabs.TTSEncoding,
+          baseURL: elevenBaseUrl,
+          streamingLatency: Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '1', 10) || 1,
+          voiceSettings: resolveElevenVoiceSettings(),
+        });
 
     const session = new voice.AgentSession<CaraAgentUserData>({
       stt: new inference.STT({
@@ -668,19 +891,15 @@ export default defineAgent({
       }),
       vad: ctx.proc.userData.vad as silero.VAD,
       llm: llmInstance,
-      tts: createElevenLabsTts({
-        apiKey: elevenApiKey,
-        voiceId: elevenVoiceId,
-        model: elevenModel,
-        encoding: elevenEncoding as elevenlabs.TTSEncoding,
-        baseURL: elevenBaseUrl,
-        streamingLatency: Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '0', 10) || 0,
-        voiceSettings: resolveElevenVoiceSettings(),
-      }),
+      tts: sessionTts,
       userData: sessionUserData,
       maxToolSteps: 5,
       turnHandling: {
-        preemptiveGeneration: { enabled: false },
+        preemptiveGeneration: {
+          enabled: testCall
+            ? process.env.LIVEKIT_TEST_PREEMPTIVE_GENERATION?.trim() === '1'
+            : process.env.LIVEKIT_PREEMPTIVE_GENERATION?.trim() === '1',
+        },
         turnDetection: turnDetectorInstance ?? 'stt',
         endpointing: {
           mode: endpointMode,
@@ -697,18 +916,22 @@ export default defineAgent({
       },
     });
 
-    const deadAirMs = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MS ?? '10000', 10);
+    const deadAirMs = testCall
+      ? Number.parseInt(process.env.DEMO_DEAD_AIR_MS ?? '6000', 10)
+      : Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MS ?? '10000', 10);
     const deadAirCloseMs = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_CLOSE_MS ?? '8000', 10);
     const deadAirMaxPrompts = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MAX_PROMPTS ?? '2', 10);
-    const responseFillerMs = Number.parseInt(process.env.LIVEKIT_RESPONSE_FILLER_MS ?? '0', 10);
+    const responseFillerMs = Number.parseInt(
+      process.env.LIVEKIT_RESPONSE_FILLER_MS ?? (testCall ? '1000' : '0'),
+      10,
+    );
     const responseFillerMaxPerCall = Number.parseInt(
       process.env.LIVEKIT_RESPONSE_FILLER_MAX_PER_CALL ?? '3',
       10,
     );
-    const postGreetingGraceMs = Number.parseInt(
-      process.env.LIVEKIT_POST_GREETING_GRACE_MS ?? '5000',
-      10,
-    );
+    const postGreetingGraceMs = testCall
+      ? Number.parseInt(process.env.LIVEKIT_TEST_POST_GREETING_GRACE_MS ?? '3500', 10)
+      : Number.parseInt(process.env.LIVEKIT_POST_GREETING_GRACE_MS ?? '5000', 10);
     const postGreetingInterruptGraceMs = Number.parseInt(
       process.env.LIVEKIT_POST_GREETING_INTERRUPT_GRACE_MS ?? '500',
       10,
@@ -721,6 +944,9 @@ export default defineAgent({
     let responseFillerTimer: ReturnType<typeof setTimeout> | null = null;
     let responseFillerCount = 0;
     let greetingInterruptFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let callerReplyNudgeTimer: ReturnType<typeof setTimeout> | null = null;
+    let demoFastGuaranteeTimer: ReturnType<typeof setTimeout> | null = null;
+    let demoSilenceWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
     let callerAwaitingReply = false;
     let replyTurnEpoch = 0;
     let replyRetryUsedForTurn = false;
@@ -729,13 +955,22 @@ export default defineAgent({
     let allowBookingAutomation = false;
     let greetingPlaybackStarted = false;
     let greetingAudioSpeechPending = 0;
+    let greetingTranscriptLogged = false;
+    let greetingPlayoutComplete = false;
+    let lastAssistantSpeechHandle: {
+      done(): boolean;
+      addDoneCallback: (cb: (sh: unknown) => void) => void;
+    } | null = null;
     let listenGraceUntil = 0;
     let callerHasFinalTranscript = false;
     let lastAssistantChatText = '';
     let lastAssistantSpokeAt = 0;
+    let corporateAssistCorrectedEpoch = -1;
     let programmaticSpeechPending = 0;
     let lastCallerUtterance = '';
     let llmReplySpeechQueued = false;
+    let demoSteerHandledThisTurn = false;
+    let demoCallerTurnPendingAnswer = false;
 
     let thinkingStartedAt: number | null = null;
     let userStoppedSpeakingAt: number | null = null;
@@ -745,7 +980,12 @@ export default defineAgent({
     const recentCallerTranscripts = new Map<string, number>();
 
     const normalizeTranscriptKey = (text: string) =>
-      text.trim().toLowerCase().replace(/\s+/g, ' ');
+      text
+        .trim()
+        .toLowerCase()
+        .replace(/[^\w\s']/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 
     const isDuplicateCallerUtterance = (key: string, at: number): boolean => {
       const prev = recentCallerTranscripts.get(key);
@@ -782,7 +1022,40 @@ export default defineAgent({
       return f.endPhoneCallUsed || f.closingCall;
     };
 
-    const safeGenerateReply = (instructions: string, opts?: { force?: boolean }) => {
+    const cancelInFlightReply = () => {
+      try {
+        session.interrupt();
+      } catch {
+        /* ignore */
+      }
+      generateReplyInFlight = false;
+      generateReplyStartedAt = 0;
+    };
+
+    const steerReply = (instructions: string) => {
+      if (isCallEnding()) return;
+      demoSteerHandledThisTurn = true;
+      clearDemoReplyGuaranteeTimers();
+      clearCallerReplyNudgeTimer();
+      cancelInFlightReply();
+      safeGenerateReply(instructions, { force: true, skipBeatHint: true });
+    };
+
+    const appendDemoBeatHint = (instructions: string): string => {
+      if (!testCall) return instructions;
+      if (/\[Demo playbook/i.test(instructions)) return instructions;
+      const slug = session.userData.sessionFlags.demoScenarioSlug;
+      const beat = session.userData.sessionFlags.demoScenarioBeat ?? 0;
+      if (!slug || beat <= 0) return instructions;
+      const hint = formatDemoBeatHint(slug, beat - 1, demoScenarios);
+      if (!hint) return instructions;
+      return `${instructions}\n\n${hint}`;
+    };
+
+    const safeGenerateReply = (
+      instructions: string,
+      opts?: { force?: boolean; skipBeatHint?: boolean },
+    ) => {
       const epoch = replyTurnEpoch;
       if (generateReplyInFlight && !opts?.force) {
         const stalledFor = Date.now() - generateReplyStartedAt;
@@ -799,7 +1072,10 @@ export default defineAgent({
       generateReplyInFlight = true;
       generateReplyStartedAt = Date.now();
       const activeEpoch = replyTurnEpoch;
-      const handle = session.generateReply({ instructions });
+      const steeredInstructions = opts?.skipBeatHint
+        ? instructions
+        : appendDemoBeatHint(instructions);
+      const handle = session.generateReply({ instructions: steeredInstructions });
       void Promise.resolve(handle)
         .catch((e) => {
           console.error('[AgentSession] generateReply failed', e);
@@ -816,16 +1092,78 @@ export default defineAgent({
     const canPlayRecoverySpeech = (): boolean => {
       if (isCallEnding()) return false;
       if (session.userState === 'speaking') return false;
-      if (inListenGrace()) return false;
+      if (!testCall && inListenGrace()) return false;
       return true;
+    };
+
+    const callerAlreadyAnsweredSince = (callerAt: number): boolean =>
+      lastAssistantSpokeAt >= callerAt;
+
+    const forceDemoReply = (instructions: string, reason: string) => {
+      if (isCallEnding()) return;
+      console.warn('[agent] demo_force_reply', {
+        reason,
+        snippet: lastCallerUtterance.slice(0, 80),
+      });
+      diag.push('warn', 'demo_force_reply', {
+        reason,
+        snippet: lastCallerUtterance.slice(0, 120),
+      });
+      cancelInFlightReply();
+      generateReplyInFlight = false;
+      generateReplyStartedAt = 0;
+      replyRetryUsedForTurn = false;
+      safeGenerateReply(instructions, { force: true });
+    };
+
+    const clearDemoReplyGuaranteeTimers = () => {
+      if (demoFastGuaranteeTimer) {
+        clearTimeout(demoFastGuaranteeTimer);
+        demoFastGuaranteeTimer = null;
+      }
+      if (demoSilenceWatchdogTimer) {
+        clearTimeout(demoSilenceWatchdogTimer);
+        demoSilenceWatchdogTimer = null;
+      }
+    };
+
+    const scheduleDemoReplyGuarantee = (callerText: string) => {
+      if (!testCall || isCallEnding()) return;
+      clearDemoReplyGuaranteeTimers();
+      const epoch = replyTurnEpoch;
+      const callerAt = Date.now();
+      const utterance = callerText.trim();
+      if (!utterance) return;
+
+      demoFastGuaranteeTimer = setTimeout(() => {
+        demoFastGuaranteeTimer = null;
+        if (epoch !== replyTurnEpoch || isCallEnding()) return;
+        if (callerAlreadyAnsweredSince(callerAt)) return;
+        if (session.userState === 'speaking') return;
+        if (session.agentState === 'speaking' || session.agentState === 'thinking') return;
+        forceDemoReply(buildDemoNeverSilentSteer(utterance), 'fast_guarantee');
+      }, DEMO_REPLY_FAST_GUARANTEE_MS);
+
+      demoSilenceWatchdogTimer = setTimeout(() => {
+        demoSilenceWatchdogTimer = null;
+        if (epoch !== replyTurnEpoch || isCallEnding()) return;
+        if (callerAlreadyAnsweredSince(callerAt)) return;
+        if (session.userState === 'speaking') return;
+        if (session.agentState === 'speaking' || session.agentState === 'thinking') return;
+        forceDemoReply(buildDemoSilenceWatchdogSteer(utterance), 'silence_watchdog');
+      }, DEMO_SILENCE_WATCHDOG_MS);
     };
 
     const retryFailedReplyOnce = (source: string) => {
       if (replyRetryUsedForTurn || isCallEnding()) return;
       if (!canPlayRecoverySpeech()) return;
+      if (session.userState === 'speaking') return;
       replyRetryUsedForTurn = true;
       console.warn('[agent] reply_retry', { source, epoch: replyTurnEpoch });
-      safeGenerateReply(REPLY_RETRY_INSTRUCTIONS, { force: true });
+      const instructions = testCall
+        ? buildDemoSilenceWatchdogSteer(lastCallerUtterance)
+        : REPLY_RETRY_INSTRUCTIONS;
+      safeGenerateReply(instructions, { force: true });
     };
 
     session.on(voice.AgentSessionEventTypes.Error, (ev) => {
@@ -837,8 +1175,76 @@ export default defineAgent({
             ? String((err as { message: unknown }).message)
             : String(err);
       console.error('[AgentSession] pipeline error', msg);
+      const stage = classifyPipelineErrorStage(msg);
+      diag.push('error', `pipeline_${stage}_error`, { message: msg, stage });
+      const incidentKey = `${stage}:${msg.slice(0, 120)}`;
+      if (!pipelineIncidentPosted.has(incidentKey)) {
+        pipelineIncidentPosted.add(incidentKey);
+        void postPipelineIncident({
+          organizationId: org.id,
+          calledNumber,
+          callerNumber: callerNumberRaw,
+          roomName: roomName || null,
+          callSid: callSidAttr,
+          stage,
+          errorMessage: msg,
+          modelLabel:
+            stage === 'tts'
+              ? String(elevenModel)
+              : stage === 'llm'
+                ? resolvedLlm.label
+                : inferenceSttModel,
+          retryable: true,
+        });
+      }
       retryFailedReplyOnce('pipeline_error');
     });
+
+    const clearCallerReplyNudgeTimer = () => {
+      if (callerReplyNudgeTimer) {
+        clearTimeout(callerReplyNudgeTimer);
+        callerReplyNudgeTimer = null;
+      }
+    };
+
+    const scheduleCallerReplyNudge = () => {
+      clearCallerReplyNudgeTimer();
+      if (!allowBookingAutomation || isCallEnding()) return;
+      const epoch = replyTurnEpoch;
+      const utterance = lastCallerUtterance.trim();
+      if (!utterance) return;
+      const callerAt = Date.now();
+      const nudgeMs = testCall ? DEMO_CALLER_REPLY_NUDGE_MS : CALLER_REPLY_NUDGE_MS;
+      callerReplyNudgeTimer = setTimeout(() => {
+        callerReplyNudgeTimer = null;
+        if (epoch !== replyTurnEpoch || isCallEnding()) return;
+        if (testCall) {
+          if (callerAlreadyAnsweredSince(callerAt)) return;
+          if (session.userState === 'speaking') return;
+          if (session.agentState === 'speaking') return;
+          const thinkingInProgress =
+            session.agentState === 'thinking' &&
+            generateReplyInFlight &&
+            Date.now() - generateReplyStartedAt < DEMO_THINKING_STALL_MS;
+          if (thinkingInProgress) return;
+          if (session.agentState === 'listening' && generateReplyInFlight) return;
+        } else {
+          if (session.agentState !== 'listening' || session.userState === 'speaking') return;
+          if (generateReplyInFlight) return;
+        }
+        console.warn('[agent] caller_reply_nudge', { utterance: utterance.slice(0, 80) });
+        const instructions = testCall
+          ? buildDemoCallerReplyNudgeSteer(utterance)
+          : `The caller said: "${utterance.slice(0, 200)}". Reply in **one short spoken sentence** (~25 words max). ` +
+            'Do not repeat your opening greeting or any AI/recording disclosure. ' +
+            'Do not say "grand". If they asked whether you can hear them, say yes warmly and ask how you can help.';
+        if (testCall) {
+          forceDemoReply(instructions, 'caller_reply_nudge');
+        } else {
+          safeGenerateReply(instructions, { force: true });
+        }
+      }, nudgeMs);
+    };
 
     const clearGreetingInterruptFallbackTimer = () => {
       if (greetingInterruptFallbackTimer) {
@@ -878,7 +1284,8 @@ export default defineAgent({
       });
       if (reason === 'greeting_interrupted') {
         scheduleGreetingInterruptFallback();
-      } else if (reason === 'greeting_completed' && greetingText.trim()) {
+      } else if (reason === 'greeting_completed' && greetingText.trim() && !greetingTranscriptLogged) {
+        greetingTranscriptLogged = true;
         appendTranscriptLine(Date.now(), `Assistant: ${greetingText.trim()}`);
       }
     };
@@ -893,9 +1300,13 @@ export default defineAgent({
       bumpReason: string,
       at: number,
     ): boolean => {
+      demoSteerHandledThisTurn = false;
+      if (testCall && allowBookingAutomation) {
+        demoCallerTurnPendingAnswer = true;
+      }
       lastCallerUtterance = text.trim();
       if (isPhantomCallerTranscript(text)) {
-        console.warn('[agent] phantom_caller_transcript_ignored', {
+        console.info('[agent] noise_fragment_ignored', {
           snippet: text.slice(0, 60),
           reason: bumpReason,
         });
@@ -903,9 +1314,9 @@ export default defineAgent({
       }
       const key = normalizeTranscriptKey(text);
       if (isDuplicateCallerUtterance(key, at)) return false;
-      bumpReplyTurn(bumpReason);
       settleGreetingPhase('caller_spoke');
       appendTranscriptLine(at, `Caller: ${text}`);
+      session.userData.sessionFlags.likelySttGarble = false;
       noteCallerGarble(session.userData.sessionFlags, session.userData.organizationId, text);
       resetClosePhaseIfCallerContinues(text);
       noteCallerTurnNeedsReply(text);
@@ -915,7 +1326,165 @@ export default defineAgent({
       if (soundsLikeCancelOrChangeAppointment(text)) {
         session.userData.sessionFlags.bookingRouteId = null;
       }
+      if (
+        testCall &&
+        (callerWindingDownCall(text) || callerExplicitlyRequestedHangup(text))
+      ) {
+        session.userData.sessionFlags.demoCallerReadyToClose = true;
+      }
+      if (testCall) {
+        const flags = session.userData.sessionFlags;
+        const detected = detectDemoScenario(text, demoScenarios);
+        if (detected && !flags.demoScenarioSlug) {
+          flags.demoScenarioSlug = detected;
+          flags.demoScenarioBeat = 1;
+          diag.push('info', 'demo_scenario_start', {
+            slug: detected,
+            snippet: text.slice(0, 120),
+          });
+        }
+      }
+      if (
+        org.niche === 'retail' &&
+        callerSoundsLikeOpenHoursQuestion(text) &&
+        !session.userData.sessionFlags.endPhoneCallUsed
+      ) {
+        steerReply(
+          'The caller is asking about store opening hours. Use Structured hours in your instructions. Answer for the day they mean in one warm line — store hours, not whether you as an AI will be available.',
+        );
+      } else if (
+        org.niche === 'retail' &&
+        callerSoundsLikeRetailStaffQuestion(text) &&
+        !session.userData.sessionFlags.endPhoneCallUsed
+      ) {
+        steerReply(
+          'The caller is asking about a store or department manager (their speech may be garbled). Answer from your business instructions — store manager, fresh food manager, ambient manager. This is a simple info question: do NOT ask for their name or phone number and do NOT offer to take a message unless they explicitly want a callback.',
+        );
+      } else if (
+        org.niche === 'retail' &&
+        callerSoundsLikeWeekdayHoursCorrection(text) &&
+        !session.userData.sessionFlags.endPhoneCallUsed
+      ) {
+        steerReply(
+          'The caller is correcting opening hours. Use Structured hours in your instructions. Apologise briefly and give the correct weekday hours — do not treat a normal weekday as a bank holiday.',
+        );
+      } else if (
+        session.userData.sessionFlags.likelySttGarble &&
+        soundsLikeBookingIntent(text) &&
+        allowBookingAutomation
+      ) {
+        void safeGenerateReply(
+          'That last utterance may be STT garble — do not treat it as a confirmed booking request. Ask one short clarifying question about what they need.',
+        );
+      } else if (
+        testCall &&
+        classifyHelloCaraAboutQuestion(text) &&
+        !isCallEnding()
+      ) {
+        const about = classifyHelloCaraAboutQuestion(text)!;
+        const flags = session.userData.sessionFlags;
+        if (!flags.demoScenarioSlug) {
+          flags.demoScenarioSlug = 'general';
+          flags.demoScenarioBeat = about === 'who-made' ? 2 : 1;
+          diag.push('info', 'demo_scenario_start', {
+            slug: 'general',
+            snippet: text.slice(0, 120),
+            about,
+          });
+        }
+        steerReply(helloCaraAboutSteerInstructions(about));
+      } else if (
+        testCall &&
+        callerAsksDemoMenu(text) &&
+        !session.userData.sessionFlags.demoScenarioSlug &&
+        !isCallEnding()
+      ) {
+        const flags = session.userData.sessionFlags;
+        flags.demoScenarioSlug = 'general';
+        flags.demoScenarioBeat = 1;
+        diag.push('info', 'demo_scenario_start', {
+          slug: 'general',
+          snippet: text.slice(0, 120),
+        });
+        steerReply(
+          'The caller asked what they can demo. ONE warm conversational line (~18 words) with a bit of personality. Do NOT list trades. They are on the demo call already — ask what brought them to Hello Cara or what kind of business they run, then steer from their answer.',
+        );
+      } else if (
+        testCall &&
+        !session.userData.sessionFlags.demoScenarioSlug &&
+        callerSoundsLikeVagueDemoOpening(text) &&
+        !isCallEnding()
+      ) {
+        steerReply(buildDemoChitchatSteer());
+      } else if (
+        testCall &&
+        !session.userData.sessionFlags.demoScenarioSlug &&
+        !callerSoundsLikeVagueDemoOpening(text) &&
+        !callerAsksDemoMenu(text) &&
+        !classifyHelloCaraAboutQuestion(text) &&
+        !isCallEnding() &&
+        (callerSoundsLikeHelloCaraMotivation(text) || detectDemoScenario(text, demoScenarios))
+      ) {
+        const flags = session.userData.sessionFlags;
+        const detected = detectDemoScenario(text, demoScenarios);
+        flags.demoScenarioSlug = detected ?? 'general';
+        flags.demoScenarioBeat = 1;
+        diag.push('info', 'demo_motivation_steer', {
+          slug: flags.demoScenarioSlug,
+          snippet: text.slice(0, 120),
+        });
+        steerReply(buildDemoFollowMotivationSteer(text, detected));
+      } else if (
+        testCall &&
+        !isCallEnding()
+      ) {
+        const flags = session.userData.sessionFlags;
+        const volunteeredName = extractCallerIntroducedName(text);
+        if (volunteeredName && !flags.demoNameBanterUsed) {
+          flags.demoCallerName = volunteeredName;
+          flags.demoNameBanterUsed = true;
+          diag.push('info', 'demo_name_banter', { name: volunteeredName });
+          steerReply(buildDemoNameBanterSteer(volunteeredName));
+        } else if (
+          !volunteeredName &&
+          !flags.demoPersonalityNameAskUsed &&
+          !flags.demoCallerName &&
+          !flags.demoNameBanterUsed &&
+          !classifyHelloCaraAboutQuestion(text) &&
+          !detectDemoScenario(text, demoScenarios) &&
+          text.trim().length > 6 &&
+          !callerAsksDemoMenu(text) &&
+          transcriptParts.filter((p) => p.line.startsWith('Caller:')).length >= 2 &&
+          (!flags.demoScenarioSlug ||
+            (flags.demoScenarioSlug === 'general' && (flags.demoScenarioBeat ?? 0) <= 1))
+        ) {
+          flags.demoPersonalityNameAskUsed = true;
+          steerReply(buildDemoPersonalityNameAskSteer());
+        } else if (
+          flags.demoScenarioSlug &&
+          (flags.demoScenarioBeat ?? 0) === 3 &&
+          caraTypingSoundEnabled()
+        ) {
+          playTypingSound(session);
+        }
+      }
+      if (callerPivotedFromSmsConsent(text, { awaitingSmsConsent: session.userData.sessionFlags.bookingLinkSendInFlight })) {
+        session.userData.sessionFlags.bookingRouteId = null;
+        diag.push('warn', 'booking_consent_pivot', { snippet: text.slice(0, 120) });
+        steerReply(
+          'The caller pivoted away from SMS consent — stop treating their last line as yes/no to texting. Answer their new question or offer a callback.',
+        );
+      }
       maybeCloseAfterAnythingElse(text);
+      if (testCall && session.userData.sessionFlags.demoCallerReadyToClose) {
+        maybeCloseDemoCall();
+      }
+      if (!demoSteerHandledThisTurn) {
+        scheduleCallerReplyNudge();
+        if (testCall) {
+          scheduleDemoReplyGuarantee(text);
+        }
+      }
       return true;
     };
 
@@ -964,11 +1533,47 @@ export default defineAgent({
       }
       void (async () => {
         try {
-          sayPrepared(session, `Lovely, thanks for calling ${org.name}. Bye!`);
-          await waitForSessionPlayout(session);
+          const closingLine = testCall
+            ? buildDemoCallClosingLine(callSidAttr)
+            : buildWarmCallClosingLine(
+                {
+                  name: org.name,
+                  greeting: org.greeting,
+                },
+                callSidAttr,
+              );
+          const handle = sayPrepared(session, closingLine, {
+            allowInterruptions: false,
+          });
+          await waitForSpeechHandlePlayout(handle);
           await disconnectCallerLeg(session, session.userData, async () => {});
         } catch (e) {
           console.error('[AgentSession] auto close after anything-else failed', e);
+        }
+      })();
+    };
+
+    const maybeCloseDemoCall = () => {
+      const flags = session.userData.sessionFlags;
+      if (!testCall || !flags.demoCallerReadyToClose) return;
+      if (flags.endPhoneCallUsed || flags.closingCall) return;
+
+      flags.closingCall = true;
+      clearAllGuardTimers();
+      try {
+        session.interrupt();
+      } catch {
+        /* ignore */
+      }
+      void (async () => {
+        try {
+          const handle = sayPrepared(session, buildDemoCallClosingLine(callSidAttr), {
+            allowInterruptions: false,
+          });
+          await waitForSpeechHandlePlayout(handle);
+          await disconnectCallerLeg(session, session.userData, async () => {});
+        } catch (e) {
+          console.error('[AgentSession] auto close demo call failed', e);
         }
       })();
     };
@@ -1037,6 +1642,8 @@ export default defineAgent({
       clearDeadAirTimers();
       clearResponseFillerTimer();
       clearGreetingInterruptFallbackTimer();
+      clearCallerReplyNudgeTimer();
+      clearDemoReplyGuaranteeTimers();
     };
 
     const resetDeadAirTimer = () => {
@@ -1046,13 +1653,13 @@ export default defineAgent({
       if (f.askedAnythingElse && f.callerRespondedAfterAnythingElse) return;
       if (f.bookingLinkSendInFlight) return;
       if (callerAwaitingReply) return;
-      if (inListenGrace()) return;
+      if (inListenGrace() && !testCall) return;
       deadAirTimer = setTimeout(() => {
         deadAirTimer = null;
         try {
           if (isCallEnding()) return;
           if (callerAwaitingReply) return;
-          if (inListenGrace()) return;
+          if (inListenGrace() && !testCall) return;
           if (session.agentState !== 'listening' || session.userState === 'speaking') return;
           if (deadAirPromptCount >= deadAirMaxPrompts) {
             gracefulDisconnect();
@@ -1083,28 +1690,50 @@ export default defineAgent({
       }
       if (ev.newState === 'speaking') {
         userStoppedSpeakingAt = null;
+        if (ev.oldState !== 'speaking' && allowBookingAutomation) {
+          if (session.agentState === 'thinking' || session.agentState === 'speaking') {
+            bumpReplyTurn('caller_barge_in');
+          } else if (session.agentState === 'listening') {
+            // New caller turn — bump at utterance start so preemptive + auto-reply share the same epoch.
+            bumpReplyTurn('caller_new_turn');
+          }
+        }
       }
     });
 
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
-      if (ev.newState === 'speaking' || ev.newState === 'listening') {
+      if (ev.newState === 'speaking') {
         clearResponseFillerTimer();
+        clearCallerReplyNudgeTimer();
+        clearDemoReplyGuaranteeTimers();
+      } else if (ev.newState === 'listening') {
+        clearResponseFillerTimer();
+        if (!testCall) {
+          clearCallerReplyNudgeTimer();
+        }
       }
       if (ev.newState === 'thinking' || ev.newState === 'speaking') {
         clearGreetingInterruptFallbackTimer();
       }
       if (ev.newState === 'speaking') {
         lastAssistantSpokeAt = Date.now();
+        latencyTracker.recordFirstAudio();
         if (thinkingStartedAt !== null) {
-          console.info('[agent] thinking_to_speaking_ms', Date.now() - thinkingStartedAt);
+          const replyMs = Date.now() - thinkingStartedAt;
+          console.info('[agent] thinking_to_speaking_ms', replyMs);
+          latencyTracker.recordReplyLatency(replyMs);
+          diag.push('info', 'thinking_to_speaking_ms', { ms: replyMs });
           thinkingStartedAt = null;
         }
       } else if (ev.newState === 'thinking' && !isCallEnding()) {
         if (userStoppedSpeakingAt !== null) {
+          const userToThinkingMs = Date.now() - userStoppedSpeakingAt;
           console.info(
             '[agent] user_speaking_to_thinking_ms',
-            Date.now() - userStoppedSpeakingAt,
+            userToThinkingMs,
           );
+          latencyTracker.recordUserToThinking(userToThinkingMs);
+          diag.push('info', 'user_speaking_to_thinking_ms', { ms: userToThinkingMs });
           userStoppedSpeakingAt = null;
         }
         thinkingStartedAt = Date.now();
@@ -1117,9 +1746,7 @@ export default defineAgent({
         llmReplySpeechQueued = true;
       }
       const speechEpoch = replyTurnEpoch;
-      if (!greetingPlaybackStarted) {
-        greetingPlaybackStarted = true;
-      }
+      lastAssistantSpeechHandle = ev.speechHandle;
       ev.speechHandle.addDoneCallback((sh) => {
         if (speechEpoch !== replyTurnEpoch) {
           console.info('[agent] stale_speech_ignored', {
@@ -1132,8 +1759,12 @@ export default defineAgent({
         if (sh.interrupted) {
           if (!allowBookingAutomation) {
             settleGreetingPhase('greeting_interrupted');
+          } else if (programmaticSpeechPending > 0) {
+            programmaticSpeechPending -= 1;
           }
-        } else if (!allowBookingAutomation) {
+          return;
+        }
+        if (!allowBookingAutomation) {
           settleGreetingPhase('greeting_completed');
         }
         const handle = sh as unknown as { text?: string; source?: string };
@@ -1166,6 +1797,10 @@ export default defineAgent({
             hasCallerTranscript: hasCallerTranscript(),
             inListenGrace: inListenGrace(),
             lastAssistantSnippet: lastAssistantChatText.slice(0, 80),
+            callerSnippet: lastCallerUtterance.slice(0, 120),
+          });
+          diag.push('error', 'empty_speech_handle', {
+            callerSnippet: lastCallerUtterance.slice(0, 120),
           });
           retryFailedReplyOnce('empty_speech_handle');
           return;
@@ -1174,13 +1809,6 @@ export default defineAgent({
           lastAssistantChatText = '';
         }
       });
-    });
-
-    session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
-      if (!ev.isFinal) return;
-      const text = ev.transcript?.trim();
-      if (!text) return;
-      ingestCallerFinalText(text, 'caller_final_transcript', ev.createdAt);
     });
 
     session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
@@ -1220,10 +1848,60 @@ export default defineAgent({
         flags.callerRespondedAfterAnythingElse = false;
         clearAllGuardTimers();
       }
+      if (testCall && role === 'assistant' && assistantAskedDemoWrap(text)) {
+        flags.askedAnythingElse = true;
+        flags.awaitingAnythingElseReply = true;
+        flags.anythingElseAskCount += 1;
+        flags.callerRespondedAfterAnythingElse = false;
+        clearAllGuardTimers();
+      }
       if (role === 'assistant' && assistantTextSoundsLikeGoodbye(text)) {
         flags.closingCall = true;
         clearAllGuardTimers();
       }
+      if (
+        testCall &&
+        role === 'assistant' &&
+        allowBookingAutomation &&
+        demoCallerTurnPendingAnswer &&
+        !item.interrupted &&
+        text.length > 3 &&
+        flags.demoScenarioSlug &&
+        (flags.demoScenarioBeat ?? 0) > 0 &&
+        (flags.demoScenarioBeat ?? 0) < 4 &&
+        !lineMatchesGreeting(text, greetingText)
+      ) {
+        demoCallerTurnPendingAnswer = false;
+        flags.demoScenarioBeat = Math.min(4, (flags.demoScenarioBeat ?? 0) + 1);
+        diag.push('info', 'demo_scenario_beat', {
+          slug: flags.demoScenarioSlug,
+          beat: flags.demoScenarioBeat,
+        });
+      }
+      if (
+        testCall &&
+        role === 'assistant' &&
+        assistantSoundsLikeTradeMenu(text) &&
+        !flags.endPhoneCallUsed
+      ) {
+        console.warn('[agent] blocked demo trade menu list');
+        steerReply(
+          'Do NOT list multiple trades in one sentence. ONE warm line — ask what business they have in mind, or suggest a single example like a quick electrician call.',
+        );
+      }
+
+      if (
+        testCall &&
+        role === 'assistant' &&
+        assistantOffersRedundantSampleCall(text) &&
+        !flags.endPhoneCallUsed
+      ) {
+        console.warn('[agent] blocked redundant sample-call offer on demo line');
+        steerReply(
+          'They are ALREADY on the Hello Cara demo call — do NOT offer a sample call or ask if they want to hear how you sound. One warm line with personality: reflect what they said, then steer from their answer (product info or the trade they mentioned). No trade lists.',
+        );
+      }
+
       if (
         role === 'assistant' &&
         hasCallerIdOnFile &&
@@ -1240,20 +1918,73 @@ export default defineAgent({
 
       if (
         role === 'assistant' &&
+        hasCallerIdOnFile &&
+        assistantAskedForCallerIdentity(text) &&
+        !testCall &&
         !flags.endPhoneCallUsed &&
-        (flags.linkSent || flags.actionTicketCreated) &&
-        assistantTextSoundsLikeGoodbye(text)
+        !flags.callbackRequested &&
+        !flags.actionTicketCreated
+      ) {
+        console.warn('[agent] blocked caller-identity ask — simple Q&A, caller ID on file', {
+          display: callerLine.display,
+        });
+        void safeGenerateReply(
+          'Do NOT ask for their name or phone number — they asked a simple store question, not a callback. Answer from your business instructions if you can. If you truly cannot answer, apologise once and ask what they need help with — still no name/number intake unless they explicitly want a message taken.',
+        );
+      }
+
+      if (
+        role === 'assistant' &&
+        !flags.linkSent &&
+        assistantClaimsLinkWasSent(text) &&
+        !flags.endPhoneCallUsed
+      ) {
+        console.warn('[agent] blocked false link-sent claim');
+        void safeGenerateReply(
+          'Do NOT say the link was sent — the send tool has not succeeded yet. Apologise if needed and either call the send tool after consent or continue helping without claiming SMS delivery.',
+        );
+      }
+
+      if (
+        role === 'assistant' &&
+        assistantSoundsLikeCorporateAssist(text) &&
+        !flags.endPhoneCallUsed &&
+        corporateAssistCorrectedEpoch !== replyTurnEpoch
+      ) {
+        corporateAssistCorrectedEpoch = replyTurnEpoch;
+        console.warn('[agent] blocked corporate assist phrasing');
+        steerReply(
+          'Do NOT say "I\'m here to assist" or "What can I assist you with". Reply like a friendly Irish shop worker — e.g. "I\'m good thanks — yourself?" if they asked how you are, otherwise answer their question in one warm line.',
+        );
+      }
+
+      if (
+        role === 'assistant' &&
+        !flags.endPhoneCallUsed &&
+        !flags.awaitingAnythingElseReply &&
+        assistantAskedAnythingElse(text) &&
+        text.replace(/\?/g, '').trim().length > 80
+      ) {
+        diag.push('warn', 'premature_anything_else', { snippet: text.slice(0, 120) });
+      }
+
+      if (
+        role === 'assistant' &&
+        !flags.endPhoneCallUsed &&
+        !flags.awaitingAnythingElseReply &&
+        assistantTextSoundsLikeTerminalHangup(text) &&
+        /\bthanks for (ringing|calling|trying)\b/i.test(text)
       ) {
         clearGoodbyeForceTimer();
         goodbyeForceTimer = setTimeout(() => {
           goodbyeForceTimer = null;
           if (session.userData.sessionFlags.endPhoneCallUsed) return;
           void (async () => {
-            await waitForSessionPlayout(session);
+            await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
             if (session.userData.sessionFlags.endPhoneCallUsed) return;
             await disconnectCallerLeg(session, session.userData, async () => {});
           })();
-        }, 3000);
+        }, 700);
       }
 
       if (role === 'assistant' && assistantTextSoundsLikeFakeHangup(text)) {
@@ -1262,12 +1993,18 @@ export default defineAgent({
           fakeHangupGuardTimer = null;
           if (session.userData.sessionFlags.endPhoneCallUsed) return;
           void disconnectCallerLeg(session, session.userData, () =>
-            waitForSessionPlayout(session),
+            waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle),
           );
         }, 500);
       }
 
       if (role === 'assistant') {
+        if (lineMatchesGreeting(text, greetingText) && greetingTranscriptLogged) {
+          return;
+        }
+        if (!allowBookingAutomation && lineMatchesGreeting(text, greetingText)) {
+          return;
+        }
         const label = 'Assistant';
         const interruptedNote = item.interrupted ? ' [cut off]' : '';
         appendTranscriptLine(ev.createdAt, `${label}: ${text}${interruptedNote}`);
@@ -1354,6 +2091,30 @@ export default defineAgent({
         const disclosureConfirmed = ud.disclosureConfirmed;
         const persistCalledNumber = calledNumber.trim() || org.phone_number?.trim() || '';
 
+        const pipelineSnapshot = diag.getPipeline();
+        const orgSnapshot = {
+          id: org.id,
+          name: org.name,
+          slug: org.slug,
+          phoneNumber: org.phone_number,
+          niche: org.niche,
+        };
+        const closeDiagnostics = buildCloseDiagnosticsPayload({
+          latency: latencyTracker.snapshot(),
+          ...(pipelineSnapshot ? { pipeline: pipelineSnapshot } : {}),
+          sessionFlags: { ...ud.sessionFlags },
+          events: diag.events(),
+          greetingPlayed: greetingPlayedFlag,
+          greetingSource,
+          disclosureConfirmed,
+          transcript: verbatim,
+          identifiers: diag.getIdentifiers(),
+          orgSnapshot,
+          configSnapshot,
+          greetingText: greetingText || null,
+          isTestCall: testCall,
+        });
+
         const initialPayload = {
           called_number: persistCalledNumber,
           call_sid: callSidAttr,
@@ -1365,47 +2126,45 @@ export default defineAgent({
           transcript_review: null as string | null,
           ai_summary: null as string | null,
           disclosure_confirmed: disclosureConfirmed,
+          ...(testCall
+            ? {
+                is_test_call: true,
+                test_profile_id: testProfile?.id ?? null,
+                variant_label: testProfile?.name ?? null,
+                diagnostics: closeDiagnostics,
+              }
+            : {}),
         };
 
-        if (voiceWebhooksConfigured() && persistCalledNumber) {
-          let webhookResult = await postCallComplete(initialPayload);
-          if ((!webhookResult.ok || !webhookResult.callLogId) && durationSeconds >= 60) {
-            console.warn('[agent] call-complete retry', {
-              durationSeconds,
-              error: webhookResult.error,
-            });
-            await new Promise((r) => setTimeout(r, 2000));
-            webhookResult = await postCallComplete(initialPayload);
-          }
-          if (webhookResult.ok && webhookResult.callLogId) {
-            callLogId = webhookResult.callLogId;
-          } else {
-            if (!webhookResult.ok) {
-              console.error('[agent] call-complete webhook failed', {
-                error: webhookResult.error,
-                durationSeconds,
-              });
-            } else {
-              console.error('[agent] call-complete webhook ok but missing call_log_id', {
-                durationSeconds,
-              });
-            }
-            callLogId = await insertCallLog({
-              organizationId: ud.organizationId,
-              callerNumber: callerNumberRaw,
-              durationSeconds,
-              outcome,
-              transcript: verbatim,
-            });
-          }
-        } else {
-          callLogId = await insertCallLog({
+        callLogId = await insertCallLog({
+          organizationId: ud.organizationId,
+          callerNumber: callerNumberRaw,
+          durationSeconds,
+          outcome,
+          transcript: verbatim,
+          calledNumber: persistCalledNumber || null,
+          isTestCall: testCall,
+          callSid: callSidAttr,
+          roomName: roomName || null,
+        });
+
+        if (testCall && callLogId) {
+          const reportSaved = await persistTestCallReportFromWorker({
+            callLogId,
             organizationId: ud.organizationId,
+            calledNumber: persistCalledNumber,
             callerNumber: callerNumberRaw,
+            callSid: callSidAttr,
+            roomName: roomName || null,
             durationSeconds,
-            outcome,
-            transcript: verbatim,
+            disclosureConfirmed,
+            testProfileId: testProfile?.id ?? null,
+            variantLabel: testProfile?.name ?? null,
+            diagnostics: closeDiagnostics,
           });
+          if (!reportSaved) {
+            console.warn('[agent] test-call report direct persist failed', { callLogId });
+          }
         }
 
         callLogWritten = true;
@@ -1413,7 +2172,24 @@ export default defineAgent({
           callLogId,
           outcome,
           transcriptLines: transcriptParts.length,
+          testCall,
         });
+
+        if (voiceWebhooksConfigured() && persistCalledNumber && callLogId) {
+          void postCallComplete(initialPayload).then((webhookResult) => {
+            if (!webhookResult.ok) {
+              console.warn('[agent] call-complete webhook failed (call already in DB)', {
+                error: webhookResult.error,
+                callLogId,
+              });
+            }
+          });
+        } else if (voiceWebhooksConfigured() && persistCalledNumber && !callLogId) {
+          console.error('[agent] call log insert failed — no row to sync dashboard', {
+            durationSeconds,
+            testCall,
+          });
+        }
 
         let transcriptReview: string | null = null;
         let didPostprocess = false;
@@ -1444,7 +2220,7 @@ export default defineAgent({
           transcriptChars: verbatim?.length ?? 0,
           sttModel: inferenceSttModel,
           llmModel: inferenceLlmModel,
-          ttsModel: String(elevenModel),
+          ttsModel: String(activeTtsModel),
         });
 
         if (callLogId && (transcriptReview || aiSummary || costEstimate)) {
@@ -1455,6 +2231,49 @@ export default defineAgent({
           });
           if (!enriched) {
             console.error('[agent] call log enrichment update failed', callLogId);
+          }
+        }
+
+        if (testCall && callLogId && voiceWebhooksConfigured() && persistCalledNumber) {
+          const finalDiagnostics = buildCloseDiagnosticsPayload({
+            latency: latencyTracker.snapshot(),
+            ...(pipelineSnapshot ? { pipeline: pipelineSnapshot } : {}),
+            sessionFlags: { ...ud.sessionFlags },
+            events: diag.events(),
+            greetingPlayed: greetingPlayedFlag,
+            greetingSource,
+            disclosureConfirmed,
+            transcript: verbatim,
+            identifiers: diag.getIdentifiers(),
+            orgSnapshot,
+            configSnapshot,
+            costEstimate,
+            postprocessRan: didPostprocess,
+            knowledgeGapCount: knowledgeGaps.length,
+            greetingText: greetingText || null,
+            isTestCall: testCall,
+          });
+          const enrichResult = await postCallComplete({
+            called_number: persistCalledNumber,
+            call_sid: callSidAttr,
+            room_name: roomName || null,
+            caller_number: callerNumberRaw,
+            duration_seconds: durationSeconds,
+            outcome,
+            transcript: verbatim,
+            transcript_review: transcriptReview,
+            ai_summary: aiSummary,
+            disclosure_confirmed: disclosureConfirmed,
+            is_test_call: true,
+            test_profile_id: testProfile?.id ?? null,
+            variant_label: testProfile?.name ?? null,
+            diagnostics: finalDiagnostics,
+          });
+          if (!enrichResult.ok) {
+            console.warn('[agent] test-call diagnostics enrichment webhook failed', {
+              error: enrichResult.error,
+              callLogId,
+            });
           }
         }
 
@@ -1484,7 +2303,11 @@ export default defineAgent({
 
         const usageRecordId = await usageRecordIdPromise;
         if (usageRecordId) {
-          await finishUsageRecord({ usageId: usageRecordId, durationSeconds });
+          await finishUsageRecord({
+            usageId: usageRecordId,
+            durationSeconds,
+            ...(testCall ? { syncSkipReason: 'test_call' } : {}),
+          });
         }
 
         mirrorLatestCall({
@@ -1511,15 +2334,24 @@ export default defineAgent({
     });
 
     class CaraVoiceAgent extends voice.Agent<CaraAgentUserData> {
+      /** Next session.say() TTS should be one Cartesia synthesis (greeting). */
+      singleUtteranceTtsNext = false;
+
       override async ttsNode(
         text: ReadableStream<string>,
         modelSettings: Parameters<voice.Agent<CaraAgentUserData>['ttsNode']>[1],
       ) {
+        const singleUtterance = this.singleUtteranceTtsNext;
+        this.singleUtteranceTtsNext = false;
         return voice.Agent.default.ttsNode(
           this,
-          bufferTtsStreamBySentence(
-            prepareTextForTtsStreaming(text, { ttsModel: elevenModel }),
-          ),
+          buildTtsNodeInputStream(text, {
+            provider: useCartesiaInference ? 'cartesia-inference' : 'elevenlabs',
+            ttsModel: activeTtsModel,
+            // Sentence-only buffering — comma early-flush caused staccato / letter-by-letter turbo TTS on demo line.
+            earlyFlush: false,
+            singleUtterance,
+          }),
           modelSettings,
         );
       }
@@ -1527,46 +2359,135 @@ export default defineAgent({
 
     const agent = new CaraVoiceAgent({
       instructions: systemPrompt,
-      tools: caraTools.toolContext(),
+      tools: caraTools.toolContext({ vertical: orgVertical, demoLine: testCall }),
     });
 
     await session.start({ agent, room: ctx.room });
     resetDeadAirTimer();
 
-    if (greetingText) {
-      void greetingCacheWarmPromise;
+    const aiDisclosure = resolveAiDisclosure({
+      greetingText,
+      niche: org.niche,
+      businessType: org.agent_business_type,
+      demoLine: testCall,
+    });
+    console.info('[ai-disclosure] resolved at boot', {
+      disabled: aiDisclosure.disabled,
+      source: aiDisclosure.source,
+      textPreview: aiDisclosure.text ? `${aiDisclosure.text.slice(0, 36)}…` : '',
+      textLength: aiDisclosure.text.length,
+    });
 
-      const playLiveTtsGreeting = () => {
-        sayPrepared(session, greetingText, { greeting: true, allowInterruptions: false });
+    const speakOptionalAiDisclosure = () => {
+      if (aiDisclosure.disabled || !aiDisclosure.text.trim()) return;
+      sayPrepared(session, aiDisclosure.text, { allowInterruptions: true });
+      session.userData.disclosureConfirmed = true;
+    };
+
+    const callerStillConnected = (): boolean => {
+      try {
+        return ctx.room.remoteParticipants.has(participant.identity);
+      } catch {
+        return false;
+      }
+    };
+
+    if (greetingText) {
+      const greetingTtsModel =
+        process.env.GREETING_TTS_MODEL?.trim() || activeTtsModel;
+      const greetingUsesV3 = isElevenV3Model(greetingTtsModel);
+      const GREETING_CACHE_WAIT_MS = greetingUsesV3 ? 500 : 450;
+      void greetingCacheWarmPromise?.catch(() => undefined);
+
+      const resolveGreetingPcm = async (): Promise<Buffer | null> => {
+        if (!greetingCacheKey) return null;
+        const cached = await loadCachedGreetingPcm(greetingCacheKey);
+        if (cached?.byteLength) return cached;
+        if (!greetingCacheWarmPromise) return null;
+        try {
+          await Promise.race([
+            greetingCacheWarmPromise,
+            new Promise<void>((_, reject) =>
+              setTimeout(() => reject(new Error('greeting_cache_wait_timeout')), GREETING_CACHE_WAIT_MS),
+            ),
+          ]);
+        } catch {
+          return null;
+        }
+        return loadCachedGreetingPcm(greetingCacheKey);
+      };
+
+      const playLiveTtsGreeting = async () => {
+        if (greetingPlayoutComplete || greetingPlaybackStarted || !callerStillConnected()) return;
         greetingPlaybackStarted = true;
+        try {
+        agent.singleUtteranceTtsNext = true;
+        const handle = sayPrepared(session, greetingText, {
+          greeting: true,
+          greetingCommaFlow: false,
+          allowInterruptions: false,
+        });
+        greetingPlayedFlag = true;
+        greetingSource = 'live_tts';
+        latencyTracker.recordGreetingPlayback();
         console.info('[agent] greeting_playback', {
           source: 'live_tts',
           msSinceCallStart: Date.now() - callStartedAt,
         });
+        diag.push('info', 'greeting_playback', {
+          source: 'live_tts',
+          msSinceCallStart: Date.now() - callStartedAt,
+        });
+        try {
+          await waitForSpeechHandlePlayout(handle);
+        } catch {
+          /* playout wait best-effort */
+        }
+        greetingPlayoutComplete = true;
+        speakOptionalAiDisclosure();
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (!msg.includes('not running')) {
+            console.error('[agent] live greeting play failed', e);
+          }
+        }
       };
 
-      const cachedPcm = greetingCacheKey
-        ? await loadCachedGreetingPcm(greetingCacheKey)
-        : null;
+      const cachedPcm = await resolveGreetingPcm();
 
       if (cachedPcm?.byteLength) {
         let fallbackUsed = false;
         try {
+          if (!callerStillConnected()) {
+            console.warn('[agent] greeting_skipped — caller disconnected before playback');
+          } else {
           const sampleRate = pcmSampleRateFromEncoding(elevenEncoding);
-          const spokenText = prepareHardcodedSpeechForTts(greetingText, { greeting: true });
-          const handle = session.say(spokenText, {
+          // PCM-only playback — never pass spoken text or TTS runs in parallel (echoey double audio).
+          const handle = session.say('', {
             audio: pcmToAudioFrameStream(cachedPcm, sampleRate),
-            addToChatCtx: true,
+            addToChatCtx: false,
             allowInterruptions: false,
           });
           greetingAudioSpeechPending += 1;
           greetingPlaybackStarted = true;
+          greetingPlayedFlag = true;
+          greetingSource = 'cached_pcm';
+          latencyTracker.recordGreetingPlayback();
           console.info('[agent] greeting_playback', {
+            source: 'cached_pcm',
+            msSinceCallStart: Date.now() - callStartedAt,
+          });
+          diag.push('info', 'greeting_playback', {
             source: 'cached_pcm',
             msSinceCallStart: Date.now() - callStartedAt,
           });
 
           const watchdog = setTimeout(() => {
+            if (greetingPlayoutComplete || fallbackUsed) return;
+            if (handle.done()) {
+              greetingPlayoutComplete = true;
+              return;
+            }
             if (session.agentState !== 'speaking' && !fallbackUsed) {
               fallbackUsed = true;
               console.warn('[agent] greeting_playback_fallback', {
@@ -1584,24 +2505,29 @@ export default defineAgent({
 
           try {
             await waitForSpeechHandlePlayout(handle);
+            greetingPlayoutComplete = true;
+            speakOptionalAiDisclosure();
           } catch (e) {
             console.error('[agent] cached greeting playout failed — live TTS fallback', e);
-            if (!fallbackUsed && session.agentState !== 'speaking') {
+            if (!fallbackUsed && !greetingPlayoutComplete && session.agentState !== 'speaking') {
               fallbackUsed = true;
-              playLiveTtsGreeting();
+              await playLiveTtsGreeting();
             }
           } finally {
             clearTimeout(watchdog);
           }
+          }
         } catch (e) {
           console.error('[agent] cached greeting play failed — live TTS fallback', e);
-          playLiveTtsGreeting();
+          if (callerStillConnected()) {
+            await playLiveTtsGreeting();
+          }
         }
-      } else {
-        playLiveTtsGreeting();
+      } else if (callerStillConnected()) {
+        await playLiveTtsGreeting();
       }
 
-      if (greetingIncludesAiDisclosure(greetingText)) {
+      if (greetingIncludesAiDisclosure(greetingText) || aiDisclosure.disabled) {
         session.userData.disclosureConfirmed = true;
       }
     } else {
@@ -1616,7 +2542,7 @@ export default defineAgent({
 
 const _agentNameRaw = process.env.LIVEKIT_AGENT_NAME;
 const resolvedAgentName =
-  _agentNameRaw === undefined ? 'cliste-salon-node' : _agentNameRaw.trim();
+  _agentNameRaw === undefined ? 'cliste-voice-node' : _agentNameRaw.trim();
 
 void reapZombieUsageRows();
 

@@ -82,11 +82,11 @@ function parseOpenCloseValue(v: unknown): DaySchedule | null {
   }
   if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
     const o = v as Record<string, unknown>;
-    if (o.closed === true || o.isClosed === true) {
+    if (o.closed === true || o.isClosed === true || o.open === false) {
       return 'closed';
     }
-    const open = parseHmToMinutes(o.open ?? o.opens ?? o.start ?? o.from);
-    const close = parseHmToMinutes(o.close ?? o.closes ?? o.end ?? o.to);
+    const open = parseHmToMinutes(o.start ?? o.opens ?? o.from ?? o.open);
+    const close = parseHmToMinutes(o.end ?? o.closes ?? o.to ?? o.close);
     if (open != null && close != null && close > open) {
       return { openMin: open, closeMin: close };
     }

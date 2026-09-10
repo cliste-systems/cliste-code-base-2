@@ -7,20 +7,28 @@ import { AudioFrame } from '@livekit/rtc-node';
 
 import {
   type ElevenLabsHttpV3Config,
+  isElevenV3Model,
   renderTextToPcmWithV3,
 } from './elevenlabs-v3-http-tts.js';
+import { voiceSettingsCacheFingerprint } from './call_participant.js';
 import { prepareGreetingForTts } from './tts_text_sanitize.js';
 
-const GREETING_V3_MODEL = 'eleven_v3';
+const GREETING_TTS_MODEL =
+  process.env.GREETING_TTS_MODEL?.trim() ||
+  process.env.ELEVEN_TTS_MODEL?.trim() ||
+  'eleven_turbo_v2_5';
 const DEFAULT_CACHE_DIR = '/tmp/greeting-cache';
 
 export function greetingAudioCacheKey(
   orgId: string,
   greetingText: string,
   voiceId: string,
+  voiceSettingsFingerprint?: string,
 ): string {
   return createHash('sha256')
-    .update(`${orgId}\0${greetingText.trim()}\0${voiceId.trim()}`)
+    .update(
+      `${orgId}\0${greetingText.trim()}\0${voiceId.trim()}\0${GREETING_TTS_MODEL}\0${voiceSettingsFingerprint ?? ''}`,
+    )
     .digest('hex');
 }
 
@@ -59,7 +67,7 @@ export function pcmToAudioFrameStream(
   return ReadableStream.from(frames);
 }
 
-/** Load cached greeting PCM or render via Eleven v3 and store for the next call. */
+/** Load cached greeting PCM or render via Eleven HTTP stream and store for the next call. */
 export async function ensureGreetingPcmCached(input: {
   orgId: string;
   greetingText: string;
@@ -67,9 +75,21 @@ export async function ensureGreetingPcmCached(input: {
   voiceId: string;
   encoding?: string;
   baseURL?: string;
-  voiceSettings?: ElevenLabsHttpV3Config['voiceSettings'];
+  voiceSettings?: ElevenLabsHttpV3Config['voiceSettings'] & { speed?: number };
 }): Promise<Uint8Array> {
-  const cacheKey = greetingAudioCacheKey(input.orgId, input.greetingText, input.voiceId);
+  const cacheKey = greetingAudioCacheKey(
+    input.orgId,
+    input.greetingText,
+    input.voiceId,
+    input.voiceSettings
+      ? voiceSettingsCacheFingerprint({
+          stability: input.voiceSettings.stability ?? 0.47,
+          similarity_boost: input.voiceSettings.similarity_boost ?? 0.78,
+          style: input.voiceSettings.style ?? 0.3,
+          speed: input.voiceSettings.speed ?? 1.08,
+        })
+      : undefined,
+  );
   const existing = await loadCachedGreetingPcm(cacheKey);
   if (existing?.byteLength) return existing;
 
@@ -102,7 +122,7 @@ export function buildGreetingV3RenderConfig(input: {
   return {
     apiKey: input.apiKey,
     voiceId: input.voiceId,
-    model: GREETING_V3_MODEL,
+    model: GREETING_TTS_MODEL,
     encoding,
     sampleRate: sampleRateMatch ? Number.parseInt(sampleRateMatch[1]!, 10) : 24000,
     baseURL: (input.baseURL ?? 'https://api.elevenlabs.io/v1').replace(/\/$/, ''),
@@ -110,13 +130,14 @@ export function buildGreetingV3RenderConfig(input: {
   };
 }
 
-/** Render greeting for cache — uses comma-flow prep, no v3 audio tags. */
+/** Render greeting for cache — v3 gets a warm tag; sentence breaks only (no comma-flow rush). */
 export async function renderGreetingPcmForCache(
   config: ElevenLabsHttpV3Config,
   greetingText: string,
 ): Promise<Uint8Array> {
-  const spoken = prepareGreetingForTts(greetingText);
-  return renderTextToPcmWithV3(config, spoken);
+  const spoken = prepareGreetingForTts(greetingText, { commaFlow: false });
+  const forModel = isElevenV3Model(config.model) ? `[warm] ${spoken}` : spoken;
+  return renderTextToPcmWithV3(config, forModel);
 }
 
 export function splitGreetingSentences(text: string): string[] {

@@ -1,55 +1,17 @@
-/** STT vocabulary for salon phone calls — keyterms + u3-rt-pro domain prompt. */
+import { isRetailNiche } from './org_vertical.js';
+
+/** STT vocabulary for phone calls — keyterms + u3-rt-pro domain prompt. */
 
 const MAX_KEYTERM_LEN = 50;
 const DEFAULT_KEYTERM_CAP = 400;
-
-const STATIC_SALON_KEYTERMS = [
-  'appointment',
-  'appointments',
-  'hair appointment',
-  'book an appointment',
-  'book appointment',
-  'booking',
-  'haircut',
-  'hair cut',
-  'hair',
-  'colour',
-  'color',
-  'balayage',
-  'foils',
-  'highlights',
-  'root touch-up',
-  'roots',
-  'patch test',
-  'consultation',
-  'colour appointment',
-  'blow-dry',
-  'blowdry',
-  'blow dry',
-  'keratin',
-  'trim',
-  'cut',
-  'gel manicure',
-  'manicure',
-  'pedicure',
-  'shellac',
-  'lashes',
-  'lash lift',
-  'brows',
-  'wax',
-  'facial',
-  'nails',
-  'Fresha',
-  'Grafton',
-  'Eircode',
-  'Dublin',
-];
 
 export type BuildSttKeytermsInput = {
   orgName?: string | null;
   customPrompt?: string | null;
   extraTerms?: string[];
   cap?: number;
+  niche?: string | null;
+  businessType?: string | null;
 };
 
 function normalizeKeyterm(term: string): string | null {
@@ -94,8 +56,38 @@ export function parseServiceNamesFromCustomPrompt(customPrompt?: string | null):
   return names;
 }
 
+const STATIC_RETAIL_KEYTERMS = [
+  'opening hours',
+  'open today',
+  'open tomorrow',
+  'are you open',
+  'are ye open',
+  'ye open tomorrow',
+  'what time are you open',
+  'closed',
+  'deli',
+  'butcher',
+  'customer service',
+  'fresh food',
+  'ambient',
+  'store manager',
+  'in stock',
+  'parking',
+  'delivery',
+  'complaint',
+  'lost property',
+  'SuperValu',
+  'Killarney',
+  'Main Street',
+  'Eircode',
+  'Garreth Ferry',
+  'Mark OToole',
+  'Paul Gallagher',
+];
+
 export function buildSttKeyterms(input: BuildSttKeytermsInput): string[] {
   const cap = input.cap ?? DEFAULT_KEYTERM_CAP;
+  const staticTerms = STATIC_RETAIL_KEYTERMS;
   const orgTokens =
     input.orgName
       ?.split(/\s+/)
@@ -116,7 +108,7 @@ export function buildSttKeyterms(input: BuildSttKeytermsInput): string[] {
     out.push(term);
   };
 
-  for (const term of STATIC_SALON_KEYTERMS) add(term);
+  for (const term of staticTerms) add(term);
   for (const term of envExtra) add(term);
   for (const term of orgTokens) add(term);
   for (const name of catalogNames) {
@@ -129,14 +121,22 @@ export function buildSttKeyterms(input: BuildSttKeytermsInput): string[] {
   return out.slice(0, cap);
 }
 
-export function buildSttDomainPrompt(orgName: string): string {
-  const name = orgName.trim() || 'a hair and beauty salon';
+export function buildSttDomainPrompt(
+  orgName: string,
+  opts?: { niche?: string | null; businessType?: string | null },
+): string {
+  const name = orgName.trim() || 'the business';
+  if (isRetailNiche(opts?.niche) || isRetailNiche(opts?.businessType)) {
+    return (
+      `Irish English phone calls to ${name}, a local retail grocery store. ` +
+      'Callers ask about opening hours, departments (deli, butcher, customer service, fresh food, ambient), ' +
+      'store managers, directions, parking, stock on shelves, complaints, and deliveries. ' +
+      'Common phrases: are you open, are ye open, opening hours, deli counter, customer service, in stock.'
+    );
+  }
   return (
-    `Irish English phone calls to ${name}, a hair and beauty salon. ` +
-    'Callers book appointments for haircuts, colour, balayage, highlights, root touch-up, ' +
-    'blow-dry, gel manicure, pedicure, lashes, brows, waxing, and facials. ' +
-    'Common phrases: hair appointment, book an appointment, haircut, book a haircut, ' +
-    'root touch-up, gel manicure, lash lift, colour appointment.'
+    `Irish English phone calls to ${name}. ` +
+    'Callers ask about opening hours, directions, departments, and leaving messages for the team.'
   );
 }
 
@@ -171,6 +171,17 @@ export function sttTurnSilenceDefaults(profile: SttLatencyProfile): SttTurnSilen
     return { minTurnSilenceMs: 300, maxTurnSilenceMs: 1400, eotConfidence: 0.4 };
   }
   return { minTurnSilenceMs: 200, maxTurnSilenceMs: 1000, eotConfidence: 0.35 };
+}
+
+/** u3-rt-pro with LiveKit turn detector — AssemblyAI recommends 100/100ms, not STT-owned EOT. */
+export function assemblyAiTurnSilenceDefaults(
+  model: string,
+  profile: SttLatencyProfile,
+): SttTurnSilenceTuning {
+  if (isU3RtProSttModel(model)) {
+    return { minTurnSilenceMs: 100, maxTurnSilenceMs: 100, eotConfidence: 0.35 };
+  }
+  return sttTurnSilenceDefaults(profile);
 }
 
 /** LiveKit endpointing — zero extra delay when u3 neural STT owns turn end (snappy). */

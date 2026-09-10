@@ -23,11 +23,14 @@ export function detectLikelySttGarble(text: string): boolean {
   return false;
 }
 
-/** Noise / partial STT that must not advance booking or bump reply turns. */
+/**
+ * Non-linguistic STT fragments only — never treat hello/hi/ok as phantom; callers must always get a reply.
+ * Used for booking-intake guards only, not to drop caller turns.
+ */
 export function isPhantomCallerTranscript(text: string): boolean {
   const raw = text.trim();
   if (!raw) return true;
-  if (raw.length <= 2) return true;
+  if (raw.length <= 1) return true;
   if (/^[\d.]+$/.test(raw)) return true;
   const t = raw
     .toLowerCase()
@@ -35,8 +38,7 @@ export function isPhantomCallerTranscript(text: string): boolean {
     .replace(/\s+/g, ' ')
     .trim();
   if (!t) return true;
-  if (/^(um|uh|eh|ah|er|hmm|mm|yeah|yes|no|ok|okay|sir|hello|hi)$/.test(t)) return true;
-  if (/^(yes )?sir$/.test(t)) return true;
+  if (/^(um|uh|eh|ah|er|hmm|mm)$/.test(t)) return true;
   return false;
 }
 

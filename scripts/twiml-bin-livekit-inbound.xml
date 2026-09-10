@@ -5,8 +5,8 @@
   Then: Phone Numbers → +353… → Voice → "A call comes in" → TwiML Bin → select this bin → Save.
 
   SIP host must match LiveKit Cloud → Project settings → SIP (NOT the wss hostname).
-  This project uses the UK SIP domain, e.g.
-  4crcl51h1rh.uk.sip.livekit.cloud
+  This project uses the EU SIP domain, e.g.
+  4crcl51h1rh.eu.sip.livekit.cloud
   (see Twilio call "To" field — use that exact host from the LiveKit dashboard).
 
   If your inbound trunk uses digest auth, add username/password on <Sip> and
@@ -17,7 +17,7 @@
 <Response>
   <Dial timeout="60" answerOnBridge="true">
     <Sip>
-      sip:+353749389378@4crcl51h1rh.uk.sip.livekit.cloud;transport=tcp
+      sip:+353749389378@4crcl51h1rh.eu.sip.livekit.cloud;transport=tcp
     </Sip>
   </Dial>
 </Response>

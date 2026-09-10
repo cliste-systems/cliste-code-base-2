@@ -37,6 +37,9 @@ describe('stt_garble', () => {
     assert.equal(isPhantomCallerTranscript('Um,'), true);
     assert.equal(isPhantomCallerTranscript('Uh, just'), false);
     assert.equal(isPhantomCallerTranscript('Yes, sir, book for my mother'), false);
+    assert.equal(isPhantomCallerTranscript('Hello?'), false);
+    assert.equal(isPhantomCallerTranscript('Hello'), false);
+    assert.equal(isPhantomCallerTranscript('OK'), false);
   });
 
   it('accepts substantive service answers', () => {

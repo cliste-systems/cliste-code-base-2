@@ -15,6 +15,10 @@ export async function insertCallLog(input: {
   transcriptReview?: string | null;
   aiSummary?: string | null;
   costEstimate?: CallCostEstimateRecord | null;
+  calledNumber?: string | null;
+  isTestCall?: boolean;
+  callSid?: string | null;
+  roomName?: string | null;
 }): Promise<string | null> {
   if (isOfflinePlayground()) return null;
   if (!directDbFallbackAllowed()) {
@@ -39,6 +43,10 @@ export async function insertCallLog(input: {
       transcript_review: transcriptReview,
       ai_summary: aiSummary,
       cost_estimate: input.costEstimate ?? null,
+      ...(input.calledNumber?.trim() ? { called_number: input.calledNumber.trim() } : {}),
+      ...(input.isTestCall === true ? { is_test_call: true } : {}),
+      ...(input.callSid?.trim() ? { call_sid: input.callSid.trim() } : {}),
+      ...(input.roomName?.trim() ? { room_name: input.roomName.trim() } : {}),
     })
     .select('id')
     .single();

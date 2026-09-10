@@ -27,7 +27,7 @@ async function main(): Promise<void> {
     throw new Error('Missing LIVEKIT_API_KEY or LIVEKIT_API_SECRET');
   }
 
-  const agentName = process.env.LIVEKIT_AGENT_NAME?.trim() || 'cliste-salon-node';
+  const agentName = process.env.LIVEKIT_AGENT_NAME?.trim() || 'cliste-voice-node';
   const client = new AgentDispatchClient(httpsHost(), key, secret);
 
   let metadata: string | undefined;

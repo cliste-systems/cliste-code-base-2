@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { assistantTextSoundsLikeGoodbye } from './end_call.js';
+import {
+  assistantTextSoundsLikeGoodbye,
+  assistantTextSoundsLikeTerminalHangup,
+  buildWarmCallClosingLine,
+} from './end_call.js';
 
 describe('end_call goodbye detector', () => {
   it('matches prompt-style closings', () => {
@@ -10,6 +14,38 @@ describe('end_call goodbye detector', () => {
     assert.equal(
       assistantTextSoundsLikeGoodbye('Lovely, thanks for calling Bloom Beauty Studio. Bye!'),
       true,
+    );
+  });
+
+  it('builds warm programmatic closing without grand or bare bye', () => {
+    const line = buildWarmCallClosingLine(
+      {
+        name: "Murphy's SuperValu Killarney",
+        greeting:
+          "You're through to Murphy's SuperValu Killarney — I'm Cara, the AI assistant.",
+      },
+      'test-call-seed',
+    );
+    assert.match(line, /thanks for (ringing|calling) Murphy's SuperValu/i);
+    assert.doesNotMatch(line, /Killarney/i);
+    assert.match(line, /(take care|have a good one|glad I could help|no bother)/i);
+    assert.doesNotMatch(line, /\bbye\b/i);
+    assert.doesNotMatch(line, /grand/i);
+  });
+
+  it('detects terminal hangup lines without bare bye', () => {
+    assert.equal(
+      assistantTextSoundsLikeTerminalHangup('Lovely — thanks for calling. Take care.'),
+      true,
+    );
+    assert.equal(assistantTextSoundsLikeTerminalHangup('Lovely, thanks for calling Murphy\'s. Bye!'), true);
+    assert.equal(
+      assistantTextSoundsLikeTerminalHangup("You're welcome, have a great day."),
+      false,
+    );
+    assert.equal(
+      assistantTextSoundsLikeTerminalHangup('Is there anything else I can help you with?'),
+      false,
     );
   });
 

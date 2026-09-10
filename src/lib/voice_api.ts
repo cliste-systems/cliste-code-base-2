@@ -13,6 +13,8 @@ const CALL_COMPLETE_TIMEOUT_MS = Number.parseInt(
 /** Cap transcript size before POST to dashboard webhook. */
 export const MAX_WEBHOOK_TRANSCRIPT_CHARS = 100_000;
 
+import type { CallCloseDiagnosticsPayload } from './call_close_diagnostics.js';
+
 export type CallCompletePayload = {
   called_number: string;
   call_sid: string | null;
@@ -25,6 +27,10 @@ export type CallCompletePayload = {
   transcript_review?: string | null;
   ai_summary?: string | null;
   disclosure_confirmed?: boolean;
+  is_test_call?: boolean;
+  test_profile_id?: string | null;
+  variant_label?: string | null;
+  diagnostics?: CallCloseDiagnosticsPayload | null;
   knowledge_gaps?: Array<{
     topic: string;
     caller_context?: string;

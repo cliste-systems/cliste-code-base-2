@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  assemblyAiTurnSilenceDefaults,
   buildSttDomainPrompt,
   buildSttKeyterms,
   buildAssemblyAiSttOptions,
@@ -23,26 +24,26 @@ When someone asks how long a service takes`;
     ]);
   });
 
-  it('includes static booking phrases and catalog names', () => {
+  it('includes retail opening-hours keyterms', () => {
     const terms = buildSttKeyterms({
-      orgName: 'Bloom Beauty Studio',
-      customPrompt: 'Services menu:\n• Root Touch-up — 60 min — from €65',
+      orgName: "Murphy's SuperValu Killarney",
+      niche: 'retail',
     });
-    assert.ok(terms.includes('hair appointment'));
-    assert.ok(terms.includes('appointment'));
-    assert.ok(terms.includes('root touch-up'));
-    assert.ok(terms.includes('Bloom'));
+    assert.ok(terms.includes('are ye open'));
+    assert.ok(terms.includes('open tomorrow'));
+    assert.ok(terms.includes('SuperValu'));
   });
 
-  it('builds u3 domain prompt with org name', () => {
-    const p = buildSttDomainPrompt('Bloom Beauty Studio');
-    assert.match(p, /Bloom Beauty Studio/);
-    assert.match(p, /hair appointment/);
+  it('builds retail domain prompt', () => {
+    const p = buildSttDomainPrompt("Murphy's SuperValu Killarney", { niche: 'retail' });
+    assert.match(p, /retail grocery store/i);
+    assert.match(p, /are ye open/i);
+    assert.doesNotMatch(p, /salon/i);
   });
 
   it('uses prompt for u3-rt-pro and keyterms for universal-streaming', () => {
-    const keyterms = ['hair', 'haircut'];
-    const domain = 'Salon calls.';
+    const keyterms = ['deli', 'butcher'];
+    const domain = 'Retail store calls.';
     const u3 = buildAssemblyAiSttOptions({
       model: 'assemblyai/u3-rt-pro',
       keyterms,
@@ -64,6 +65,14 @@ When someone asks how long a service takes`;
     });
     assert.deepEqual(legacy.keyterms_prompt, keyterms);
     assert.equal(legacy.prompt, undefined);
+  });
+
+  it('u3-rt-pro uses LiveKit turn-detector silence tuning', () => {
+    assert.deepEqual(assemblyAiTurnSilenceDefaults('assemblyai/u3-rt-pro', 'snappy'), {
+      minTurnSilenceMs: 100,
+      maxTurnSilenceMs: 100,
+      eotConfidence: 0.35,
+    });
   });
 
   it('snappy profile zeros stacked endpointing on u3 neural STT', () => {

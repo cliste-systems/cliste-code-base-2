@@ -1,8 +1,6 @@
 /** Regex detectors for spoken assistant text — drive auto-SMS, close flow, hangup. */
 
-export function assistantAskedAnythingElse(text: string): boolean {
-  return /\banything else\b/i.test(text);
-}
+export { assistantAskedAnythingElse, assistantAskedWindDown } from './natural_phrasing.js';
 
 /** Assistant implied SMS/link was delivered — must match linkSent flag in code. */
 export function assistantClaimsLinkWasSent(text: string): boolean {
@@ -22,9 +20,49 @@ export function callerSaidNothingElse(text: string): boolean {
     .replace(/\s+/g, ' ')
     .trim();
   if (!t) return false;
-  return /\b(that'?s all|thats all|nothing else|all good|all grand|i'?m good|im good|that'?s it|thats it|no more|we'?re good|i'?m all set|im all set)\b/.test(
+  return /\b(that'?s all|thats all|that'?s everything|thats everything|nothing else|all good|all grand|i'?m good|im good|i'?m okay|im okay|i am okay|that'?s fine|thats fine|that'?s it|thats it|no more|we'?re good|i'?m all set|im all set)\b/.test(
     t,
   );
+}
+
+/** Caller explicitly asked to end the call — not a service question. */
+export function callerExplicitlyRequestedHangup(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  return /\b(end (the )?call|hang up|hangup|disconnect|put the phone down|you can hang up)\b/.test(t);
+}
+
+/** Caller asking what demos exist — steer away from trade menus. */
+export function callerAsksDemoMenu(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ');
+  if (!t) return false;
+  return (
+    /\b(what can (we|i) demo|what could we try|what are (the )?options|what can you show|what would we demo|what can we try)\b/.test(
+      t,
+    ) || /\bwhat can we demo\b/.test(t)
+  );
+}
+
+/** Assistant read a phone-menu style list of trades/options. */
+export function assistantSoundsLikeTradeMenu(text: string): boolean {
+  const t = text.replace(/^Assistant:\s*/i, '').trim();
+  if (!t) return false;
+  if (/\b(electrician|salon|mechanic|shop|garage|beauty|retail)\b.*,\s.*\b(or|and)\b/i.test(t)) {
+    return true;
+  }
+  if (/\b(like|such as|for example)\b/i.test(t) && (t.match(/,/g) ?? []).length >= 2) {
+    return true;
+  }
+  return /\bpick one\b/i.test(t) && /\b(or|and)\b/i.test(t);
 }
 
 /** Caller winding down after "anything else?" — bare "no" is clear in that context. */
@@ -36,7 +74,12 @@ export function callerWindingDownCall(text: string): boolean {
     .replace(/\s+/g, ' ')
     .trim();
   if (!t) return false;
-  return /^(no|nope|nah)(\s+(thanks|thank you))?$/i.test(t);
+  if (/^(no|nope|nah)(\s+(thanks|thank you))?$/i.test(t)) return true;
+  if (/^no[, ]+(i'?m okay|im okay|that'?s fine|thats fine|i'?m good|im good)(\s+(thanks|thank you))?$/i.test(t)) {
+    return true;
+  }
+  if (callerExplicitlyRequestedHangup(text)) return true;
+  return /\b(thanks|thank you|cheers)\b/.test(t) && callerSaidNothingElse(text);
 }
 
 /** Caller wants human/phone booking instead of the SMS link. */
@@ -54,9 +97,29 @@ export function callerAskedPhoneOrHumanBooking(text: string): boolean {
   );
 }
 
+/** Caller checking the line — not a service question. */
+export function callerSoundsLikeAudioCheck(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[!?.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  return (
+    /\b(can you hear me|can you hear|hear me ok|hear me okay|are you there|you there)\b/.test(t) ||
+    /^(hello|hi)\s+(can you hear|are you there)\b/.test(t)
+  );
+}
+
 /** Caller changed topic or hedged during SMS consent — not a clear yes/no. */
-export function callerPivotedFromSmsConsent(text: string): boolean {
+export function callerPivotedFromSmsConsent(
+  text: string,
+  context?: { awaitingSmsConsent?: boolean },
+): boolean {
   if (!text.trim() || callerSaidNothingElse(text)) return false;
+  if (callerSoundsLikeSocialChitchat(text)) return false;
+  if (callerSoundsLikeAudioCheck(text)) return false;
   if (callerAskedPhoneOrHumanBooking(text)) return true;
   const t = text
     .trim()
@@ -68,7 +131,7 @@ export function callerPivotedFromSmsConsent(text: string): boolean {
   if (/\b(maybe|not sure|perhaps|i don'?t know)\b/.test(t) && callerAskedNewQuestion(text)) {
     return true;
   }
-  if (callerAskedNewQuestion(text) && t.length > 28) {
+  if (context?.awaitingSmsConsent && callerAskedNewQuestion(text) && t.length > 28) {
     return true;
   }
   return false;
@@ -90,9 +153,35 @@ export function assistantAwaitingCallerReply(text: string): boolean {
   const t = text.trim();
   if (!t) return false;
   if (assistantAskedServiceIntake(t)) return true;
-  if (/\b(is that alright|is that okay|shall i text|anything else)\b/i.test(t)) return true;
+  if (
+    /\b(is that alright|is that okay|shall i text|anything else|is that everything|are you all sorted)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
   return /\?\s*$/.test(t) || (/\?/.test(t) && t.length < 220);
 }
+
+/** Bare hello/hi/hey — line check, not small talk. */
+export function callerSoundsLikeLineEngagement(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[!?.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  if (callerSoundsLikeAudioCheck(text)) return false;
+  if (/\b(book|booking|appointment|how are you|keeping)\b/.test(t)) return false;
+  return (
+    /^(hello|hi|hey|hiya|howya|how ya|anyone there|you there|still there)\b/.test(t) ||
+    /^(hello|hi|hey)\s*(there|cara)?\s*$/.test(t)
+  );
+}
+
+const DEMO_CHITCHAT_BUSINESS_HINT =
+  /\b(business|hello cara|curious|salon|shop|garage|electrician|website|pricing|because|looking for|book|appointment|demo an|try a)\b/;
 
 /** Small talk / greeting — no thinking filler needed before the reply. */
 export function callerSoundsLikeSocialChitchat(text: string): boolean {
@@ -104,11 +193,77 @@ export function callerSoundsLikeSocialChitchat(text: string): boolean {
     .trim();
   if (!t) return false;
   if (/\b(book|booking|appointment|schedule|cancel|reschedule)\b/.test(t)) return false;
-  return (
-    /^(hello|hi|hey|good morning|good afternoon|good evening)\b/.test(t) ||
-    /\b(how are you keeping|how are you doing|how are you today|how'?s it going|how'?s your day)\b/.test(
+  if (callerSoundsLikeLineEngagement(text)) return false;
+  if (
+    /\b(weather|what'?s it like (there|with you|out)|how'?s the weather|soft day|lovely day|raining|showers?)\b/.test(
       t,
     )
+  ) {
+    return true;
+  }
+  return (
+    /^(good morning|good afternoon|good evening|keeping|you keeping|ya keeping)\b/.test(
+      t,
+    ) ||
+    /\b(how are you keeping|how are you doing|how are you today|how'?s it going|how'?s your day|how are ye|howya|how ya|you keeping|ya keeping|are you keeping|keeping well|you alright|you ok)\b/.test(
+      t,
+    ) ||
+    /\bkeeping\s*(today|well|there)?\s*$/.test(t)
+  );
+}
+
+/** Short hello / how-are-you reply at the start of a demo call — not a product question yet. */
+export function callerSoundsLikeVagueDemoOpening(text: string): boolean {
+  if (callerAsksDemoMenu(text)) return false;
+  if (callerSoundsLikeSocialChitchat(text)) return true;
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  if (/\b(what do you do|what is it that you do|what is it you do|who made|who built|electrician|salon|demo an|try a)\b/.test(t)) {
+    return false;
+  }
+  if (
+    /^(hello|hi|hiya|hey|yeah|yep|good thanks|thanks|not too bad|i'?m good|doing well|very well|not bad)[.!?]?$/.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(not too bad|doing well|i'?m good|very well|not bad|keeping well)\b/.test(t) &&
+    !DEMO_CHITCHAT_BUSINESS_HINT.test(t)
+  ) {
+    return true;
+  }
+  return t.length <= 24 && /^(hello|hi|hiya|hey)\b/.test(t);
+}
+
+/** Offers a "sample call" while the caller is already on the Hello Cara demo line. */
+export function assistantOffersRedundantSampleCall(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+  return (
+    /\b(sample call|hear how (?:i|you) sound|hear me on a (?:call|sample)|how i sound on a|how you sound on a|try a sample)\b/.test(
+      t,
+    ) || /\bwould you like to hear how\b/.test(t)
+  );
+}
+
+/** Robotic call-centre phrasing — not how a friendly Irish receptionist talks. */
+export function assistantSoundsLikeCorporateAssist(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+  return (
+    /\bi'?m here to help\b/.test(t) ||
+    /\bwhat can i assist\b/.test(t) ||
+    /\bhow can i assist you\b/.test(t) ||
+    /\bwhat can i help you with today\b/.test(t) ||
+    /\bsomething specific you need help with\b/.test(t) ||
+    /\bi'?ll be here tomorrow\b/.test(t)
   );
 }
 

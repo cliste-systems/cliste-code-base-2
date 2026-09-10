@@ -6,8 +6,12 @@
 import { tokenize } from '@livekit/agents';
 
 import { isElevenV3Model } from './elevenlabs-v3-http-tts.js';
+import { softenSpokenFarewell } from './natural_phrasing.js';
+import { isCartesiaInferenceTtsModel } from './tts_config.js';
 
 const FORBIDDEN_SPOKEN = /\b(end\s+phone\s+call|endphonecall)\b/gi;
+/** Irish slang the product owner does not want spoken aloud. */
+const UNWANTED_SPOKEN = /\bgrand\b/gi;
 
 /** Length of tail retained across chunks (longer than longest forbidden phrase). */
 const TAIL_KEEP = 28;
@@ -50,6 +54,75 @@ function applyPronunciationMap(text: string): string {
   return out;
 }
 
+const HOUR_WORDS = [
+  'twelve',
+  'one',
+  'two',
+  'three',
+  'four',
+  'five',
+  'six',
+  'seven',
+  'eight',
+  'nine',
+  'ten',
+  'eleven',
+  'twelve',
+] as const;
+
+function spokenHour12(hour24: number): string {
+  const h = ((hour24 % 12) + 12) % 12 || 12;
+  return HOUR_WORDS[h] ?? String(h);
+}
+
+function spokenDayPart(hour24: number): string {
+  if (hour24 < 12) return 'in the morning';
+  if (hour24 < 17) return 'in the afternoon';
+  return 'in the evening';
+}
+
+function spokenClockTime(hour24: number, minute: number): string {
+  const hourPart = spokenHour12(hour24);
+  if (minute === 0) {
+    return `${hourPart} o'clock ${spokenDayPart(hour24)}`;
+  }
+  if (minute === 30) {
+    return `half past ${hourPart} ${spokenDayPart(hour24)}`;
+  }
+  if (minute === 15) {
+    return `quarter past ${hourPart} ${spokenDayPart(hour24)}`;
+  }
+  if (minute === 45) {
+    return `quarter to ${spokenHour12((hour24 + 1) % 24)} ${spokenDayPart(hour24)}`;
+  }
+  return `${hourPart} ${minute} ${spokenDayPart(hour24)}`;
+}
+
+/** Convert 24h / am-pm clock strings to natural Irish phone speech before TTS. */
+function normalizeSpokenTimes(text: string): string {
+  let out = text.replace(
+    /\b([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?\b/g,
+    (_match, hh: string, mm: string) => {
+      const hour24 = Number.parseInt(hh, 10);
+      const minute = Number.parseInt(mm, 10);
+      if (!Number.isFinite(hour24) || !Number.isFinite(minute)) return _match;
+      return spokenClockTime(hour24, minute);
+    },
+  );
+
+  out = out.replace(
+    /\b([01]?\d)(?::([0-5]{2}))?\s*(am|pm)\b/gi,
+    (_match, hh: string, mm: string | undefined, ampm: string) => {
+      let hour24 = Number.parseInt(hh, 10) % 12;
+      if (ampm.toLowerCase() === 'pm') hour24 += 12;
+      const minute = mm ? Number.parseInt(mm, 10) : 0;
+      return spokenClockTime(hour24, minute);
+    },
+  );
+
+  return out;
+}
+
 /** LLM emphasis like "hellooooo" — turbo reads repeated letters as a long scream. */
 function collapseStretchedLetters(text: string): string {
   return text.replace(/(.)\1{2,}/g, '$1');
@@ -68,18 +141,78 @@ function normalizeTtsChunk(text: string, ttsModel = activeTtsModel): string {
       .replace(ALL_CAPS_WORD, (word) => (word === 'AI' ? word : word.toLowerCase()))
       .replace(URL_PATTERN, '')
       .replace(FORBIDDEN_SPOKEN, '')
+      .replace(UNWANTED_SPOKEN, 'lovely')
       // Turbo + style can draw out "alright" — detector accepts "okay" too.
       .replace(/\bis that alright\b/gi, 'is that okay')
-      .replace(/\bbye[\s-]*bye[!?.]*/gi, 'bye for now')
-      .replace(/\bgoodbye[!?.]*/gi, 'bye for now'),
+      .replace(/\bbye[\s-]*bye[!?.]*/gi, 'take care')
+      .replace(/\bgoodbye[!?.]*/gi, 'take care'),
     ttsModel,
   );
-  return applyPronunciationMap(collapseStretchedLetters(stripped)).replace(/\s{2,}/g, ' ');
+  return softenSpokenFarewell(
+    applyPronunciationMap(
+      normalizeSpokenTimes(collapseStretchedLetters(stripped)),
+    ).replace(/\s{2,}/g, ' '),
+  );
+}
+
+/** Cartesia SSML pause after commas — plain commas are often rushed on PSTN. */
+const CARTESIA_COMMA_BREAK = '<break time="240ms"/>';
+/** Pause after em-dash clause openers (e.g. "Sure — I can help"). */
+const CARTESIA_DASH_BREAK = '<break time="320ms"/>';
+/** Pause between sentences/clauses (replaces periods so Cartesia does not say "dot"). */
+const CARTESIA_SENTENCE_BREAK = '<break time="450ms"/>';
+/** Extra pause when a new TTS synthesis chunk follows the previous one. */
+const CARTESIA_CHUNK_BREAK = '<break time="380ms"/>';
+/** Greeting-only — brief pauses at sentence boundaries, no comma micro-pauses. */
+const CARTESIA_GREETING_SENTENCE_BREAK = '<break time="280ms"/>';
+
+function normalizeCartesiaBase(text: string, ttsModel = activeTtsModel): string {
+  let out = normalizeTtsChunk(text, ttsModel).trim();
+  out = out.replace(/\*\*/g, '').replace(/\*/g, '').replace(/`/g, '');
+  out = out.replace(/\.{2,}/g, ', ');
+  out = out.replace(/\be\.g\.\s*/gi, 'for example, ');
+  out = out.replace(/\bi\.e\.\s*/gi, 'that is, ');
+  out = out.replace(/\betc\.\s*/gi, 'and so on, ');
+  out = out.replace(/\betc\s*$/gi, 'and so on');
+  return out;
+}
+
+/**
+ * Hardcoded greeting — keep the intro brisk; only pause between disclosure sentences.
+ */
+export function prepareCartesiaGreetingChunk(text: string, ttsModel = activeTtsModel): string {
+  let out = normalizeCartesiaBase(text, ttsModel);
+  out = out.replace(/([.!?]+)\s+(?=[A-Za-z"'(])/g, `${CARTESIA_GREETING_SENTENCE_BREAK} `);
+  out = out.replace(/[.!]+\s*$/g, '');
+  return out.replace(/\s{2,}/g, ' ').trim();
+}
+
+/**
+ * Cartesia reads literal "." as the word "dot" on phone — use SSML breaks instead of
+ * periods for clause boundaries, and explicit comma breaks where commas are ignored.
+ */
+export function prepareCartesiaSpeechChunk(text: string, ttsModel = activeTtsModel): string {
+  let out = normalizeCartesiaBase(text, ttsModel);
+  out = out.replace(/\s*—\s*/g, ` — ${CARTESIA_DASH_BREAK} `);
+  out = out.replace(/\s*–\s*/g, ` — ${CARTESIA_DASH_BREAK} `);
+  out = out.replace(/([.!?]+)\s+(?=[A-Za-z"'(])/g, `${CARTESIA_SENTENCE_BREAK} `);
+  out = out.replace(/,\s+/g, `, ${CARTESIA_COMMA_BREAK} `);
+  // Keep trailing ? for question intonation; strip terminal . !
+  out = out.replace(/[.!]+\s*$/g, '');
+  return out
+    .replace(new RegExp(`${CARTESIA_COMMA_BREAK}\\s*${CARTESIA_COMMA_BREAK}`, 'g'), CARTESIA_COMMA_BREAK)
+    .replace(new RegExp(`${CARTESIA_SENTENCE_BREAK}\\s*${CARTESIA_COMMA_BREAK}`, 'g'), CARTESIA_SENTENCE_BREAK)
+    .replace(/,\s*,/g, ',')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 /** Non-streaming prep for hardcoded greetings — legal wording unchanged. */
-export function prepareGreetingForTts(text: string): string {
+export function prepareGreetingForTts(text: string, options?: { commaFlow?: boolean }): string {
   const normalized = normalizeTtsChunk(text).trim();
+  if (options?.commaFlow === false) {
+    return normalized;
+  }
   const parts = normalized.split(/\.\s+/).filter((p) => p.length > 0);
   if (parts.length < 3 || parts.length > 6) {
     return normalized;
@@ -93,6 +226,8 @@ export function prepareGreetingForTts(text: string): string {
 
 export type PrepareHardcodedSpeechOptions = {
   greeting?: boolean;
+  /** When false, keep sentence breaks for live TTS (less rushed than comma-flow). */
+  greetingCommaFlow?: boolean;
   ttsModel?: string;
 };
 
@@ -101,10 +236,13 @@ export function prepareHardcodedSpeechForTts(
   text: string,
   options?: PrepareHardcodedSpeechOptions,
 ): string {
+  const ttsModel = options?.ttsModel ?? activeTtsModel;
   if (options?.greeting) {
-    return prepareGreetingForTts(text);
+    const greeting = prepareGreetingForTts(text, { commaFlow: options.greetingCommaFlow !== false });
+    return isCartesiaInferenceTtsModel(ttsModel) ? prepareCartesiaGreetingChunk(greeting, ttsModel) : greeting;
   }
-  return normalizeTtsChunk(text, options?.ttsModel ?? activeTtsModel).trim();
+  const normalized = normalizeTtsChunk(text, ttsModel).trim();
+  return isCartesiaInferenceTtsModel(ttsModel) ? prepareCartesiaSpeechChunk(normalized, ttsModel) : normalized;
 }
 
 export type PrepareStreamingOptions = {
@@ -117,6 +255,23 @@ export function prepareTextForTtsStreaming(
 ): ReadableStream<string> {
   const ttsModel = options?.ttsModel ?? activeTtsModel;
   let hold = '';
+  let lastStreamEmitted = '';
+  const enqueueStreamChunk = (
+    controller: ReadableStreamDefaultController<string>,
+    part: string,
+  ) => {
+    let chunk = part;
+    if (
+      lastStreamEmitted &&
+      !/\s$/.test(lastStreamEmitted) &&
+      chunk.length > 0 &&
+      !/^\s/.test(chunk)
+    ) {
+      chunk = ` ${chunk.trimStart()}`;
+    }
+    lastStreamEmitted = chunk;
+    controller.enqueue(chunk);
+  };
   return new ReadableStream<string>({
     async start(controller) {
       const reader = source.getReader();
@@ -134,13 +289,20 @@ export function prepareTextForTtsStreaming(
           if (hold.length <= TAIL_KEEP) {
             continue;
           }
-          const emitLen = hold.length - TAIL_KEEP;
-          controller.enqueue(hold.slice(0, emitLen));
-          hold = hold.slice(emitLen);
+          let emitEnd = hold.length - TAIL_KEEP;
+          const wordBreak = hold.lastIndexOf(' ', emitEnd);
+          if (wordBreak > 0) {
+            emitEnd = wordBreak + 1;
+          }
+          const toEmit = hold.slice(0, emitEnd);
+          if (toEmit) {
+            enqueueStreamChunk(controller, toEmit);
+          }
+          hold = hold.slice(emitEnd);
         }
         hold = normalizeTtsChunk(hold, ttsModel).trim();
         if (hold.length > 0) {
-          controller.enqueue(hold);
+          enqueueStreamChunk(controller, hold);
         }
         controller.close();
       } catch (e) {
@@ -160,12 +322,131 @@ export function stripForbiddenTtsPhrasesStreaming(source: ReadableStream<string>
   return prepareTextForTtsStreaming(source);
 }
 
+/** Cartesia: stream sentence-by-sentence for faster first audio; SSML pauses per chunk. */
+export function bufferCartesiaStreamBySentence(source: ReadableStream<string>): ReadableStream<string> {
+  return new ReadableStream<string>({
+    async start(controller) {
+      const sentenceStream = bufferTtsStreamBySentence(source, { earlyFlush: true });
+      const reader = sentenceStream.getReader();
+      let chunkIndex = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          let prepared = prepareCartesiaSpeechChunk(value);
+          if (prepared.length >= 1) {
+            if (chunkIndex > 0) {
+              prepared = `${CARTESIA_CHUNK_BREAK} ${prepared}`;
+            }
+            controller.enqueue(prepared);
+            chunkIndex += 1;
+          }
+        }
+        controller.close();
+      } catch (e) {
+        controller.error(e instanceof Error ? e : new Error(String(e)));
+      } finally {
+        reader.releaseLock();
+      }
+    },
+    cancel(reason) {
+      return source.cancel(reason);
+    },
+  });
+}
+
+/** @deprecated Prefer bufferCartesiaStreamBySentence — full-turn buffering adds reply latency. */
+export function bufferTtsStreamForCartesia(source: ReadableStream<string>): ReadableStream<string> {
+  return bufferCartesiaStreamBySentence(source);
+}
+
+export type BuildTtsNodeInputOptions = {
+  provider: 'elevenlabs' | 'cartesia-inference';
+  ttsModel?: string;
+  /** @deprecated Eleven demo comma flush caused staccato turbo TTS — keep false. */
+  earlyFlush?: boolean;
+  /** One Cartesia synthesis for hardcoded session.say() (greeting) — avoids comma early-flush replaying the opening. */
+  singleUtterance?: boolean;
+};
+
+/** Collect programmatic speech into one Cartesia chunk (session.say full greeting). */
+export function streamCartesiaSingleUtterance(source: ReadableStream<string>): ReadableStream<string> {
+  return new ReadableStream<string>({
+    async start(controller) {
+      const reader = source.getReader();
+      let text = '';
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (typeof value === 'string' && value.length > 0) {
+            text += value;
+          }
+        }
+        const trimmed = text.trim();
+        if (trimmed.length >= 1) {
+          // sayPrepared() already ran prepareHardcodedSpeechForTts — do not double-apply breaks.
+          controller.enqueue(trimmed);
+        }
+        controller.close();
+      } catch (e) {
+        controller.error(e instanceof Error ? e : new Error(String(e)));
+      } finally {
+        reader.releaseLock();
+      }
+    },
+    cancel(reason) {
+      return source.cancel(reason);
+    },
+  });
+}
+
+/** LLM token stream → TTS input, tuned per provider. */
+export function buildTtsNodeInputStream(
+  source: ReadableStream<string>,
+  options: BuildTtsNodeInputOptions,
+): ReadableStream<string> {
+  if (options.provider === 'cartesia-inference') {
+    if (options.singleUtterance) {
+      return streamCartesiaSingleUtterance(source);
+    }
+    return bufferCartesiaStreamBySentence(source);
+  }
+  if (options.singleUtterance) {
+    return streamCartesiaSingleUtterance(source);
+  }
+  // Eleven turbo: sentence buffer only — word-chunk streaming caused letter-by-letter stutter.
+  return bufferTtsStreamBySentence(source, {
+    earlyFlush: options.earlyFlush === true,
+    ttsModel: options.ttsModel,
+  });
+}
+
 /**
  * Hold LLM token chunks until a full sentence is ready before ElevenLabs TTS.
  * Prevents turbo "stuck on a letter" when the model streams slowly (auto_mode flush mid-word).
  */
-export function bufferTtsStreamBySentence(source: ReadableStream<string>): ReadableStream<string> {
-  return new ReadableStream<string>({
+export function bufferTtsStreamBySentence(
+  source: ReadableStream<string>,
+  options?: { earlyFlush?: boolean; ttsModel?: string },
+): ReadableStream<string> {
+      const earlyFlush = options?.earlyFlush === true;
+      const ttsModel = options?.ttsModel ?? activeTtsModel;
+      let lastEnqueued = '';
+      const enqueueChunk = (controller: ReadableStreamDefaultController<string>, part: string) => {
+        let chunk = part;
+        if (
+          lastEnqueued &&
+          !/\s$/.test(lastEnqueued) &&
+          chunk.length > 0 &&
+          !/^\s/.test(chunk)
+        ) {
+          chunk = ` ${chunk.trimStart()}`;
+        }
+        lastEnqueued = chunk;
+        controller.enqueue(chunk);
+      };
+      return new ReadableStream<string>({
     async start(controller) {
       const sentStream = new tokenize.basic.SentenceTokenizer().stream();
       const reader = source.getReader();
@@ -174,15 +455,36 @@ export function bufferTtsStreamBySentence(source: ReadableStream<string>): Reada
 
       const inputTask = async (): Promise<void> => {
         try {
+          let fedToTokenizerEnd = 0;
           while (true) {
             const { done, value } = await reader.read();
             if (done) {
               sentStream.endInput();
               break;
             }
-            if (typeof value === 'string' && value.length > 0) {
-              pendingInput += value;
-              sentStream.pushText(value);
+            if (typeof value !== 'string' || value.length === 0) {
+              continue;
+            }
+            pendingInput += value;
+            pendingInput = normalizeTtsChunk(pendingInput, ttsModel);
+
+            if (earlyFlush) {
+              const unfed = pendingInput.slice(fedToTokenizerEnd);
+              const commaIdx = unfed.length >= 24 ? unfed.search(/[,—–;]\s+\S/) : -1;
+              if (commaIdx >= 20) {
+                const early = unfed.slice(0, commaIdx + 1).trim();
+                if (early) {
+                  emittedParts.push(early);
+                  enqueueChunk(controller, early);
+                  fedToTokenizerEnd += commaIdx + 1;
+                }
+              }
+            }
+
+            const toFeed = pendingInput.slice(fedToTokenizerEnd);
+            if (toFeed.length > 0) {
+              sentStream.pushText(toFeed);
+              fedToTokenizerEnd = pendingInput.length;
             }
           }
         } finally {
@@ -195,13 +497,13 @@ export function bufferTtsStreamBySentence(source: ReadableStream<string>): Reada
           const t = ev.token?.trim();
           if (t) {
             emittedParts.push(t);
-            controller.enqueue(t);
+            enqueueChunk(controller, t);
           }
         }
         const pending = pendingInput.trim();
         if (emittedParts.length === 0) {
           if (pending) {
-            controller.enqueue(pending);
+            enqueueChunk(controller, pending);
           }
           return;
         }
@@ -210,7 +512,7 @@ export function bufferTtsStreamBySentence(source: ReadableStream<string>): Reada
         if (pendingNorm.length > joined.length && pendingNorm.startsWith(joined)) {
           const tail = pendingNorm.slice(joined.length).trim();
           if (tail) {
-            controller.enqueue(tail);
+            enqueueChunk(controller, tail);
           }
         }
       };
