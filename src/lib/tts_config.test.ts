@@ -27,7 +27,7 @@ const elevenProfile = {
   voice_id: DEFAULT_ELEVEN_VOICE_ID,
   llm_model: null,
   stt_model: null,
-  tts_model: 'eleven_v3',
+  tts_model: 'eleven_turbo_v2_5',
   llm_provider: null,
   is_active: true,
 };

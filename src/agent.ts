@@ -1253,8 +1253,10 @@ export default defineAgent({
           ? err.message
           : typeof err === 'object' && err !== null && 'message' in err
             ? String((err as { message: unknown }).message)
-            : String(err);
-      console.error('[AgentSession] pipeline error', msg);
+            : typeof err === 'object' && err !== null
+              ? JSON.stringify(err)
+              : String(err);
+      console.error('[AgentSession] pipeline error', msg, err);
       const stage = classifyPipelineErrorStage(msg);
       diag.push('error', `pipeline_${stage}_error`, { message: msg, stage });
       const incidentKey = `${stage}:${msg.slice(0, 120)}`;
