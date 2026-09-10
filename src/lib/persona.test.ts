@@ -77,7 +77,7 @@ describe('persona', () => {
     const persona = pickCallPersona({ businessName: 'Hello Cara', seed: 'demo-1' });
     const line = buildDemoPersonaGreeting(persona, 'demo-1');
     assert.equal(line, DEMO_LINE_OPENING);
-    assert.match(line, /who am I speaking with/i);
+    assert.match(line, /who am I speaking to/i);
   });
 
   it('hashPersonaSeed avalanches similar strings', () => {

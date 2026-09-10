@@ -7,16 +7,16 @@
 ## Pre-call
 
 - [ ] Worker deployed with conversational demo behaviour (Railway latest commit)
-- [ ] Opening: ~1.5s pause, then *"Hello there, you're through to Cara. Who am I speaking with today?"*
+- [ ] Opening: ~1.5s pause, then *"Hello, you're through to Cara — who am I speaking to?"*
 - [ ] No duplicate greeting at call start
 
 ## Path 0 — Natural opening + conversation first
 
 1. Call **+353749389378** — expect brief pause, then the opening line above
 2. Give your name: *"John"* or *"You're speaking with Margaret"*
-3. Expect: *"Ah, perfect, {name}. Just a quick heads-up, this call may be recorded and transcribed. Is that okay with you?"*
+3. Expect a natural recording line — e.g. *"Lovely, {name} — we record these calls, is that alright?"* (not *"Ah, perfect"* / *"heads-up"*)
 4. Say *"Yeah, that's fine"*
-5. Expect: *"Great, thanks {name}. So, how are you keeping today?"*
+5. Expect a short *"how are you keeping?"* line — not *"Great, thanks… So, how are you keeping today?"*
 6. Chat naturally for 2–3 turns (long day, Friday, weather, etc.) — Cara should **acknowledge and react**, not jump to *"How can I assist you?"* or trade menus
 7. Only when you steer to product/trade should demos begin
 
@@ -30,7 +30,7 @@
 4. Before answering consent, say: *"I'm not doing too bad. No, I'm doing very good."*
 5. Expect a gentle consent reminder — **not** *"how are you keeping?"*
 6. Say *"Yeah, that's fine"*
-7. Expect one warm reply that acknowledges your chitchat — **not** programmatic consent ack **plus** a separate steer in the same turn, and **not** *"how are you keeping today?"* again
+7. Expect one natural reply that acknowledges your chitchat — **not** programmatic consent ack **plus** a separate steer in the same turn, and **not** *"how are you keeping?"* again
 
 **Fail if:** Margaret name missed, no assistant reply after intro, double-speak on consent, corporate assist during opening
 

@@ -37,7 +37,7 @@ export const DEFAULT_DEMO_SCENARIOS: DemoScenario[] = [
         label: 'Invite role-play',
         guidance: 'Invite them to play the customer. Suggest a tripped fuse or need someone out today.',
         suggestedLine:
-          'Perfect — pretend you\'re ringing about a tripped fuse and need someone out today, and I\'ll answer like their assistant.',
+          'Right — pretend you\'re ringing about a tripped fuse and need someone out today, and I\'ll answer like their assistant.',
       },
       {
         label: 'In-role reply',

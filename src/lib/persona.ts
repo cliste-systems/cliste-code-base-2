@@ -57,7 +57,7 @@ const BANK_PREFIXES = ['manner', 'greeting', 'ack', 'signoff'] as const;
 
 /** Hello Cara demo — fixed spoken opening (demo TTS only, not production). */
 export const DEMO_LINE_OPENING =
-  "Hello there, you're through to Cara. Who am I speaking with today?";
+  "Hello, you're through to Cara — who am I speaking to?";
 
 /** Silence before the demo opening plays (ms). */
 export const DEMO_LINE_OPENING_PAUSE_MS = 1500;

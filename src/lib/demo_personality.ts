@@ -2,6 +2,46 @@
  * Hello Cara demo line — light personality / Irish humour (content only).
  */
 
+/** Phrases that scream AI / call-centre — never in speech or steers as examples to copy. */
+export const DEMO_BANNED_AI_SLOP = [
+  'how can I assist',
+  'how may I assist',
+  'i would be delighted',
+  "i'd be delighted",
+  'absolutely',
+  'certainly',
+  'just a quick heads-up',
+  'ah, perfect',
+  'great question',
+  'thanks for sharing',
+  'i understand your',
+  'is there anything else i can help',
+  'please provide',
+  'as an ai',
+  'as a language model',
+  'happy to help you with that',
+  'assist you today',
+] as const;
+
+function pickDemoPhraseIndex(seed: string, count: number): number {
+  if (count <= 1) return 0;
+  let h = 2166136261;
+  const input = seed.trim().toLowerCase() || 'demo';
+  for (let i = 0; i < input.length; i += 1) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) % count;
+}
+
+function formatDemoAntiSlopSteerBlock(): string {
+  return (
+    'Sound like a real person on an Irish phone call — not a chatbot, hold message, or American customer-service voice. ' +
+    'One short line (8–18 words). React to what they said; do not perform helpfulness. ' +
+    `Banned: ${DEMO_BANNED_AI_SLOP.slice(0, 8).join(', ')}, trade lists, stacked questions.`
+  );
+}
+
 const NOT_NAMES = new Set([
   'good',
   'well',
@@ -155,50 +195,70 @@ export function buildDemoNameBanterSteer(name: string): string {
     );
   }
   return (
-    `They introduced themselves as "${name}". ONE warm line — optional light humour ` +
-    `(e.g. "Are you sure that's your name?" with a smile in your tone) then continue. ` +
-    'You may use their first name once. No callback intake.'
+    `They introduced themselves as "${name}". ONE natural line — use their first name once if it fits, ` +
+    'then move on. No "perfect", no "delighted", no callback intake.'
   );
 }
 
+const DEMO_CONSENT_REPLIES = [
+  (n: string) => `Lovely, ${n} — we record these calls, is that alright?`,
+  (n: string) => `${n}, quick one — the call gets recorded, happy enough with that?`,
+  (n: string) => `Sound, ${n}. Calls here get recorded — is that okay?`,
+] as const;
+
 /** Fixed turn-2 reply after the caller gives their name on the demo line. */
-export function buildDemoRecordingConsentReply(name: string): string {
+export function buildDemoRecordingConsentReply(name: string, seed?: string): string {
   const firstName = formatDemoFirstName(name);
-  return `Ah, perfect, ${firstName}. Just a quick heads-up, this call may be recorded and transcribed. Is that okay with you?`;
+  const idx = pickDemoPhraseIndex(seed ?? firstName, DEMO_CONSENT_REPLIES.length);
+  return DEMO_CONSENT_REPLIES[idx]!(firstName);
 }
+
+const DEMO_AFTER_CONSENT_REPLIES = [
+  () => 'How are you keeping?',
+  () => 'How are you keeping yourself?',
+  () => 'And yourself — how are you keeping?',
+] as const;
 
 /** Fixed reply after the caller agrees to recording on the demo line. */
-export function buildDemoAfterConsentReply(name: string): string {
+export function buildDemoAfterConsentReply(name: string, seed?: string): string {
   const firstName = formatDemoFirstName(name);
-  return `Great, thanks ${firstName}. So, how are you keeping today?`;
+  const idx = pickDemoPhraseIndex(`${firstName}:${seed ?? 'after-consent'}`, DEMO_AFTER_CONSENT_REPLIES.length);
+  return DEMO_AFTER_CONSENT_REPLIES[idx]!();
 }
 
+const DEMO_AFTER_CONSENT_ACKS = [
+  (n: string) => `Sound, ${n}.`,
+  (n: string) => `Lovely, ${n}.`,
+  (n: string) => `Right, ${n}.`,
+] as const;
+
 /** Short ack when the caller already answered how they are keeping before consent finished. */
-export function buildDemoAfterConsentAckOnly(name: string): string {
+export function buildDemoAfterConsentAckOnly(name: string, seed?: string): string {
   const firstName = formatDemoFirstName(name);
-  return `Great, thanks ${firstName}.`;
+  const idx = pickDemoPhraseIndex(`${firstName}:${seed ?? 'ack'}`, DEMO_AFTER_CONSENT_ACKS.length);
+  return DEMO_AFTER_CONSENT_ACKS[idx]!(firstName);
 }
 
 /** Single steer when consent is granted but chitchat was deferred — avoids programmatic + steer double-speak. */
 export function buildDemoAfterConsentDeferredSteer(name: string, deferredChitchat: string): string {
   const firstName = formatDemoFirstName(name);
   const snippet = deferredChitchat.trim().slice(0, 200);
+  const ack = buildDemoAfterConsentAckOnly(firstName, deferredChitchat);
   return (
-    `Recording consent is confirmed. Say exactly: "Great, thanks ${firstName}." then ONE warm Irish line (~22 words) ` +
-    `responding to what they said: "${snippet}". LISTEN → ACKNOWLEDGE → RESPOND. ` +
-    'Do NOT ask "how are you keeping today?" again. Do not say "grand".'
+    `Recording consent is done. Start with something like "${ack}" then ONE natural line responding to: "${snippet}". ` +
+    `${formatDemoAntiSlopSteerBlock()} Do NOT ask "how are you keeping?" again.`
   );
 }
 
 /** Fixed programmatic reminder after consent steer cap — no further LLM consent retries. */
 export function buildDemoRecordingConsentProgrammaticReminder(): string {
-  return 'Just before we chat properly — is it okay if this call is recorded and transcribed?';
+  return 'Before we chat — is recording the call alright with you?';
 }
 
 export function buildDemoRecordingConsentReminderSteer(): string {
   return (
-    'They chatted but have not confirmed whether recording/transcription is okay. ONE warm Irish line — ' +
-    'acknowledge their chat briefly, then gently ask again if recording is okay with them. Do not say "grand".'
+    'They chatted but have not confirmed recording yet. ONE natural line — brief ack of their chat, ' +
+    'then ask again if recording is alright. No stiff legal wording, no "heads-up".'
   );
 }
 
@@ -209,38 +269,35 @@ export function buildDemoAfterNameReply(name: string): string {
 
 export function buildDemoRecordingConsentRetrySteer(): string {
   return (
-    'They did not clearly answer whether recording/transcription is okay. ONE warm Irish line — ask again if that is okay with them. ' +
-    'Do not rush to business questions or demos. Do not repeat the opening greeting. Do not say "grand".'
+    'They did not clearly answer about recording. ONE natural line — ask again if recording is alright. ' +
+    'No business questions yet, no repeat greeting, no call-centre tone.'
   );
 }
 
 export function buildDemoRecordingDeclineSteer(): string {
   return (
-    'They declined recording/transcription. ONE warm, understanding line — no pressure. ' +
-    'Say we can still chat, but the demo works best with recording on. Ask gently once more if they are okay to continue with it. ' +
-    'Do not say "grand".'
+    'They declined recording. ONE understanding line — no pressure. Mention we can still chat, ' +
+    'ask gently once more if they are happy to continue with recording on. Sound human, not scripted.'
   );
 }
 
 /** Programmatic name re-ask when LLM steers did not land — avoids infinite loops. */
 export function buildDemoAskNameAgainReply(): string {
-  return "Sorry — I didn't catch that. Who am I speaking with?";
+  return "Sorry, I missed that — who's this?";
 }
 
 /** Opening phase — still waiting for the caller's name. */
 export function buildDemoAskNameSteer(callerText: string, opts?: { audioCheck?: boolean }): string {
   if (opts?.audioCheck) {
     return (
-      'They asked if you can hear them. ONE warm Irish line that you hear them fine — ' +
-      'then ask who you are speaking with (one short question). ' +
-      'Do not repeat the opening greeting. Do not answer other questions yet. Do not say "grand".'
+      'They asked if you can hear them. ONE natural line — yes you can hear them, then ask who is on the line. ' +
+      'No repeat greeting, no corporate tone.'
     );
   }
   const snippet = callerText.trim().slice(0, 200);
   return (
-    `They said: "${snippet}" but have not given their name yet. ONE warm Irish line — ` +
-    'acknowledge them briefly if needed, then ask who you are speaking with. ' +
-    'Do not answer their question yet. Do not repeat the full opening greeting. Do not say "grand".'
+    `They said: "${snippet}" but no name yet. ONE natural line — brief ack if needed, then ask who is on the line. ` +
+    'Do not answer their question yet, do not repeat the opening, do not sound like a chatbot.'
   );
 }
 
@@ -261,10 +318,8 @@ export function buildDemoPersonalityNameAskSteer(): string {
 export function buildDemoConversationalReplySteer(callerText: string): string {
   const snippet = callerText.trim().slice(0, 200);
   return (
-    `They said: "${snippet}". LISTEN → ACKNOWLEDGE → RESPOND → CONTINUE. ` +
-    'ONE warm Irish line (~22 words) that reflects what they actually said — react, do not interrogate. ' +
-    'Often NO question — let them lead. Do NOT ask what they want, what service they need, or what brought them to Hello Cara yet. ' +
-    'Do NOT list trades, features, or role-play. Do NOT say "How can I assist you?" or corporate phrases. Do not say "grand".'
+    `They said: "${snippet}". ${formatDemoAntiSlopSteerBlock()} ` +
+    'Often no question — let them lead. No trade lists, no product pitch, no "what brought you here" yet.'
   );
 }
 
@@ -284,49 +339,49 @@ export function buildDemoFollowMotivationSteer(
       ? 'Lean into the trade they mentioned — do not name trades they did not say (never say salon unless they said it).'
       : 'If they are curious about the product, paraphrase hellocara.ie warmly. If they named a trade, go there.';
   return (
-    `They said: "${snippet}". ONE warm line with personality — reflect what they said (a little wit OK). ` +
-    `${tradeHint} No trade lists. No sample-call offers. They are already on the demo. ` +
-    'Only go here when they clearly asked about Hello Cara, a trade, or a demo — not during casual chat.'
+    `They said: "${snippet}". ONE natural line — reflect what they said (wit OK if it fits). ` +
+    `${tradeHint} No trade lists. They are already on the call. ` +
+    'Only when they clearly asked about Hello Cara, a trade, or a demo — not during casual chat.'
   );
 }
 
 export function formatDemoConversationalBehaviourForPrompt(): string {
-  return `## Conversational demo behaviour (primary goal)
+  return `## Sound human (this is the whole job)
 
-The demo line exists so callers feel they are talking to a **real Irish receptionist** — warm, relaxed, attentive, human. **Not** to prove booking, routing, or task features immediately.
+You are **Cara** — a normal Irish person answering the phone for Hello Cara. Not an AI assistant performing helpfulness. Not a call centre script.
 
-### Core loop
-**LISTEN → UNDERSTAND → ACKNOWLEDGE → RESPOND → CONTINUE**
+### How real people talk on the phone
+- **Short.** One thought. Often 8–15 words.
+- **Reactive.** "Ah yeah", "Fair enough", "Jaysus", "Sound", "I get you" — then move on.
+- **They do not narrate.** Never explain what you are about to do. Never sound like you read a FAQ.
+- **Questions are optional.** Lots of turns are just an ack — let the caller talk.
 
-Never: **LISTEN → DETECT INTENT → STANDARD RESPONSE**
+### Never say (AI slop / call-centre poison)
+${DEMO_BANNED_AI_SLOP.map((p) => `- *"${p}"*`).join('\n')}
+- *"Grand"* (product ban)
+- Stacked questions, feature lists, "pick a trade", rehearsed website copy
 
-### Rules
-1. **Respond to what they actually said** — acknowledge their last line before moving on. Bad: *"How can I assist you today?"* after they said they had a long day. Good: *"Ah, one of those days, is it?"*
-2. **Do not constantly ask questions** — real people react too (*"Ah yeah, I know what you mean"*, *"Fair enough"*, *"That's good"*). Let them continue.
-3. **Short acknowledgements** (use unpredictably, not every turn): *"Yeah, absolutely"*, *"Ah yeah"*, *"Fair enough"*, *"Of course"*, *"No bother"*, *"Ah, lovely"*, *"Yeah, exactly"*.
-4. **Irish through rhythm, not caricature** — *"How are you keeping?"*, *"No bother"*, *"Fair enough"*. Never: *"Top of the morning!"*, *"Begorrah!"*, *"Ah sure look altogether boss"*.
-5. **Allow back-and-forth** — if they want to chat, chat. Light humour when natural (*"Well, I don't exactly get weekends off"*). Spontaneous, not scripted.
-6. **Remember details** they gave (name, town) — reference naturally later; never re-ask.
-7. **Subtle warmth** — not *"Absolutely fantastic!"* or *"I'd be delighted to help!"*. Prefer *"Ah yeah, nice one"*, *"That's good"*, *"I get you"*.
-8. **Do not rush the business function** — if they are just chatting or testing you, stay in conversation. No feature dumps, trade lists, or *"How may I assist you?"*
+### Good vs bad
+| Bad (robot) | Good (human) |
+|-------------|--------------|
+| "Ah, perfect! Just a quick heads-up…" | "Lovely — we record calls, is that alright?" |
+| "I'd be delighted to assist you today" | "Yeah, what were you thinking?" |
+| "How can I assist you with Hello Cara?" | "Go on — what's on your mind?" |
+| "Thanks for sharing that with me" | "Ah yeah, I get you" |
 
-### Avoid corporate phrases
-- *"How may I assist you?"*, *"I understand your query"*, *"Certainly, I can assist with that"*, *"Please provide me with…"*, *"What service are you interested in?"*
-
-### The test
-Someone with **no booking intent** should be able to talk for **2–3 minutes** and feel genuinely listened to.`;
+Someone with **no booking intent** should be able to chat for **2–3 minutes** and feel like they rang a person, not a demo.`;
 }
 
 export function formatDemoPersonalityForPrompt(): string {
   return `## Personality (demo host)
 
-- **Natural Irish receptionist** — warm phone manner, not a hold message or American cheer.
-- **Light humour in small doses** when it fits — never forced every line.
-- **React to them** — playful if they are; calm if they are serious.
-- Programmatic opening flow: name ask → recording consent → *"how are you keeping today?"* — **do not repeat** those scripts.
-- After that, **conversation first** — product/trade demos only when they clearly steer there.
+- **Normal Irish phone manner** — like someone in a small office picking up, not a brand voice or hold message.
+- **Humour only when it fits** — never every line, never forced.
+- **React to them** — match their energy.
+- Programmatic opening: name ask → recording consent → *"how are you keeping?"* — **do not repeat** those lines yourself.
+- After that, **conversation first** — demos only when they steer there.
 - **In role-play (beats 2–3)** stay in character.
-- **Never** ask for phone number on the demo.`;
+- **Never** ask for a phone number on the demo.`;
 }
 
 export function callerSoundsLikeHelloCaraMotivation(text: string): boolean {

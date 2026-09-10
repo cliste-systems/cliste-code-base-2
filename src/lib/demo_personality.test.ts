@@ -112,27 +112,29 @@ describe('demo_personality', () => {
     assert.equal(looksLikeJokeName('Brendan'), false);
   });
 
-  it('steer includes playful are-you-sure prompt', () => {
-    assert.match(buildDemoNameBanterSteer('Brendan'), /Are you sure/i);
+  it('steer includes playful are-you-sure prompt for joke names only', () => {
+    assert.doesNotMatch(buildDemoNameBanterSteer('Brendan'), /Are you sure/i);
     assert.match(buildDemoNameBanterSteer('Mickey Mouse'), /nearly believe/i);
   });
 
-  it('recording consent reply asks if recording is okay', () => {
-    assert.equal(
-      buildDemoRecordingConsentReply('John'),
-      'Ah, perfect, John. Just a quick heads-up, this call may be recorded and transcribed. Is that okay with you?',
-    );
+  it('recording consent reply asks if recording is alright', () => {
+    const out = buildDemoRecordingConsentReply('John');
+    assert.match(out, /John/);
+    assert.match(out, /record/i);
+    assert.match(out, /alright|okay/i);
+    assert.doesNotMatch(out, /heads-up/i);
+    assert.doesNotMatch(out, /perfect/i);
   });
 
   it('after-consent reply opens with how are you keeping', () => {
-    assert.equal(
-      buildDemoAfterConsentReply('John'),
-      'Great, thanks John. So, how are you keeping today?',
-    );
+    const out = buildDemoAfterConsentReply('John');
+    assert.match(out, /how are you keeping/i);
+    assert.doesNotMatch(out, /Great, thanks/i);
+    assert.doesNotMatch(out, /assist/i);
   });
 
   it('programmatic name re-ask is fixed copy', () => {
-    assert.match(buildDemoAskNameAgainReply(), /Who am I speaking with/i);
+    assert.match(buildDemoAskNameAgainReply(), /who'?s this/i);
   });
 
   it('ask-name steer keeps caller on name before other topics', () => {
@@ -140,24 +142,24 @@ describe('demo_personality', () => {
       buildDemoAskNameSteer('What are you able to help with?'),
       /Do not answer their question yet/i,
     );
-    assert.match(buildDemoAskNameSteer('', { audioCheck: true }), /hear them fine/i);
-    assert.match(buildDemoPreNameSteer(), /who you are speaking with/i);
+    assert.match(buildDemoAskNameSteer('', { audioCheck: true }), /hear them/i);
+    assert.match(buildDemoPreNameSteer(), /who is on the line/i);
   });
 
   it('caller reply nudge steers hear-me to ask who is on the line', () => {
-    assert.match(buildDemoCallerReplyNudgeSteer('Can you hear me?'), /who you are speaking with/i);
+    assert.match(buildDemoCallerReplyNudgeSteer('Can you hear me?'), /who you are speaking with|who is on the line/i);
   });
 
   it('conversational steer avoids rushing to business', () => {
     assert.match(
       buildDemoConversationalReplySteer("Yeah, I've had a long day actually."),
-      /Do NOT ask what they want/i,
+      /No trade lists|no product pitch/i,
     );
   });
 
   it('embeds conversational demo behaviour guidance', () => {
-    assert.match(formatDemoConversationalBehaviourForPrompt(), /LISTEN → UNDERSTAND → ACKNOWLEDGE/i);
-    assert.match(formatDemoConversationalBehaviourForPrompt(), /How may I assist you/i);
+    assert.match(formatDemoConversationalBehaviourForPrompt(), /Sound human/i);
+    assert.match(formatDemoConversationalBehaviourForPrompt(), /how can I assist/i);
   });
 
   it('detects motivation answers after chitchat', () => {

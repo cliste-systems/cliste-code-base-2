@@ -13,12 +13,12 @@ export const DEMO_CALLER_REPLY_NUDGE_MS = 1500;
 export const DEMO_THINKING_STALL_MS = 2000;
 
 const NEVER_SILENT =
-  'You MUST speak aloud now in one warm Irish sentence (~22 words). Never stay silent after the caller spoke.';
+  'You MUST speak now — one short natural sentence. Never stay silent after the caller spoke.';
 
 export function buildDemoNeverSilentSteer(callerText: string): string {
   const snippet = callerText.trim().slice(0, 200);
   if (!snippet) {
-    return `${NEVER_SILENT} Ask how you can help with the Hello Cara demo.`;
+    return `${NEVER_SILENT} Ask who is on the line or react naturally — no call-centre tone.`;
   }
 
   const about = classifyHelloCaraAboutQuestion(snippet);
@@ -28,8 +28,7 @@ export function buildDemoNeverSilentSteer(callerText: string): string {
 
   return (
     `The caller said: "${snippet}". ${NEVER_SILENT} ` +
-    'Acknowledge them and continue the Hello Cara demo naturally. ' +
-    'Do not repeat the opening greeting or recording notice. Do not list trades. Do not say "grand".'
+    'React like a normal person on the phone — no repeat greeting, no recording notice, no trade lists.'
   );
 }
 
@@ -50,11 +49,11 @@ export function buildDemoCallerReplyNudgeSteer(callerText: string): string {
     ? 'If they asked whether you can hear them, say yes warmly — then ask who you are speaking with. '
     : '';
   return (
-    `The caller said: "${snippet}". Reply in **one short spoken sentence** (~25 words max). ` +
+    `The caller said: "${snippet}". Reply in **one short spoken sentence** (8–18 words). ` +
     `${NEVER_SILENT} Do not repeat your opening greeting or any AI/recording disclosure. ` +
-    `Do not say "grand". ${hearMeLine}` +
+    `${hearMeLine}` +
     (hearMeLine
       ? ''
-      : 'Acknowledge what they actually said — react naturally. Do not ask what service they need or list demo options.')
+      : 'React to what they actually said — sound human, not like a chatbot. No service intake, no trade lists.')
   );
 }
