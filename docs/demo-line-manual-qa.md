@@ -7,12 +7,12 @@
 ## Pre-call
 
 - [ ] Worker deployed with demo playbook + natural opening changes (Railway latest commit)
-- [ ] Opening: ~1.5s pause, then *"Heyy, you're through to Cara, who am I speaking with?"*
+- [ ] Opening: ~1.5s pause, then *"Hello there, you're through to Cara, who am I speaking with?"*
 - [ ] No duplicate greeting at call start
 
 ## Path 0 — Natural opening + name lead
 
-1. Call **+353749389378** — expect brief pause, then *"Heyy, you're through to Cara, who am I speaking with?"*
+1. Call **+353749389378** — expect brief pause, then *"Hello there, you're through to Cara, who am I speaking with?"*
 2. Give your name: *"John"* or *"I'm Brendan"*
 3. Expect: *"Perfect, {name}. Just a quick heads-up, this call may be recorded and transcribed. Anyway, what can I help you with today?"*
 4. Say what you need (e.g. *"What is Hello Cara?"* or *"Can we demo an electrician?"*)
