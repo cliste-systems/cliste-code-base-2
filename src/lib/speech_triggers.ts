@@ -112,6 +112,40 @@ export function callerSoundsLikeAudioCheck(text: string): boolean {
   );
 }
 
+/** Caller agreed to recording/transcription notice on the demo line. */
+export function callerSoundsLikeAffirmativeConsent(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[!?.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  if (callerSoundsLikeRecordingDecline(text)) return false;
+  if (/^(yes|yeah|yep|yup|sure|ok|okay|fine|absolutely|perfect|lovely|sound|course)\b/.test(t)) {
+    return true;
+  }
+  return /\b(that'?s fine|that'?s okay|no problem|go ahead|of course|sounds good|happy with that|fine by me|i'?m fine with that|no bother)\b/.test(
+    t,
+  );
+}
+
+/** Caller declined recording/transcription on the demo line. */
+export function callerSoundsLikeRecordingDecline(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[!?.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  if (/\b(no problem|no bother|that'?s fine|that'?s okay|go ahead)\b/.test(t)) return false;
+  return (
+    /^(no|nope|nah)\b/.test(t) ||
+    /\b(rather not|don'?t want|not okay|not ok|prefer not|i'?d rather not)\b/.test(t)
+  );
+}
+
 /** Caller changed topic or hedged during SMS consent — not a clear yes/no. */
 export function callerPivotedFromSmsConsent(
   text: string,

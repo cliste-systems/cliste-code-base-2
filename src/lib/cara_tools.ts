@@ -63,7 +63,11 @@ export type CaraSessionFlags = {
   demoCallerName?: string | null;
   /** Playful name banter already used this call. */
   demoNameBanterUsed?: boolean;
-  /** Turn-2 "what brought you to Hello Cara?" steer already handled. */
+  /** Turn-2 recording consent question already spoken after name. */
+  demoRecordingConsentAsked?: boolean;
+  /** "How are you keeping today?" opener spoken after consent — free conversation begins. */
+  demoChitchatOpened?: boolean;
+  /** Legacy flag — name / pre-name opening handled. */
   demoPostNameSteerUsed?: boolean;
   /** Casual "who am I talking to?" moment already used. */
   demoPersonalityNameAskUsed?: boolean;

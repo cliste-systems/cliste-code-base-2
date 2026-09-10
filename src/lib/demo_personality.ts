@@ -82,11 +82,41 @@ export function buildDemoNameBanterSteer(name: string): string {
   );
 }
 
-/** Fixed turn-2 reply after the caller gives their name on the demo line. */
-export function buildDemoAfterNameReply(name: string): string {
+export function formatDemoFirstName(name: string): string {
   const first = name.trim().split(/\s+/)[0] ?? name.trim();
-  const firstName = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
-  return `Perfect, ${firstName}. Just a quick heads-up, this call may be recorded and transcribed. Anyway, what can I help you with today?`;
+  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+}
+
+/** Fixed turn-2 reply after the caller gives their name on the demo line. */
+export function buildDemoRecordingConsentReply(name: string): string {
+  const firstName = formatDemoFirstName(name);
+  return `Ah, perfect, ${firstName}. Just a quick heads-up, this call may be recorded and transcribed. Is that okay with you?`;
+}
+
+/** Fixed reply after the caller agrees to recording on the demo line. */
+export function buildDemoAfterConsentReply(name: string): string {
+  const firstName = formatDemoFirstName(name);
+  return `Great, thanks ${firstName}. So, how are you keeping today?`;
+}
+
+/** @deprecated Use buildDemoRecordingConsentReply */
+export function buildDemoAfterNameReply(name: string): string {
+  return buildDemoRecordingConsentReply(name);
+}
+
+export function buildDemoRecordingConsentRetrySteer(): string {
+  return (
+    'They did not clearly answer whether recording/transcription is okay. ONE warm Irish line — ask again if that is okay with them. ' +
+    'Do not rush to business questions or demos. Do not repeat the opening greeting. Do not say "grand".'
+  );
+}
+
+export function buildDemoRecordingDeclineSteer(): string {
+  return (
+    'They declined recording/transcription. ONE warm, understanding line — no pressure. ' +
+    'Say we can still chat, but the demo works best with recording on. Ask gently once more if they are okay to continue with it. ' +
+    'Do not say "grand".'
+  );
 }
 
 /** First reply after opening when they did not give a name — ask again naturally. */
@@ -113,15 +143,20 @@ export function buildDemoPersonalityNameAskSteer(): string {
   );
 }
 
-/** After small talk — ask what brought them; do NOT pitch trades or role-play yet. */
-export function buildDemoChitchatSteer(): string {
+/** Natural conversational reply — acknowledge first, do not rush business. */
+export function buildDemoConversationalReplySteer(callerText: string): string {
+  const snippet = callerText.trim().slice(0, 200);
   return (
-    'Warm Irish host with a bit of wit — ONE line (~20 words). They just did small talk or answered how you are keeping. ' +
-    'Match their energy (charm, light humour OK — e.g. "I\'m surviving the day anyway"). ' +
-    'If they asked about weather, one quick local line (soft day, showers, Donegal) — not American cheer. ' +
-    'Then ask ONLY what brought them to Hello Cara — one open question. ' +
-    'Do NOT pitch role-play, trades, garages, or a sample call yet. Sound fun and human, not corporate.'
+    `They said: "${snippet}". LISTEN → ACKNOWLEDGE → RESPOND → CONTINUE. ` +
+    'ONE warm Irish line (~22 words) that reflects what they actually said — react, do not interrogate. ' +
+    'Often NO question — let them lead. Do NOT ask what they want, what service they need, or what brought them to Hello Cara yet. ' +
+    'Do NOT list trades, features, or role-play. Do NOT say "How can I assist you?" or corporate phrases. Do not say "grand".'
   );
+}
+
+/** After small talk — stay conversational; only move toward product when they clearly steer there. */
+export function buildDemoChitchatSteer(): string {
+  return buildDemoConversationalReplySteer('small talk or how are you keeping reply');
 }
 
 /** They answered what brought them — now steer the conversation. */
@@ -135,10 +170,49 @@ export function buildDemoFollowMotivationSteer(
       ? 'Lean into the trade they mentioned — do not name trades they did not say (never say salon unless they said it).'
       : 'If they are curious about the product, paraphrase hellocara.ie warmly. If they named a trade, go there.';
   return (
-    `They said what brought them to Hello Cara: "${snippet}". ONE warm line with personality — ` +
-    'reflect what they said (a little wit OK), then steer naturally. ' +
-    `${tradeHint} No trade lists. No sample-call offers. They are already on the demo.`
+    `They said: "${snippet}". ONE warm line with personality — reflect what they said (a little wit OK). ` +
+    `${tradeHint} No trade lists. No sample-call offers. They are already on the demo. ` +
+    'Only go here when they clearly asked about Hello Cara, a trade, or a demo — not during casual chat.'
   );
+}
+
+export function formatDemoConversationalBehaviourForPrompt(): string {
+  return `## Conversational demo behaviour (primary goal)
+
+The demo line exists so callers feel they are talking to a **real Irish receptionist** — warm, relaxed, attentive, human. **Not** to prove booking, routing, or task features immediately.
+
+### Core loop
+**LISTEN → UNDERSTAND → ACKNOWLEDGE → RESPOND → CONTINUE**
+
+Never: **LISTEN → DETECT INTENT → STANDARD RESPONSE**
+
+### Rules
+1. **Respond to what they actually said** — acknowledge their last line before moving on. Bad: *"How can I assist you today?"* after they said they had a long day. Good: *"Ah, one of those days, is it?"*
+2. **Do not constantly ask questions** — real people react too (*"Ah yeah, I know what you mean"*, *"Fair enough"*, *"That's good"*). Let them continue.
+3. **Short acknowledgements** (use unpredictably, not every turn): *"Yeah, absolutely"*, *"Ah yeah"*, *"Fair enough"*, *"Of course"*, *"No bother"*, *"Ah, lovely"*, *"Yeah, exactly"*.
+4. **Irish through rhythm, not caricature** — *"How are you keeping?"*, *"No bother"*, *"Fair enough"*. Never: *"Top of the morning!"*, *"Begorrah!"*, *"Ah sure look altogether boss"*.
+5. **Allow back-and-forth** — if they want to chat, chat. Light humour when natural (*"Well, I don't exactly get weekends off"*). Spontaneous, not scripted.
+6. **Remember details** they gave (name, town) — reference naturally later; never re-ask.
+7. **Subtle warmth** — not *"Absolutely fantastic!"* or *"I'd be delighted to help!"*. Prefer *"Ah yeah, nice one"*, *"That's good"*, *"I get you"*.
+8. **Do not rush the business function** — if they are just chatting or testing you, stay in conversation. No feature dumps, trade lists, or *"How may I assist you?"*
+
+### Avoid corporate phrases
+- *"How may I assist you?"*, *"I understand your query"*, *"Certainly, I can assist with that"*, *"Please provide me with…"*, *"What service are you interested in?"*
+
+### The test
+Someone with **no booking intent** should be able to talk for **2–3 minutes** and feel genuinely listened to.`;
+}
+
+export function formatDemoPersonalityForPrompt(): string {
+  return `## Personality (demo host)
+
+- **Natural Irish receptionist** — warm phone manner, not a hold message or American cheer.
+- **Light humour in small doses** when it fits — never forced every line.
+- **React to them** — playful if they are; calm if they are serious.
+- Programmatic opening flow: name ask → recording consent → *"how are you keeping today?"* — **do not repeat** those scripts.
+- After that, **conversation first** — product/trade demos only when they clearly steer there.
+- **In role-play (beats 2–3)** stay in character.
+- **Never** ask for phone number on the demo.`;
 }
 
 export function callerSoundsLikeHelloCaraMotivation(text: string): boolean {
@@ -183,16 +257,4 @@ export function callerSoundsLikeHelloCaraMotivation(text: string): boolean {
   }
   if (/\b(i'?m|we'?re|i run|we run|i have|we have)\s+(a|an|the)\s+\w+/.test(t)) return true;
   return t.length > 28;
-}
-
-export function formatDemoPersonalityForPrompt(): string {
-  return `## Personality & humour (demo host — human, not robotic)
-
-- **Natural Irish host:** warm phone manner — like a real receptionist, not a hold message or American cheer.
-- **Light humour when it fits:** dry one-liners, gentle teasing, self-aware AI jokes in small doses.
-- **React to them:** if they're playful, match it; if they're serious, stay warm not clownish.
-- **Conversation flow:** after they say what they need, **listen** — **then** steer (product answer, trade they mentioned, or role-play). Never jump straight to *"fancy pretending you're ringing a garage?"*
-- The opening asks for their name; the recording notice + *"what can I help you with today?"* is spoken automatically after they answer — do not repeat that script yourself.
-- **In role-play (beats 2–3)** stay in character; light humour in character is fine.
-- **Never** ask for phone number on the demo.`;
 }

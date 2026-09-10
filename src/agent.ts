@@ -85,10 +85,13 @@ import {
   helloCaraAboutSteerInstructions,
 } from './lib/hello_cara_website_facts.js';
 import {
-  buildDemoAfterNameReply,
-  buildDemoPreNameSteer,
-  buildDemoChitchatSteer,
+  buildDemoAfterConsentReply,
+  buildDemoConversationalReplySteer,
   buildDemoFollowMotivationSteer,
+  buildDemoPreNameSteer,
+  buildDemoRecordingConsentReply,
+  buildDemoRecordingConsentRetrySteer,
+  buildDemoRecordingDeclineSteer,
   callerSoundsLikeHelloCaraMotivation,
   extractDemoCallerNameResponse,
 } from './lib/demo_personality.js';
@@ -115,6 +118,10 @@ import {
   callerExplicitlyRequestedHangup,
   callerPivotedFromSmsConsent,
   callerSaidNothingElse,
+  callerSoundsLikeAffirmativeConsent,
+  callerSoundsLikeAudioCheck,
+  callerSoundsLikeLineEngagement,
+  callerSoundsLikeRecordingDecline,
   callerSoundsLikeVagueDemoOpening,
   callerWindingDownCall,
   assistantSoundsLikeTradeMenu,
@@ -669,6 +676,8 @@ export default defineAgent({
         demoCallerName: null,
         demoNameBanterUsed: false,
         demoPostNameSteerUsed: false,
+        demoRecordingConsentAsked: false,
+        demoChitchatOpened: false,
         demoPersonalityNameAskUsed: false,
       },
       disclosureConfirmed: greetingIncludesAiDisclosure(greetingText),
@@ -1415,7 +1424,31 @@ export default defineAgent({
         );
       } else if (
         testCall &&
+        session.userData.sessionFlags.demoRecordingConsentAsked &&
+        !session.userData.sessionFlags.demoChitchatOpened &&
+        !isCallEnding()
+      ) {
+        const flags = session.userData.sessionFlags;
+        const name = flags.demoCallerName ?? 'there';
+        if (callerSoundsLikeAffirmativeConsent(text)) {
+          flags.demoChitchatOpened = true;
+          session.userData.disclosureConfirmed = true;
+          diag.push('info', 'demo_after_consent_reply', { name });
+          programmaticSpeechPending += 1;
+          sayPrepared(session, buildDemoAfterConsentReply(name), {
+            allowInterruptions: true,
+            addToChatCtx: true,
+          });
+          demoSteerHandledThisTurn = true;
+        } else if (callerSoundsLikeRecordingDecline(text)) {
+          steerReply(buildDemoRecordingDeclineSteer());
+        } else {
+          steerReply(buildDemoRecordingConsentRetrySteer());
+        }
+      } else if (
+        testCall &&
         classifyHelloCaraAboutQuestion(text) &&
+        session.userData.sessionFlags.demoChitchatOpened &&
         !isCallEnding()
       ) {
         const about = classifyHelloCaraAboutQuestion(text)!;
@@ -1433,6 +1466,7 @@ export default defineAgent({
       } else if (
         testCall &&
         callerAsksDemoMenu(text) &&
+        session.userData.sessionFlags.demoChitchatOpened &&
         !session.userData.sessionFlags.demoScenarioSlug &&
         !isCallEnding()
       ) {
@@ -1444,7 +1478,7 @@ export default defineAgent({
           snippet: text.slice(0, 120),
         });
         steerReply(
-          'The caller asked what they can demo. ONE warm conversational line (~18 words) with a bit of personality. Do NOT list trades. They are on the demo call already — ask what brought them to Hello Cara or what kind of business they run, then steer from their answer.',
+          'The caller asked what they can demo. ONE warm conversational line (~18 words). Do NOT list trades. Continue naturally — reflect the chat so far, then gently explore what kind of business they have in mind.',
         );
       } else if (
         testCall &&
@@ -1462,10 +1496,10 @@ export default defineAgent({
           flags.demoCallerName = volunteeredName;
           flags.demoNameBanterUsed = true;
           flags.demoPostNameSteerUsed = true;
-          session.userData.disclosureConfirmed = true;
-          diag.push('info', 'demo_after_name_reply', { name: volunteeredName });
+          flags.demoRecordingConsentAsked = true;
+          diag.push('info', 'demo_recording_consent_reply', { name: volunteeredName });
           programmaticSpeechPending += 1;
-          sayPrepared(session, buildDemoAfterNameReply(volunteeredName), {
+          sayPrepared(session, buildDemoRecordingConsentReply(volunteeredName), {
             allowInterruptions: true,
             addToChatCtx: true,
           });
@@ -1481,13 +1515,15 @@ export default defineAgent({
         }
       } else if (
         testCall &&
+        session.userData.sessionFlags.demoChitchatOpened &&
         !session.userData.sessionFlags.demoScenarioSlug &&
         callerSoundsLikeVagueDemoOpening(text) &&
         !isCallEnding()
       ) {
-        steerReply(buildDemoChitchatSteer());
+        steerReply(buildDemoConversationalReplySteer(text));
       } else if (
         testCall &&
+        session.userData.sessionFlags.demoChitchatOpened &&
         !session.userData.sessionFlags.demoScenarioSlug &&
         !callerSoundsLikeVagueDemoOpening(text) &&
         !callerAsksDemoMenu(text) &&

@@ -53,6 +53,8 @@ export function buildDemoCallerReplyNudgeSteer(callerText: string): string {
     `The caller said: "${snippet}". Reply in **one short spoken sentence** (~25 words max). ` +
     `${NEVER_SILENT} Do not repeat your opening greeting or any AI/recording disclosure. ` +
     `Do not say "grand". ${hearMeLine}` +
-    (hearMeLine ? '' : 'Acknowledge them and continue the demo naturally.')
+    (hearMeLine
+      ? ''
+      : 'Acknowledge what they actually said — react naturally. Do not ask what service they need or list demo options.')
   );
 }

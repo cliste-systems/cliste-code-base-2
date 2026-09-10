@@ -58,7 +58,8 @@ describe('buildCaraCallPrompt', () => {
 
     assert.match(prompt, /Hello Cara demo line/i);
     assert.match(prompt, /not a real shop/i);
-    assert.match(prompt, /recording notice is spoken automatically after they give their name/i);
+    assert.match(prompt, /recording consent and/i);
+    assert.match(prompt, /how are you keeping today/i);
     assert.match(prompt, /do not guess names like Patricia/i);
     assert.doesNotMatch(prompt, /Murphy/i);
   });
@@ -72,8 +73,8 @@ describe('buildCaraCallPrompt', () => {
     });
 
     assert.match(prompt, /Host personality \(chatty demo host\)/i);
-    assert.match(prompt, /Opening arc \(spoken \+ turn 2\)/i);
-    assert.match(prompt, /what can I help you with today/i);
+    assert.match(prompt, /Conversational demo behaviour/i);
+    assert.match(prompt, /how are you keeping today/i);
     assert.match(prompt, /Intent routing/i);
     assert.match(prompt, /Explore.*can you hear me/i);
     assert.match(prompt, /Human speech \(not a phone menu\)/i);
@@ -106,8 +107,8 @@ describe('buildCaraCallPrompt', () => {
       openingGreetingDelivered: true,
     });
 
-    assert.match(prompt, /Personality & humour/i);
-    assert.match(prompt, /what can I help you with today/i);
+    assert.match(prompt, /Personality \(demo host\)/i);
+    assert.match(prompt, /how are you keeping today/i);
   });
 
   it('accepts injected demoPlaybookBlock override', () => {
