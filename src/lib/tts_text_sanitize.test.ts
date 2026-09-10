@@ -101,19 +101,21 @@ describe('tts_text_sanitize', () => {
     const out = prepareCartesiaSpeechChunk(
       "Yeah, I can hear you fine. What would you like to try?",
     );
-    assert.match(out, /Yeah, <break time="240ms"\/> I can hear you fine/);
-    assert.match(out, /<break time="450ms"\/> What would you like to try\?/);
+    assert.match(out, /Yeah, I can hear you fine/);
+    assert.match(out, /<break time="120ms"\/> What would you like to try\?/);
     assert.doesNotMatch(out, /\./);
+    assert.doesNotMatch(out, /<break time="240ms"\/>/);
   });
 
-  it('prepareCartesiaSpeechChunk pauses at list commas and before follow-up questions', () => {
+  it('prepareCartesiaSpeechChunk keeps commas and dashes flowing without micro-pauses', () => {
     setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
     const out = prepareCartesiaSpeechChunk(
       'Sure — I can help an electrician by answering calls, taking messages, and sending out appointment reminders. What would you like to try?',
     );
-    assert.match(out, / — <break time="320ms"\/> I can help/);
-    assert.match(out, /calls, <break time="240ms"\/> taking messages/);
-    assert.match(out, /<break time="450ms"\/> What would you like to try\?/);
+    assert.match(out, /Sure — I can help an electrician by answering calls, taking messages/);
+    assert.match(out, /<break time="120ms"\/> What would you like to try\?/);
+    assert.doesNotMatch(out, /<break time="240ms"\/>/);
+    assert.doesNotMatch(out, /<break time="320ms"\/>/);
   });
 
   it('cartesia buffer streams sentence chunks without trailing periods', async () => {
@@ -133,12 +135,12 @@ describe('tts_text_sanitize', () => {
       if (value) chunks.push(value);
     }
     assert.ok(chunks.length >= 1);
-    assert.match(chunks.join(' '), /Yeah, <break time="240ms"\/> I can hear you fine/);
+    assert.match(chunks.join(' '), /Yeah, I can hear you fine/);
     assert.match(chunks.join(' '), /What would you like to try/);
     assert.doesNotMatch(chunks.join(' '), /\./);
   });
 
-  it('cartesia multi-sentence replies pause between synthesis chunks', async () => {
+  it('cartesia multi-sentence replies split without extra chunk pauses', async () => {
     setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
     const source = new ReadableStream<string>({
       start(controller) {
@@ -157,7 +159,8 @@ describe('tts_text_sanitize', () => {
     }
     assert.equal(chunks.length, 2);
     assert.match(chunks[0]!, /need assistance/);
-    assert.match(chunks[1]!, /^<break time="380ms"\/> What issue are you experiencing\?/);
+    assert.match(chunks[1]!, /^What issue are you experiencing\?/);
+    assert.doesNotMatch(chunks[1]!, /^<break time="380ms"\/>/);
   });
 
   it('buildTtsNodeInputStream routes cartesia by sentence for faster first audio', async () => {
@@ -180,7 +183,7 @@ describe('tts_text_sanitize', () => {
     assert.ok(chunks.length >= 1);
     assert.match(chunks.join(' '), /One clause/);
     assert.match(chunks.join(' '), /Two clause/);
-    assert.match(chunks.join(' '), /<break time="450ms"\/>/);
+    assert.match(chunks.join(' '), /<break time="120ms"\/>/);
     assert.doesNotMatch(chunks.join(' '), /\./);
   });
 
@@ -189,9 +192,8 @@ describe('tts_text_sanitize', () => {
     const greeting =
       "Hi — you're through to Hello Cara. I'm your AI assistant, and this call may be recorded and transcribed. How are you keeping today?";
     const out = prepareCartesiaGreetingChunk(greeting);
-    assert.match(out, /Hello Cara\. I'm your AI assistant/);
-    assert.match(out, /<break time="280ms"\/> This call may be recorded/);
-    assert.match(out, /<break time="280ms"\/> How are you keeping today\?/);
+    assert.match(out, /Hello Cara<break time="120ms"\/> I'm your AI assistant, and this call may be recorded and transcribed/);
+    assert.match(out, /<break time="120ms"\/> How are you keeping today\?/);
     assert.doesNotMatch(out, /<break time="240ms"\/>/);
     assert.doesNotMatch(out, /<break time="320ms"\/>/);
     assert.doesNotMatch(out, /Hello Cara.*Hello Cara/);

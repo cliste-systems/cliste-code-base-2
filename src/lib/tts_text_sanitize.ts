@@ -156,16 +156,10 @@ function normalizeTtsChunk(text: string, ttsModel = activeTtsModel): string {
   );
 }
 
-/** Cartesia SSML pause after commas — plain commas are often rushed on PSTN. */
-const CARTESIA_COMMA_BREAK = '<break time="240ms"/>';
-/** Pause after em-dash clause openers (e.g. "Sure — I can help"). */
-const CARTESIA_DASH_BREAK = '<break time="320ms"/>';
-/** Pause between sentences/clauses (replaces periods so Cartesia does not say "dot"). */
-const CARTESIA_SENTENCE_BREAK = '<break time="450ms"/>';
-/** Extra pause when a new TTS synthesis chunk follows the previous one. */
-const CARTESIA_CHUNK_BREAK = '<break time="380ms"/>';
-/** Greeting-only — brief pauses at sentence boundaries, no comma micro-pauses. */
-const CARTESIA_GREETING_SENTENCE_BREAK = '<break time="280ms"/>';
+/** Brief pause between sentences — replaces periods so Cartesia does not say "dot". */
+const CARTESIA_SENTENCE_BREAK = '<break time="120ms"/>';
+/** Greeting-only — same light sentence boundary pause, no comma micro-pauses. */
+const CARTESIA_GREETING_SENTENCE_BREAK = '<break time="120ms"/>';
 
 function normalizeCartesiaBase(text: string, ttsModel = activeTtsModel): string {
   let out = normalizeTtsChunk(text, ttsModel).trim();
@@ -183,29 +177,21 @@ function normalizeCartesiaBase(text: string, ttsModel = activeTtsModel): string 
  */
 export function prepareCartesiaGreetingChunk(text: string, ttsModel = activeTtsModel): string {
   let out = normalizeCartesiaBase(text, ttsModel);
-  out = out.replace(/([.!?]+)\s+(?=[A-Za-z"'(])/g, `${CARTESIA_GREETING_SENTENCE_BREAK} `);
+  out = out.replace(/([.!?]+)\s*(?=[A-Za-z"'(])/g, `${CARTESIA_GREETING_SENTENCE_BREAK} `);
   out = out.replace(/[.!]+\s*$/g, '');
   return out.replace(/\s{2,}/g, ' ').trim();
 }
 
 /**
- * Cartesia reads literal "." as the word "dot" on phone — use SSML breaks instead of
- * periods for clause boundaries, and explicit comma breaks where commas are ignored.
+ * Cartesia reads literal "." as the word "dot" on phone — use a short SSML break at
+ * sentence boundaries only. Comma/dash micro-pauses sounded staccato on the demo line.
  */
 export function prepareCartesiaSpeechChunk(text: string, ttsModel = activeTtsModel): string {
   let out = normalizeCartesiaBase(text, ttsModel);
-  out = out.replace(/\s*—\s*/g, ` — ${CARTESIA_DASH_BREAK} `);
-  out = out.replace(/\s*–\s*/g, ` — ${CARTESIA_DASH_BREAK} `);
-  out = out.replace(/([.!?]+)\s+(?=[A-Za-z"'(])/g, `${CARTESIA_SENTENCE_BREAK} `);
-  out = out.replace(/,\s+/g, `, ${CARTESIA_COMMA_BREAK} `);
+  out = out.replace(/([.!?]+)\s*(?=[A-Za-z"'(])/g, `${CARTESIA_SENTENCE_BREAK} `);
   // Keep trailing ? for question intonation; strip terminal . !
   out = out.replace(/[.!]+\s*$/g, '');
-  return out
-    .replace(new RegExp(`${CARTESIA_COMMA_BREAK}\\s*${CARTESIA_COMMA_BREAK}`, 'g'), CARTESIA_COMMA_BREAK)
-    .replace(new RegExp(`${CARTESIA_SENTENCE_BREAK}\\s*${CARTESIA_COMMA_BREAK}`, 'g'), CARTESIA_SENTENCE_BREAK)
-    .replace(/,\s*,/g, ',')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+  return out.replace(/\s{2,}/g, ' ').trim();
 }
 
 /** Non-streaming prep for hardcoded greetings — legal wording unchanged. */
@@ -323,24 +309,19 @@ export function stripForbiddenTtsPhrasesStreaming(source: ReadableStream<string>
   return prepareTextForTtsStreaming(source);
 }
 
-/** Cartesia: stream sentence-by-sentence for faster first audio; SSML pauses per chunk. */
+/** Cartesia: stream sentence-by-sentence for faster first audio; light SSML at boundaries only. */
 export function bufferCartesiaStreamBySentence(source: ReadableStream<string>): ReadableStream<string> {
   return new ReadableStream<string>({
     async start(controller) {
-      const sentenceStream = bufferTtsStreamBySentence(source, { earlyFlush: true });
+      const sentenceStream = bufferTtsStreamBySentence(source, { earlyFlush: false });
       const reader = sentenceStream.getReader();
-      let chunkIndex = 0;
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          let prepared = prepareCartesiaSpeechChunk(value);
+          const prepared = prepareCartesiaSpeechChunk(value);
           if (prepared.length >= 1) {
-            if (chunkIndex > 0) {
-              prepared = `${CARTESIA_CHUNK_BREAK} ${prepared}`;
-            }
             controller.enqueue(prepared);
-            chunkIndex += 1;
           }
         }
         controller.close();

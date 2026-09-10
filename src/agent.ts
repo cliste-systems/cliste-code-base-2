@@ -2492,8 +2492,11 @@ export default defineAgent({
         text: ReadableStream<string>,
         modelSettings: Parameters<voice.Agent<CaraAgentUserData>['ttsNode']>[1],
       ) {
-        const singleUtterance = this.singleUtteranceTtsNext;
+        const singleUtterance =
+          this.singleUtteranceTtsNext ||
+          this.session.userData.preparedSpeechSingleUtteranceNext === true;
         this.singleUtteranceTtsNext = false;
+        this.session.userData.preparedSpeechSingleUtteranceNext = false;
         return voice.Agent.default.ttsNode(
           this,
           buildTtsNodeInputStream(text, {

@@ -1,5 +1,6 @@
 import type { voice } from '@livekit/agents';
 
+import type { CaraAgentUserData } from './cara_tools.js';
 import { prepareHardcodedSpeechForTts, type PrepareHardcodedSpeechOptions } from './tts_text_sanitize.js';
 
 /** Programmatic speech through the same TTS prep path as LLM output. */
@@ -16,6 +17,7 @@ export function sayPrepared(
   if (greeting) prepOptions.greeting = true;
   if (greetingCommaFlow !== undefined) prepOptions.greetingCommaFlow = greetingCommaFlow;
   if (ttsModel) prepOptions.ttsModel = ttsModel;
+  (session.userData as CaraAgentUserData).preparedSpeechSingleUtteranceNext = true;
   return session.say(prepareHardcodedSpeechForTts(text, prepOptions), {
     ...(allowInterruptions !== undefined ? { allowInterruptions } : {}),
     ...(addToChatCtx !== undefined ? { addToChatCtx } : {}),
