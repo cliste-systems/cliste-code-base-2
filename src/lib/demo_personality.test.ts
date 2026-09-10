@@ -24,6 +24,13 @@ describe('demo_personality prompt blocks', () => {
     assert.match(block, /what business are you in/i);
   });
 
+  it('requires one agenda item per turn with Margaret opening example', () => {
+    const block = formatDemoConversationalBehaviourForPrompt();
+    assert.match(block, /One agenda item per turn/i);
+    assert.match(block, /Lovely thanks for that Margaret/i);
+    assert.match(block, /then STOP/i);
+  });
+
   it('puts the LLM in charge of the opening arc', () => {
     const block = formatDemoPersonalityForPrompt();
     assert.match(block, /You own the opening arc/i);

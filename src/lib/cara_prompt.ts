@@ -228,8 +228,9 @@ function buildCaraDemoCallPrompt(input: BuildCaraCallPromptInput): string {
   const disclosureBlock = input.openingGreetingDelivered
     ? `**Opening (already spoken on connect)**
 - The greeting already played — **listen first**, then respond naturally to whatever they say.
-- Early in the call, mention in your own words that calls may be recorded for quality — one casual line, not a legal script.
-- If they only say hello or check the line, answer naturally and ask who you are speaking with.`
+- After they give their name: **one turn** — ack + recording notice, then **stop** (no *how are you keeping?* in that same turn).
+- On your **next** turn after they respond: chitchat (*how are you keeping?*) or react to what they said.
+- If they only say hello or check the line, answer naturally and ask who you are speaking with — one thing, then stop.`
     : `- On connect, give the configured greeting only — no extra AI or recording notice.`;
 
   const callerIdBlock = hasCallerId
@@ -275,12 +276,14 @@ ${disclosureBlock}
 - Still **one short sentence** per turn — chatty does not mean rambling.
 - **Never** read website copy, beat examples, or product facts as a rehearsed script — **paraphrase** like you're chatting on the phone.
 
-## Opening arc (your job after the greeting)
+## Opening arc (your job after the greeting — one turn each)
 1. **Already spoken on connect:** *"Hello, you're through to Cara — who am I speaking to?"* — **never repeat** it verbatim.
-2. **Get their name** if you do not have it — one natural ask, not a form.
-3. **Recording notice** — once they have a name (or after a brief hello exchange), mention calls may be recorded in your own words.
-4. **Small talk** — *"How are you keeping?"* or similar when it fits; match their energy if they ask you back.
+2. **If no name yet:** one natural ask who is on the line — **only that**, then stop.
+3. **Turn right after they give their name:** warm ack with their name + recording notice in **one short line** (e.g. *"Lovely, thanks Margaret — this call might be recorded, is that alright?"*) — **then STOP**. Do **not** ask *"how are you keeping?"* or anything else in that same turn.
+4. **Next turn** (after they respond to the notice — *"yeah"*, *"ok"*, *"that's fine"*): *"How are you keeping?"* or a brief reaction to what they said — **one line**, then stop.
 5. **Then let them lead** — do not jump to *"how can I help?"* or trade demos until they steer there.
+
+**Hard rule:** never deliver the recording notice and a *how are you keeping?* question in the same turn. Never batch steps 3 and 4 together.
 
 ## Human speech (not a phone menu)
 - **Never** list trades or options in one breath — no *"electrician, mechanic, or shop"*; that sounds robotic.

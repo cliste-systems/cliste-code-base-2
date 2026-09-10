@@ -29,9 +29,10 @@ describe('demo conversational line', () => {
       openingGreetingDelivered: true,
     });
 
-    assert.match(prompt, /Opening arc \(your job after the greeting\)/i);
-    assert.match(prompt, /mention calls may be recorded in your own words/i);
+    assert.match(prompt, /Opening arc \(your job after the greeting — one turn each\)/i);
+    assert.match(prompt, /ack \+ recording notice/i);
     assert.match(prompt, /How are you keeping/i);
+    assert.match(prompt, /never deliver the recording notice and a \*how are you keeping/i);
     assert.doesNotMatch(prompt, /spoken automatically/i);
   });
 
