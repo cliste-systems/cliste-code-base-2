@@ -69,6 +69,7 @@
 - [ ] `demo_opening_phase` transitions (`await_name` → `await_consent` → `open`)
 - [ ] `demo_opening_action` exactly once per caller turn during opening
 - [ ] `demo_opening_suppressed_auto_reply` while opening (framework auto-reply blocked)
+- [ ] After each suppressed turn, `demo_opening_action` (ingest runs via `demo_opening_user_turn`, not `caller_conversation_item`)
 - [ ] `demo_recording_consent_reply` after name
 - [ ] `demo_after_consent_reply` or `demo_after_consent_deferred_chitchat` after consent
 - [ ] `demo_scenario_start` / `demo_scenario_beat` when trade path begins

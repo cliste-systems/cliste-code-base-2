@@ -2468,11 +2468,19 @@ export default defineAgent({
       /** Next session.say() TTS should be one Cartesia synthesis (greeting). */
       singleUtteranceTtsNext = false;
 
-      override async onUserTurnCompleted(): Promise<void> {
+      override async onUserTurnCompleted(
+        _chatCtx: Parameters<voice.Agent<CaraAgentUserData>['onUserTurnCompleted']>[0],
+        newMessage: Parameters<voice.Agent<CaraAgentUserData>['onUserTurnCompleted']>[1],
+      ): Promise<void> {
         if (
           this.session.userData.demoLine &&
           !isDemoOpeningComplete(this.session.userData.sessionFlags)
         ) {
+          const text = newMessage.textContent?.trim();
+          if (text) {
+            // StopResponse returns before ConversationItemAdded — run opening ingest here.
+            ingestCallerFinalText(text, 'demo_opening_user_turn', Date.now());
+          }
           diag.push('info', 'demo_opening_suppressed_auto_reply', {
             phase: syncDemoOpeningPhase(this.session.userData.sessionFlags),
           });
