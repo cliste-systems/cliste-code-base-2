@@ -14,7 +14,7 @@ npm test -- --run
 npm run test:demo-golden
 ```
 
-Golden suite locks Margaret, Mary wellbeing double-speak, consent flows, and post-open steers. If a phone call regresses, add a turn sequence to `src/lib/demo_turn_arbiter.test.ts` before fixing.
+Golden suite locks demo prompt content (LLM-owned opening arc, playbooks, endPhoneCall-only tools). If a phone call regresses, add an assertion to `src/lib/demo_conversational.test.ts` before fixing.
 
 ## Local testing (no Railway deploy)
 

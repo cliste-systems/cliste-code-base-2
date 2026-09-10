@@ -54,33 +54,10 @@ export type CaraSessionFlags = {
   bookingLinkSendInFlight: boolean;
   closingCall: boolean;
   likelySttGarble: boolean;
-  demoCallerReadyToClose?: boolean;
-  /** Active Hello Cara demo playbook slug (electrician, salon, …). */
+  /** Active Hello Cara demo playbook slug (electrician, salon, …) — diagnostics only. */
   demoScenarioSlug?: string | null;
-  /** 1-based beat index within the active demo playbook (1–4). */
+  /** 1-based beat index within the active demo playbook (1–4) — diagnostics only. */
   demoScenarioBeat?: number;
-  /** Caller volunteered their first name on the demo line. */
-  demoCallerName?: string | null;
-  /** Playful name banter already used this call. */
-  demoNameBanterUsed?: boolean;
-  /** Turn-2 recording consent question already spoken after name. */
-  demoRecordingConsentAsked?: boolean;
-  /** "How are you keeping today?" opener spoken after consent — free conversation begins. */
-  demoChitchatOpened?: boolean;
-  /** Legacy flag — name / pre-name opening handled. */
-  demoPostNameSteerUsed?: boolean;
-  /** Chitchat the caller said before consent finished — respond after consent instead of re-asking. */
-  demoDeferredChitchat?: string | null;
-  /** Spoken/steered name asks while still waiting for a plausible first name. */
-  demoNameAskCount?: number;
-  /** Spoken/steered consent retries while still waiting for a clear yes/no. */
-  demoConsentRetryCount?: number;
-  /** Derived opening phase for diagnostics — greeting → await_name → await_consent → open. */
-  demoOpeningPhase?: 'greeting' | 'await_name' | 'await_consent' | 'open';
-  /** Waiting for caller to answer "how are you keeping?" — suppress dead-air hangup. */
-  demoAwaitingWellbeingReply?: boolean;
-  /** Casual "who am I talking to?" moment already used. */
-  demoPersonalityNameAskUsed?: boolean;
 };
 
 export type CaraAgentUserData = {
@@ -828,17 +805,17 @@ export class CaraTools {
     execute: async (_args, { ctx }) => {
       const ud = readCaraUserData(ctx);
       if (ud.demoLine) {
-        const flags = ud.sessionFlags;
-        const mayClose =
-          flags.demoCallerReadyToClose ||
-          (flags.askedAnythingElse && flags.callerRespondedAfterAnythingElse);
-        if (!mayClose) {
-          return {
-            ok: false,
-            message:
-              'Demo line — ask the wrap beat (beat 4) or "anything else", wait for the caller to say they are done (thanks, goodbye, that\'s everything), then goodbye + endPhoneCall.',
-          };
-        }
+        return disconnectCallerLeg(
+          ctx.session as voice.AgentSession<EndCallUserData>,
+          ud,
+          async () => {
+            try {
+              await ctx.waitForPlayout();
+            } catch {
+              /* ignore */
+            }
+          },
+        );
       }
       if (
         (ud.sessionFlags.askedAnythingElse || ud.sessionFlags.awaitingAnythingElseReply) &&

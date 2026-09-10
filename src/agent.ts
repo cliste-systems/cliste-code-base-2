@@ -71,31 +71,13 @@ import { isFactoryFreshLine } from './lib/factory_fresh_line.js';
 import { getActiveCallTestProfile } from './lib/test_profile.js';
 import {
   detectDemoScenario,
-  formatDemoBeatHint,
   type DemoScenario,
 } from './lib/demo_scenarios.js';
 import {
   demoPlaybookBlockFromScenarios,
   loadDemoScenarios,
 } from './lib/demo_scenarios_loader.js';
-import { buildDemoCallClosingLine, assistantAskedDemoWrap } from './lib/natural_phrasing.js';
-import { caraTypingSoundEnabled, playTypingSound } from './lib/callback_audio.js';
 import { persistTestCallReportFromWorker } from './lib/persist_test_call_report.js';
-import {
-  isDemoOpeningComplete,
-  syncDemoOpeningPhase,
-} from './lib/demo_opening_orchestrator.js';
-import { executeDemoTurnAction } from './lib/demo_speech_executor.js';
-import { resolveDemoTurnAction } from './lib/demo_turn_arbiter.js';
-import {
-  buildDemoCallerReplyNudgeSteer,
-  buildDemoNeverSilentSteer,
-  buildDemoSilenceWatchdogSteer,
-  DEMO_CALLER_REPLY_NUDGE_MS,
-  DEMO_REPLY_FAST_GUARANTEE_MS,
-  DEMO_SILENCE_WATCHDOG_MS,
-  DEMO_THINKING_STALL_MS,
-} from './lib/demo_reply_guarantee.js';
 import { buildDemoPersonaGreeting, DEMO_LINE_OPENING_PAUSE_MS, pickCallPersona, type CallPersona } from './lib/persona.js';
 import { resolveSpokenBusinessName } from './lib/spoken_business_name.js';
 import { orgVerticalLabel } from './lib/org_vertical.js';
@@ -104,15 +86,11 @@ import {
   assistantAskedAnythingElse,
   assistantAwaitingCallerReply,
   assistantClaimsLinkWasSent,
-  assistantSoundsLikeCorporateAssist,
   callerAskedNewQuestion,
-  callerExplicitlyRequestedHangup,
   callerPivotedFromSmsConsent,
   callerSaidNothingElse,
-  callerSoundsLikeAffirmativeConsent,
   callerWindingDownCall,
-  assistantSoundsLikeTradeMenu,
-  assistantOffersRedundantSampleCall,
+  assistantSoundsLikeCorporateAssist,
 } from './lib/speech_triggers.js';
 import {
   detectLikelySttGarble,
@@ -677,20 +655,8 @@ export default defineAgent({
         bookingLinkSendInFlight: false,
         closingCall: false,
         likelySttGarble: false,
-        demoCallerReadyToClose: false,
         demoScenarioSlug: null,
         demoScenarioBeat: 0,
-        demoCallerName: null,
-        demoNameBanterUsed: false,
-        demoPostNameSteerUsed: false,
-        demoRecordingConsentAsked: false,
-        demoChitchatOpened: false,
-        demoDeferredChitchat: null,
-        demoNameAskCount: 0,
-        demoConsentRetryCount: 0,
-        demoOpeningPhase: 'greeting',
-        demoAwaitingWellbeingReply: false,
-        demoPersonalityNameAskUsed: false,
       },
       disclosureConfirmed: greetingIncludesAiDisclosure(greetingText),
       demoLine: testCall,
@@ -1022,8 +988,6 @@ export default defineAgent({
     let responseFillerCount = 0;
     let greetingInterruptFallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let callerReplyNudgeTimer: ReturnType<typeof setTimeout> | null = null;
-    let demoFastGuaranteeTimer: ReturnType<typeof setTimeout> | null = null;
-    let demoSilenceWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
     let callerAwaitingReply = false;
     let replyTurnEpoch = 0;
     let replyRetryUsedForTurn = false;
@@ -1046,10 +1010,6 @@ export default defineAgent({
     let programmaticSpeechPending = 0;
     let lastCallerUtterance = '';
     let llmReplySpeechQueued = false;
-    let demoSteerHandledThisTurn = false;
-    let demoOpeningTurnCommitted = false;
-    let demoCallerTurnPendingAnswer = false;
-
     let thinkingStartedAt: number | null = null;
     let userStoppedSpeakingAt: number | null = null;
 
@@ -1112,27 +1072,14 @@ export default defineAgent({
 
     const steerReply = (instructions: string) => {
       if (isCallEnding()) return;
-      demoSteerHandledThisTurn = true;
-      clearDemoReplyGuaranteeTimers();
       clearCallerReplyNudgeTimer();
       cancelInFlightReply();
-      safeGenerateReply(instructions, { force: true, skipBeatHint: true });
-    };
-
-    const appendDemoBeatHint = (instructions: string): string => {
-      if (!testCall) return instructions;
-      if (/\[Demo playbook/i.test(instructions)) return instructions;
-      const slug = session.userData.sessionFlags.demoScenarioSlug;
-      const beat = session.userData.sessionFlags.demoScenarioBeat ?? 0;
-      if (!slug || beat <= 0) return instructions;
-      const hint = formatDemoBeatHint(slug, beat - 1, demoScenarios);
-      if (!hint) return instructions;
-      return `${instructions}\n\n${hint}`;
+      safeGenerateReply(instructions, { force: true });
     };
 
     const safeGenerateReply = (
       instructions: string,
-      opts?: { force?: boolean; skipBeatHint?: boolean },
+      opts?: { force?: boolean },
     ) => {
       const epoch = replyTurnEpoch;
       if (generateReplyInFlight && !opts?.force) {
@@ -1150,10 +1097,7 @@ export default defineAgent({
       generateReplyInFlight = true;
       generateReplyStartedAt = Date.now();
       const activeEpoch = replyTurnEpoch;
-      const steeredInstructions = opts?.skipBeatHint
-        ? instructions
-        : appendDemoBeatHint(instructions);
-      const handle = session.generateReply({ instructions: steeredInstructions });
+      const handle = session.generateReply({ instructions });
       void Promise.resolve(handle)
         .catch((e) => {
           console.error('[AgentSession] generateReply failed', e);
@@ -1174,76 +1118,14 @@ export default defineAgent({
       return true;
     };
 
-    const callerAlreadyAnsweredSince = (callerAt: number): boolean =>
-      lastAssistantSpokeAt >= callerAt;
-
-    const forceDemoReply = (instructions: string, reason: string) => {
-      if (isCallEnding()) return;
-      console.warn('[agent] demo_force_reply', {
-        reason,
-        snippet: lastCallerUtterance.slice(0, 80),
-      });
-      diag.push('warn', 'demo_force_reply', {
-        reason,
-        snippet: lastCallerUtterance.slice(0, 120),
-      });
-      cancelInFlightReply();
-      generateReplyInFlight = false;
-      generateReplyStartedAt = 0;
-      replyRetryUsedForTurn = false;
-      safeGenerateReply(instructions, { force: true });
-    };
-
-    const clearDemoReplyGuaranteeTimers = () => {
-      if (demoFastGuaranteeTimer) {
-        clearTimeout(demoFastGuaranteeTimer);
-        demoFastGuaranteeTimer = null;
-      }
-      if (demoSilenceWatchdogTimer) {
-        clearTimeout(demoSilenceWatchdogTimer);
-        demoSilenceWatchdogTimer = null;
-      }
-    };
-
-    const scheduleDemoReplyGuarantee = (callerText: string) => {
-      if (!testCall || isCallEnding()) return;
-      if (!session.userData.sessionFlags.demoChitchatOpened) return;
-      clearDemoReplyGuaranteeTimers();
-      const epoch = replyTurnEpoch;
-      const callerAt = Date.now();
-      const utterance = callerText.trim();
-      if (!utterance) return;
-
-      demoFastGuaranteeTimer = setTimeout(() => {
-        demoFastGuaranteeTimer = null;
-        if (epoch !== replyTurnEpoch || isCallEnding()) return;
-        if (callerAlreadyAnsweredSince(callerAt)) return;
-        if (session.userState === 'speaking') return;
-        if (session.agentState === 'speaking' || session.agentState === 'thinking') return;
-        forceDemoReply(buildDemoNeverSilentSteer(utterance), 'fast_guarantee');
-      }, DEMO_REPLY_FAST_GUARANTEE_MS);
-
-      demoSilenceWatchdogTimer = setTimeout(() => {
-        demoSilenceWatchdogTimer = null;
-        if (epoch !== replyTurnEpoch || isCallEnding()) return;
-        if (callerAlreadyAnsweredSince(callerAt)) return;
-        if (session.userState === 'speaking') return;
-        if (session.agentState === 'speaking' || session.agentState === 'thinking') return;
-        forceDemoReply(buildDemoSilenceWatchdogSteer(utterance), 'silence_watchdog');
-      }, DEMO_SILENCE_WATCHDOG_MS);
-    };
-
     const retryFailedReplyOnce = (source: string) => {
       if (replyRetryUsedForTurn || isCallEnding()) return;
-      if (testCall && !session.userData.sessionFlags.demoChitchatOpened) return;
+      if (testCall) return;
       if (!canPlayRecoverySpeech()) return;
       if (session.userState === 'speaking') return;
       replyRetryUsedForTurn = true;
       console.warn('[agent] reply_retry', { source, epoch: replyTurnEpoch });
-      const instructions = testCall
-        ? buildDemoSilenceWatchdogSteer(lastCallerUtterance)
-        : REPLY_RETRY_INSTRUCTIONS;
-      safeGenerateReply(instructions, { force: true });
+      safeGenerateReply(REPLY_RETRY_INSTRUCTIONS, { force: true });
     };
 
     session.on(voice.AgentSessionEventTypes.Error, (ev) => {
@@ -1291,42 +1173,23 @@ export default defineAgent({
 
     const scheduleCallerReplyNudge = () => {
       clearCallerReplyNudgeTimer();
-      if (!allowBookingAutomation || isCallEnding()) return;
-      if (testCall && !session.userData.sessionFlags.demoChitchatOpened) return;
+      if (testCall || !allowBookingAutomation || isCallEnding()) return;
       const epoch = replyTurnEpoch;
       const utterance = lastCallerUtterance.trim();
       if (!utterance) return;
-      const callerAt = Date.now();
-      const nudgeMs = testCall ? DEMO_CALLER_REPLY_NUDGE_MS : CALLER_REPLY_NUDGE_MS;
       callerReplyNudgeTimer = setTimeout(() => {
         callerReplyNudgeTimer = null;
         if (epoch !== replyTurnEpoch || isCallEnding()) return;
-        if (testCall) {
-          if (callerAlreadyAnsweredSince(callerAt)) return;
-          if (session.userState === 'speaking') return;
-          if (session.agentState === 'speaking') return;
-          const thinkingInProgress =
-            session.agentState === 'thinking' &&
-            generateReplyInFlight &&
-            Date.now() - generateReplyStartedAt < DEMO_THINKING_STALL_MS;
-          if (thinkingInProgress) return;
-          if (session.agentState === 'listening' && generateReplyInFlight) return;
-        } else {
-          if (session.agentState !== 'listening' || session.userState === 'speaking') return;
-          if (generateReplyInFlight) return;
-        }
+        if (session.agentState !== 'listening' || session.userState === 'speaking') return;
+        if (generateReplyInFlight) return;
         console.warn('[agent] caller_reply_nudge', { utterance: utterance.slice(0, 80) });
-        const instructions = testCall
-          ? buildDemoCallerReplyNudgeSteer(utterance)
-          : `The caller said: "${utterance.slice(0, 200)}". Reply in **one short spoken sentence** (~25 words max). ` +
+        safeGenerateReply(
+          `The caller said: "${utterance.slice(0, 200)}". Reply in **one short spoken sentence** (~25 words max). ` +
             'Do not repeat your opening greeting or any AI/recording disclosure. ' +
-            'Do not say "grand". If they asked whether you can hear them, say yes warmly and ask how you can help.';
-        if (testCall) {
-          forceDemoReply(instructions, 'caller_reply_nudge');
-        } else {
-          safeGenerateReply(instructions, { force: true });
-        }
-      }, nudgeMs);
+            'Do not say "grand". If they asked whether you can hear them, say yes warmly and ask how you can help.',
+          { force: true },
+        );
+      }, CALLER_REPLY_NUDGE_MS);
     };
 
     const clearGreetingInterruptFallbackTimer = () => {
@@ -1339,11 +1202,9 @@ export default defineAgent({
     const scheduleGreetingInterruptFallback = () => {
       clearGreetingInterruptFallbackTimer();
       if (GREETING_INTERRUPT_FALLBACK_MS <= 0 || isCallEnding()) return;
-      if (testCall && !session.userData.sessionFlags.demoChitchatOpened) return;
       greetingInterruptFallbackTimer = setTimeout(() => {
         greetingInterruptFallbackTimer = null;
         if (isCallEnding()) return;
-        if (testCall && demoOpeningTurnCommitted) return;
         if (session.agentState === 'thinking' || session.agentState === 'speaking') return;
         if (generateReplyInFlight) return;
         console.warn('[agent] greeting_interrupt_fallback_reply');
@@ -1380,39 +1241,11 @@ export default defineAgent({
       sayPrepared(session, text, { addToChatCtx: false, ...opts });
     };
 
-    const demoSpeechDeps = {
-      flags: session.userData.sessionFlags,
-      isCallEnding,
-      cancelInFlightReply,
-      clearDemoReplyGuaranteeTimers,
-      clearCallerReplyNudgeTimer,
-      clearGreetingInterruptFallbackTimer,
-      sayPrepared: (text: string, opts?: { allowInterruptions?: boolean; addToChatCtx?: boolean }) => {
-        programmaticSpeechPending += 1;
-        sayPrepared(session, text, { addToChatCtx: false, ...opts });
-      },
-      steerReply,
-      onDisclosureConfirmed: () => {
-        session.userData.disclosureConfirmed = true;
-      },
-      onWellbeingQuestionAsked: () => {
-        session.userData.sessionFlags.demoAwaitingWellbeingReply = true;
-      },
-      pushDiag: (level: 'info' | 'warn', event: string, meta?: Record<string, unknown>) => {
-        diag.push(level, event, meta);
-      },
-    };
-
     const ingestCallerFinalText = (
       text: string,
       bumpReason: string,
       at: number,
     ): boolean => {
-      demoSteerHandledThisTurn = false;
-      demoOpeningTurnCommitted = false;
-      if (testCall && allowBookingAutomation) {
-        demoCallerTurnPendingAnswer = true;
-      }
       lastCallerUtterance = text.trim();
       if (isPhantomCallerTranscript(text)) {
         console.info('[agent] noise_fragment_ignored', {
@@ -1434,13 +1267,6 @@ export default defineAgent({
       }
       if (soundsLikeCancelOrChangeAppointment(text)) {
         session.userData.sessionFlags.bookingRouteId = null;
-      }
-      if (
-        testCall &&
-        !callerSoundsLikeAffirmativeConsent(text) &&
-        (callerWindingDownCall(text) || callerExplicitlyRequestedHangup(text))
-      ) {
-        session.userData.sessionFlags.demoCallerReadyToClose = true;
       }
       if (testCall) {
         const flags = session.userData.sessionFlags;
@@ -1479,6 +1305,7 @@ export default defineAgent({
           'The caller is correcting opening hours. Use Structured hours in your instructions. Apologise briefly and give the correct weekday hours — do not treat a normal weekday as a bank holiday.',
         );
       } else if (
+        !testCall &&
         session.userData.sessionFlags.likelySttGarble &&
         soundsLikeBookingIntent(text) &&
         allowBookingAutomation
@@ -1486,28 +1313,6 @@ export default defineAgent({
         void safeGenerateReply(
           'That last utterance may be STT garble — do not treat it as a confirmed booking request. Ask one short clarifying question about what they need.',
         );
-      } else if (testCall && !isCallEnding()) {
-        demoSpeechDeps.flags = session.userData.sessionFlags;
-        const resolution = resolveDemoTurnAction({
-          callerText: text,
-          flags: session.userData.sessionFlags,
-          demoScenarios,
-          callEnding: isCallEnding(),
-          agentSpeaking:
-            session.agentState === 'speaking' ||
-            session.userState === 'speaking' ||
-            programmaticSpeechPending > 0,
-        });
-        const speechStarted = executeDemoTurnAction(resolution, demoSpeechDeps);
-        if (speechStarted || resolution.action.handled) {
-          demoSteerHandledThisTurn = true;
-          if (resolution.action.kind === 'opening') {
-            demoOpeningTurnCommitted = true;
-          }
-        }
-        if (resolution.action.kind === 'typing_sound' && caraTypingSoundEnabled()) {
-          playTypingSound(session);
-        }
       }
       if (callerPivotedFromSmsConsent(text, { awaitingSmsConsent: session.userData.sessionFlags.bookingLinkSendInFlight })) {
         session.userData.sessionFlags.bookingRouteId = null;
@@ -1516,15 +1321,9 @@ export default defineAgent({
           'The caller pivoted away from SMS consent — stop treating their last line as yes/no to texting. Answer their new question or offer a callback.',
         );
       }
-      maybeCloseAfterAnythingElse(text);
-      if (testCall && session.userData.sessionFlags.demoCallerReadyToClose) {
-        maybeCloseDemoCall();
-      }
-      if (!demoSteerHandledThisTurn) {
+      if (!testCall) {
+        maybeCloseAfterAnythingElse(text);
         scheduleCallerReplyNudge();
-        if (testCall) {
-          scheduleDemoReplyGuarantee(text);
-        }
       }
       return true;
     };
@@ -1560,7 +1359,7 @@ export default defineAgent({
 
     const maybeCloseAfterAnythingElse = (text: string) => {
       const flags = session.userData.sessionFlags;
-      if (!flags.askedAnythingElse || !callerWindingDownCall(text)) return;
+      if (testCall || !flags.askedAnythingElse || !callerWindingDownCall(text)) return;
       if (flags.bookingLinkSendInFlight) return;
       if (flags.endPhoneCallUsed || flags.closingCall) return;
 
@@ -1574,9 +1373,7 @@ export default defineAgent({
       }
       void (async () => {
         try {
-          const closingLine = testCall
-            ? buildDemoCallClosingLine(callSidAttr)
-            : buildWarmCallClosingLine(
+          const closingLine = buildWarmCallClosingLine(
                 {
                   name: org.name,
                   greeting: org.greeting,
@@ -1590,39 +1387,6 @@ export default defineAgent({
           await disconnectCallerLeg(session, session.userData, async () => {});
         } catch (e) {
           console.error('[AgentSession] auto close after anything-else failed', e);
-        }
-      })();
-    };
-
-    const maybeCloseDemoCall = () => {
-      const flags = session.userData.sessionFlags;
-      if (!testCall || !flags.demoCallerReadyToClose) return;
-      if (flags.endPhoneCallUsed || flags.closingCall) return;
-
-      flags.closingCall = true;
-      clearAllGuardTimers();
-      void (async () => {
-        try {
-          if (session.agentState === 'speaking') {
-            try {
-              await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
-            } catch {
-              /* best effort */
-            }
-          } else {
-            try {
-              session.interrupt();
-            } catch {
-              /* ignore */
-            }
-          }
-          const handle = sayPrepared(session, buildDemoCallClosingLine(callSidAttr), {
-            allowInterruptions: false,
-          });
-          await waitForSpeechHandlePlayout(handle);
-          await disconnectCallerLeg(session, session.userData, async () => {});
-        } catch (e) {
-          console.error('[AgentSession] auto close demo call failed', e);
         }
       })();
     };
@@ -1692,7 +1456,6 @@ export default defineAgent({
       clearResponseFillerTimer();
       clearGreetingInterruptFallbackTimer();
       clearCallerReplyNudgeTimer();
-      clearDemoReplyGuaranteeTimers();
     };
 
     const resetDeadAirTimer = () => {
@@ -1701,8 +1464,6 @@ export default defineAgent({
       // Demo line: never auto-prompt or auto-hangup on silence — callers explore at their pace.
       if (testCall) return;
       const f = session.userData.sessionFlags;
-      if (testCall && !f.demoChitchatOpened) return;
-      if (testCall && f.demoAwaitingWellbeingReply) return;
       if (f.askedAnythingElse && f.callerRespondedAfterAnythingElse) return;
       if (f.bookingLinkSendInFlight) return;
       if (callerAwaitingReply) return;
@@ -1762,12 +1523,9 @@ export default defineAgent({
       if (ev.newState === 'speaking') {
         clearResponseFillerTimer();
         clearCallerReplyNudgeTimer();
-        clearDemoReplyGuaranteeTimers();
       } else if (ev.newState === 'listening') {
         clearResponseFillerTimer();
-        if (!testCall) {
-          clearCallerReplyNudgeTimer();
-        }
+        clearCallerReplyNudgeTimer();
       }
       if (ev.newState === 'thinking' || ev.newState === 'speaking') {
         clearGreetingInterruptFallbackTimer();
@@ -1878,9 +1636,7 @@ export default defineAgent({
       if (!text) return;
 
       if (role === 'user') {
-        if (!session.userData.demoLine) {
-          ingestCallerFinalText(text, 'caller_conversation_item', ev.createdAt);
-        }
+        ingestCallerFinalText(text, 'caller_conversation_item', ev.createdAt);
       }
 
       if (isCallEnding()) {
@@ -1907,62 +1663,10 @@ export default defineAgent({
         flags.callerRespondedAfterAnythingElse = false;
         clearAllGuardTimers();
       }
-      if (testCall && role === 'assistant' && assistantAskedDemoWrap(text)) {
-        flags.askedAnythingElse = true;
-        flags.awaitingAnythingElseReply = true;
-        flags.anythingElseAskCount += 1;
-        flags.callerRespondedAfterAnythingElse = false;
-        clearAllGuardTimers();
-      }
       if (role === 'assistant' && assistantTextSoundsLikeGoodbye(text)) {
         flags.closingCall = true;
         clearAllGuardTimers();
       }
-      if (
-        testCall &&
-        role === 'assistant' &&
-        allowBookingAutomation &&
-        demoCallerTurnPendingAnswer &&
-        !item.interrupted &&
-        text.length > 3 &&
-        flags.demoScenarioSlug &&
-        (flags.demoScenarioBeat ?? 0) > 0 &&
-        (flags.demoScenarioBeat ?? 0) < 4 &&
-        !lineMatchesGreeting(text, playbackGreetingText)
-      ) {
-        demoCallerTurnPendingAnswer = false;
-        flags.demoScenarioBeat = Math.min(4, (flags.demoScenarioBeat ?? 0) + 1);
-        diag.push('info', 'demo_scenario_beat', {
-          slug: flags.demoScenarioSlug,
-          beat: flags.demoScenarioBeat,
-        });
-      }
-      if (
-        testCall &&
-        role === 'assistant' &&
-        assistantSoundsLikeTradeMenu(text) &&
-        flags.demoChitchatOpened &&
-        !flags.endPhoneCallUsed
-      ) {
-        console.warn('[agent] blocked demo trade menu list');
-        steerReply(
-          'Do NOT list multiple trades in one sentence. ONE warm line — ask what business they have in mind, or suggest a single example like a quick electrician call.',
-        );
-      }
-
-      if (
-        testCall &&
-        role === 'assistant' &&
-        assistantOffersRedundantSampleCall(text) &&
-        flags.demoChitchatOpened &&
-        !flags.endPhoneCallUsed
-      ) {
-        console.warn('[agent] blocked redundant sample-call offer on demo line');
-        steerReply(
-          'They are ALREADY on the Hello Cara demo call — do NOT offer a sample call or ask if they want to hear how you sound. One warm line with personality: reflect what they said, then steer from their answer (product info or the trade they mentioned). No trade lists.',
-        );
-      }
-
       if (
         role === 'assistant' &&
         hasCallerIdOnFile &&
@@ -2007,24 +1711,17 @@ export default defineAgent({
       }
 
       if (
+        !testCall &&
         role === 'assistant' &&
         assistantSoundsLikeCorporateAssist(text) &&
         !flags.endPhoneCallUsed &&
-        (!testCall || flags.demoChitchatOpened) &&
         corporateAssistCorrectedEpoch !== replyTurnEpoch
       ) {
         corporateAssistCorrectedEpoch = replyTurnEpoch;
-        if (testCall && !flags.demoChitchatOpened) {
-          console.warn('[agent] ignored corporate assist phrasing during demo opening');
-          diag.push('warn', 'demo_opening_corporate_assist_ignored', {
-            snippet: text.slice(0, 120),
-          });
-        } else {
-          console.warn('[agent] blocked corporate assist phrasing');
-          steerReply(
-            'Do NOT say "I\'m here to assist" or "What can I assist you with". Reply like a friendly Irish shop worker — e.g. "I\'m good thanks — yourself?" if they asked how you are, otherwise answer their question in one warm line.',
-          );
-        }
+        console.warn('[agent] blocked corporate assist phrasing');
+        steerReply(
+          'Do NOT say "I\'m here to assist" or "What can I assist you with". Reply like a friendly Irish shop worker — e.g. "I\'m good thanks — yourself?" if they asked how you are, otherwise answer their question in one warm line.',
+        );
       }
 
       if (
@@ -2406,25 +2103,6 @@ export default defineAgent({
     class CaraVoiceAgent extends voice.Agent<CaraAgentUserData> {
       /** Next session.say() TTS should be one Cartesia synthesis (greeting). */
       singleUtteranceTtsNext = false;
-
-      override async onUserTurnCompleted(
-        _chatCtx: Parameters<voice.Agent<CaraAgentUserData>['onUserTurnCompleted']>[0],
-        newMessage: Parameters<voice.Agent<CaraAgentUserData>['onUserTurnCompleted']>[1],
-      ): Promise<void> {
-        if (!this.session.userData.demoLine) return;
-
-        const text = newMessage.textContent?.trim();
-        if (text) {
-          // Demo line owns every turn programmatically — StopResponse blocks parallel framework replies.
-          ingestCallerFinalText(text, 'demo_user_turn', Date.now());
-        }
-        if (!isDemoOpeningComplete(this.session.userData.sessionFlags)) {
-          diag.push('info', 'demo_opening_suppressed_auto_reply', {
-            phase: syncDemoOpeningPhase(this.session.userData.sessionFlags),
-          });
-        }
-        throw new voice.StopResponse();
-      }
 
       override async ttsNode(
         text: ReadableStream<string>,

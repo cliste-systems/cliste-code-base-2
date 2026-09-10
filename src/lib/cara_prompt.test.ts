@@ -58,7 +58,7 @@ describe('buildCaraCallPrompt', () => {
 
     assert.match(prompt, /Hello Cara demo line/i);
     assert.match(prompt, /not a real shop/i);
-    assert.match(prompt, /recording consent and/i);
+    assert.match(prompt, /calls may be recorded/i);
     assert.match(prompt, /how are you keeping/i);
     assert.match(prompt, /do not guess names like Patricia/i);
     assert.doesNotMatch(prompt, /Murphy/i);
