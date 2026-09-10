@@ -67,12 +67,13 @@ describe('speech_triggers', () => {
     assert.equal(assistantAskedAnythingElse('What service would you like?'), false);
   });
 
-  it('does not treat bare no as nothing-else close', () => {
+  it('does not treat bare no or recording consent as nothing-else close', () => {
     assert.equal(callerSaidNothingElse('No'), false);
     assert.equal(callerSaidNothingElse("No that's not possible"), false);
     assert.equal(callerSaidNothingElse("That's all, thanks"), true);
     assert.equal(callerSaidNothingElse("No, I'm okay"), true);
-    assert.equal(callerSaidNothingElse("That's fine"), true);
+    assert.equal(callerSaidNothingElse("That's fine"), false);
+    assert.equal(callerSaidNothingElse("Yeah, that's fine"), false);
   });
 
   it('detects explicit hang-up requests', () => {
@@ -90,6 +91,13 @@ describe('speech_triggers', () => {
     assert.equal(callerWindingDownCall("No, I'm okay"), true);
     assert.equal(callerWindingDownCall("I said I'm okay, thanks"), true);
     assert.equal(callerWindingDownCall('End call'), true);
+  });
+
+  it('does not treat recording consent as wind-down', () => {
+    assert.equal(callerWindingDownCall("Yeah, that's fine"), false);
+    assert.equal(callerWindingDownCall('Yeah, that is fine'), false);
+    assert.equal(callerWindingDownCall('Sure, no problem'), false);
+    assert.equal(callerWindingDownCall("No, that's fine, thanks"), true);
   });
 
   it('detects false link-sent claims', () => {

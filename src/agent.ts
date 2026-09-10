@@ -109,6 +109,7 @@ import {
   callerExplicitlyRequestedHangup,
   callerPivotedFromSmsConsent,
   callerSaidNothingElse,
+  callerSoundsLikeAffirmativeConsent,
   callerWindingDownCall,
   assistantSoundsLikeTradeMenu,
   assistantOffersRedundantSampleCall,
@@ -1436,6 +1437,7 @@ export default defineAgent({
       }
       if (
         testCall &&
+        !callerSoundsLikeAffirmativeConsent(text) &&
         (callerWindingDownCall(text) || callerExplicitlyRequestedHangup(text))
       ) {
         session.userData.sessionFlags.demoCallerReadyToClose = true;
@@ -2036,6 +2038,7 @@ export default defineAgent({
       }
 
       if (
+        !testCall &&
         role === 'assistant' &&
         !flags.endPhoneCallUsed &&
         !flags.awaitingAnythingElseReply &&
@@ -2054,7 +2057,7 @@ export default defineAgent({
         }, 700);
       }
 
-      if (role === 'assistant' && assistantTextSoundsLikeFakeHangup(text)) {
+      if (!testCall && role === 'assistant' && assistantTextSoundsLikeFakeHangup(text)) {
         clearFakeHangupGuardTimer();
         fakeHangupGuardTimer = setTimeout(() => {
           fakeHangupGuardTimer = null;

@@ -20,7 +20,8 @@ export function callerSaidNothingElse(text: string): boolean {
     .replace(/\s+/g, ' ')
     .trim();
   if (!t) return false;
-  return /\b(that'?s all|thats all|that'?s everything|thats everything|nothing else|all good|all grand|i'?m good|im good|i'?m okay|im okay|i am okay|that'?s fine|thats fine|that'?s it|thats it|no more|we'?re good|i'?m all set|im all set)\b/.test(
+  // "that's fine" is recording consent on the demo line — not "nothing else".
+  return /\b(that'?s all|thats all|that'?s everything|thats everything|nothing else|all good|all grand|i'?m good|im good|i'?m okay|im okay|i am okay|that'?s it|thats it|no more|we'?re good|i'?m all set|im all set)\b/.test(
     t,
   );
 }
