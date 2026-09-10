@@ -123,6 +123,17 @@ export function pickCallPersona(input: PickCallPersonaInput): CallPersona {
 }
 
 /** Empirical spread check — exported for tests and preview script. */
+export function buildDemoPersonaGreeting(persona: CallPersona, seed: string): string {
+  const nameAsks = [
+    'Can I get your name?',
+    'Can I get your name please?',
+    'Who am I speaking to?',
+    "Who's calling?",
+  ] as const;
+  const idx = pickBankIndex(seed, 'demo_name_ask', nameAsks.length);
+  return `${persona.greeting} — ${nameAsks[idx]!}`;
+}
+
 export function measurePersonaSpread(sampleCount: number): {
   distinctVariants: number;
   bankCounts: { manner: number[]; greeting: number[]; ack: number[]; signoff: number[] };

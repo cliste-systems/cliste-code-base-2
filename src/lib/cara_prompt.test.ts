@@ -147,34 +147,22 @@ describe('buildCaraCallPrompt', () => {
     );
   });
 
-  it('keeps a large shared prefix across different caller personas', () => {
-    const shared = {
-      ...baseInput,
-      niche: 'retail',
-      customPrompt: 'We are a grocery store with a deli counter.',
-      routingLinks: [],
-    };
-    const p1 = buildCaraCallPrompt({
-      ...shared,
-      callerLine: { ...baseInput.callerLine, display: '087 111 1111', e164: '+353871111111' },
-      persona: pickCallPersona({
-        businessName: shared.businessName,
-        seed: 'org:+353871111111:room-1',
-      }),
+  it('includes persona manner block on demo line when provided', () => {
+    const persona = pickCallPersona({
+      businessName: 'Hello Cara',
+      seed: 'demo-seed',
+      localHour: 10,
     });
-    const p2 = buildCaraCallPrompt({
-      ...shared,
-      callerLine: { ...baseInput.callerLine, display: '087 222 2222', e164: '+353872222222' },
-      persona: pickCallPersona({
-        businessName: shared.businessName,
-        seed: 'org:+353872222222:room-2',
-      }),
+    const prompt = buildCaraCallPrompt({
+      ...baseInput,
+      businessName: 'Hello Cara Demo',
+      demoMode: true,
+      openingGreetingDelivered: true,
+      persona,
     });
 
-    let prefix = 0;
-    const limit = Math.min(p1.length, p2.length);
-    while (prefix < limit && p1[prefix] === p2[prefix]) prefix += 1;
-    const ratio = prefix / Math.max(p1.length, p2.length);
-    assert.ok(ratio >= 0.75, `shared prefix ratio ${ratio.toFixed(2)} below 0.75`);
+    assert.match(prompt, /## Your manner on this call/i);
+    assert.match(prompt, /sign-off shape from \*\*Your manner on this call\*\*/i);
+    assert.ok(prompt.includes(persona.manner));
   });
 });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  buildDemoPersonaGreeting,
   measurePersonaSpread,
   pickCallPersona,
   personaVarietyEnabled,
@@ -69,6 +70,13 @@ describe('persona', () => {
       if (prev === undefined) delete process.env.CARA_PERSONA_VARIETY;
       else process.env.CARA_PERSONA_VARIETY = prev;
     }
+  });
+
+  it('builds demo greeting with name ask', () => {
+    const persona = pickCallPersona({ businessName: 'Hello Cara', seed: 'demo-1' });
+    const line = buildDemoPersonaGreeting(persona, 'demo-1');
+    assert.match(line, /Hello Cara/i);
+    assert.match(line, /name|Who/i);
   });
 
   it('hashPersonaSeed avalanches similar strings', () => {

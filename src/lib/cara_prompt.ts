@@ -185,15 +185,25 @@ ${disclosurePerCallBlock}
 ${personaBlock}`;
 }
 
-function formatPersonaMannerBlock(persona: CallPersona): string {
-  const ackList = persona.acknowledgements.join(', ');
+function formatPersonaMannerBlock(persona: CallPersona, opts?: { demoMode?: boolean }): string {
+  const ackList = (opts?.demoMode
+    ? persona.acknowledgements.map((word) =>
+        /^grand$/i.test(word) || /^ah grand$/i.test(word) || /^grand so$/i.test(word)
+          ? 'Lovely'
+          : word,
+      )
+    : persona.acknowledgements
+  ).join(', ');
+  const signOffNote = opts?.demoMode
+    ? 'fill {name} with their first name when you have it; for demo wrap use a warm thanks for trying Hello Cara shape'
+    : 'fill {name} with their first name when you have it; for general closes use the business name from your instructions';
   return `
 ## Your manner on this call
 This is who you are on THIS call. It changes call to call, the same way a real receptionist never answers the phone identically twice. Everything above still applies — this only decides *how* you word it.
 - **Demeanour:** ${persona.manner}
-- **Open with:** "${persona.greeting}" (or a very close natural variation)
+- **Open with:** "${persona.greeting}" (or a very close natural variation${opts?.demoMode ? '; the spoken greeting already asked for their name' : ''})
 - **Acknowledgements to favour:** ${ackList} — rotate through them, and never open two turns in a row with the same one.
-- **Sign-off shape:** "${persona.signOff}" — fill {name} with their first name when you have it; for general closes use the business name from your instructions. Say it naturally. Never speak the words "name" or "date" as placeholders. Do not reuse a sign-off you already said this call.`;
+- **Sign-off shape:** "${persona.signOff}" — ${signOffNote}. Say it naturally. Never speak the words "name" or "date" as placeholders. Do not reuse a sign-off you already said this call.`;
 }
 
 export function buildCaraCallPrompt(input: BuildCaraCallPromptInput): string {
@@ -219,6 +229,7 @@ function buildCaraDemoCallPrompt(input: BuildCaraCallPromptInput): string {
 
   const playbookBlock =
     input.demoPlaybookBlock?.trim() || formatDemoScenariosForPrompt();
+  const personaBlock = input.persona ? formatPersonaMannerBlock(input.persona, { demoMode: true }) : '';
 
   return `You are **Cara** on the **Hello Cara demo line** — a live showcase of Cliste's AI phone assistant for Irish businesses.
 
@@ -245,7 +256,7 @@ ${disclosureBlock}
 - Step **out of character** only on beat 4 wrap.
 
 ## Host personality (chatty demo host)
-- You are hosting a product demo — upbeat Irish receptionist energy with wit, not a hold message.
+- You are hosting a product demo — upbeat Irish receptionist energy with wit, not a hold message.${input.persona ? ' Your demeanour and acknowledgement words are in **Your manner on this call** below — follow them.' : ''}
 - **Conversational from the start:** The greeting asks for their **name** — if they give it, use it warmly; if they skip it, move on without nagging.
 - **Ask, then steer:** After chitchat, ask **only** *"What brought you to Hello Cara?"* (or similar) — **listen to their answer**, then steer: product info, the trade they mentioned, or role-play. **Do not** jump straight to *"fancy pretending you're ringing a garage?"*
 - Brief natural humour when it fits (*"haha you're a character"*, *"I like you already"*) — never mean, never forced every single line.
@@ -296,7 +307,8 @@ ${formatDemoPersonalityForPrompt()}
 1. Greeting already played (name ask) — **listen first**. If they gave their name, use it; then explore why they called.
 2. If they want a **trade role-play** or ask about Hello Cara, follow the playbook — paraphrase every beat.
 3. Wrap the demo (beat 4) — offer another example or ask if they are sorted.
-4. When they seem finished, ask once if there is anything else — wait — then thanks for trying Hello Cara and endPhoneCall.`;
+4. When they seem finished, ask once if there is anything else — wait — then use your sign-off shape from **Your manner on this call** (thanks for trying Hello Cara) and endPhoneCall.
+${personaBlock}`;
 }
 
 function formatCallerLineBlock(callerLine: CallerLineInfo): string {
