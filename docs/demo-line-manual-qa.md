@@ -6,19 +6,19 @@
 
 ## Pre-call
 
-- [ ] Worker deployed with demo playbook + lively opening changes (Railway latest commit)
-- [ ] Opening: high-energy Irish hook + name ask (seed-varied — run `npm run preview:persona -- "Hello Cara" 10`)
+- [ ] Worker deployed with demo playbook + natural opening changes (Railway latest commit)
+- [ ] Opening: ~1.5s pause, then *"Heyy, you're through to Cara, who am I speaking with?"*
 - [ ] No duplicate greeting at call start
 
-## Path 0 — Lively opening + name lead
+## Path 0 — Natural opening + name lead
 
-1. Call **+353749389378** — expect energetic Irish hook ending with a **name question** (not formal *"how can I help?"* alone)
-2. Give your name: *"I'm Brendan"*
-3. Expect **one** playful name beat + *"What brought you to Hello Cara?"* — **not** a trade menu yet
-4. Say what brought you (e.g. *"Just curious about it"* or *"I run a garage"*)
+1. Call **+353749389378** — expect brief pause, then *"Heyy, you're through to Cara, who am I speaking with?"*
+2. Give your name: *"John"* or *"I'm Brendan"*
+3. Expect: *"Perfect, {name}. Just a quick heads-up, this call may be recorded and transcribed. Anyway, what can I help you with today?"*
+4. Say what you need (e.g. *"What is Hello Cara?"* or *"Can we demo an electrician?"*)
 5. Expect natural steer into product answer or trade playbook beat 1
 
-**Fail if:** stiff receptionist opening, no name ask, trade list before motivation question, repeated full greeting
+**Fail if:** high-energy American-style hook, no name ask, recording notice before name, repeated full greeting
 
 ## Path 1 — Electrician trade demo
 
@@ -45,10 +45,10 @@
 ## Path 3 — Explore / audio check
 
 1. Say: *"Can you hear me?"* or pause after greeting
-2. Expect one warm line (*"Yeah, I can hear you fine"*) — **not** a second full greeting
+2. Expect one warm line (*"Yeah, I can hear you fine"*) and a name ask — **not** a second full greeting
 3. Re-offer: *"want to try a quick example?"* — no trade menu unless asked
 
-**Fail if:** repeated disclosure, second *"how can I help"*, long pause drag on greeting
+**Fail if:** repeated disclosure before name, second full opening, long pause drag on greeting
 
 ## Diagnostics (Call Testing dashboard)
 

@@ -2,13 +2,14 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  buildDemoAfterNameReply,
   buildDemoChitchatSteer,
   buildDemoFollowMotivationSteer,
   buildDemoNameBanterSteer,
-  buildDemoNameThenMotivationSteer,
-  buildDemoPostNameMotivationSteer,
+  buildDemoPreNameSteer,
   callerSoundsLikeHelloCaraMotivation,
   extractCallerIntroducedName,
+  extractDemoCallerNameResponse,
   looksLikeJokeName,
 } from './demo_personality.js';
 import { buildDemoCallerReplyNudgeSteer } from './demo_reply_guarantee.js';
@@ -18,6 +19,11 @@ describe('demo_personality', () => {
     assert.equal(extractCallerIntroducedName("I'm Brendan"), 'Brendan');
     assert.equal(extractCallerIntroducedName('My name is Sarah'), 'Sarah');
     assert.equal(extractCallerIntroducedName('This is Mickey'), 'Mickey');
+  });
+
+  it('extracts bare single-word name replies', () => {
+    assert.equal(extractDemoCallerNameResponse('John'), 'John');
+    assert.equal(extractDemoCallerNameResponse('John.'), 'John');
   });
 
   it('ignores non-name im phrases', () => {
@@ -35,22 +41,21 @@ describe('demo_personality', () => {
     assert.match(buildDemoNameBanterSteer('Mickey Mouse'), /nearly believe/i);
   });
 
-  it('name-then-motivation steer asks what brought them', () => {
-    assert.match(buildDemoNameThenMotivationSteer('Brendan'), /what brought them to Hello Cara/i);
-    assert.match(buildDemoNameThenMotivationSteer('Mickey Mouse'), /Are you sure/i);
-  });
-
-  it('post-name motivation steer leads without nagging name', () => {
-    assert.match(buildDemoPostNameMotivationSteer(), /what brought them to Hello Cara/i);
-    assert.match(buildDemoPostNameMotivationSteer(), /Do not nag for their name/i);
-    assert.match(buildDemoPostNameMotivationSteer({ audioCheck: true }), /hear them fine/i);
-  });
-
-  it('caller reply nudge steers hear-me to what brought you', () => {
-    assert.match(
-      buildDemoCallerReplyNudgeSteer('Can you hear me?'),
-      /what brought them to Hello Cara/i,
+  it('after-name reply includes recording notice and help question', () => {
+    assert.equal(
+      buildDemoAfterNameReply('John'),
+      'Perfect, John. Just a quick heads-up, this call may be recorded and transcribed. Anyway, what can I help you with today?',
     );
+  });
+
+  it('pre-name steer asks who they are without repeating opening', () => {
+    assert.match(buildDemoPreNameSteer(), /who you are speaking with/i);
+    assert.match(buildDemoPreNameSteer(), /Do not repeat the opening greeting/i);
+    assert.match(buildDemoPreNameSteer({ audioCheck: true }), /hear them fine/i);
+  });
+
+  it('caller reply nudge steers hear-me to ask who is on the line', () => {
+    assert.match(buildDemoCallerReplyNudgeSteer('Can you hear me?'), /who you are speaking with/i);
   });
 
   it('chitchat steer asks what brought them without role-play pitch', () => {

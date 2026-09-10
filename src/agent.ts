@@ -85,12 +85,12 @@ import {
   helloCaraAboutSteerInstructions,
 } from './lib/hello_cara_website_facts.js';
 import {
-  buildDemoNameThenMotivationSteer,
-  buildDemoPostNameMotivationSteer,
+  buildDemoAfterNameReply,
+  buildDemoPreNameSteer,
   buildDemoChitchatSteer,
   buildDemoFollowMotivationSteer,
   callerSoundsLikeHelloCaraMotivation,
-  extractCallerIntroducedName,
+  extractDemoCallerNameResponse,
 } from './lib/demo_personality.js';
 import {
   buildDemoCallerReplyNudgeSteer,
@@ -101,7 +101,7 @@ import {
   DEMO_SILENCE_WATCHDOG_MS,
   DEMO_THINKING_STALL_MS,
 } from './lib/demo_reply_guarantee.js';
-import { buildDemoPersonaGreeting, pickCallPersona, personaVarietyEnabled, type CallPersona } from './lib/persona.js';
+import { buildDemoPersonaGreeting, DEMO_LINE_OPENING_PAUSE_MS, pickCallPersona, type CallPersona } from './lib/persona.js';
 import { resolveSpokenBusinessName } from './lib/spoken_business_name.js';
 import { orgVerticalLabel } from './lib/org_vertical.js';
 import { sayPrepared } from './lib/say_prepared.js';
@@ -524,7 +524,7 @@ export default defineAgent({
       seed: personaSeed,
       ...(localHour != null && Number.isFinite(localHour) ? { localHour } : {}),
     });
-    const useDemoPersonaGreeting = testCall && personaVarietyEnabled();
+    const useDemoPersonaGreeting = testCall;
     const playbackGreetingText =
       useDemoPersonaGreeting && callPersona
         ? buildDemoPersonaGreeting(callPersona, personaSeed)
@@ -1457,21 +1457,27 @@ export default defineAgent({
         !callerSoundsLikeHelloCaraMotivation(text)
       ) {
         const flags = session.userData.sessionFlags;
-        const volunteeredName = extractCallerIntroducedName(text);
+        const volunteeredName = extractDemoCallerNameResponse(text);
         if (volunteeredName) {
           flags.demoCallerName = volunteeredName;
           flags.demoNameBanterUsed = true;
           flags.demoPostNameSteerUsed = true;
-          diag.push('info', 'demo_name_motivation_steer', { name: volunteeredName });
-          steerReply(buildDemoNameThenMotivationSteer(volunteeredName));
+          session.userData.disclosureConfirmed = true;
+          diag.push('info', 'demo_after_name_reply', { name: volunteeredName });
+          programmaticSpeechPending += 1;
+          sayPrepared(session, buildDemoAfterNameReply(volunteeredName), {
+            allowInterruptions: true,
+            addToChatCtx: true,
+          });
+          demoSteerHandledThisTurn = true;
         } else if (callerSoundsLikeAudioCheck(text)) {
           flags.demoPostNameSteerUsed = true;
-          diag.push('info', 'demo_post_name_steer', { kind: 'audio_check' });
-          steerReply(buildDemoPostNameMotivationSteer({ audioCheck: true }));
+          diag.push('info', 'demo_pre_name_steer', { kind: 'audio_check' });
+          steerReply(buildDemoPreNameSteer({ audioCheck: true }));
         } else if (callerSoundsLikeLineEngagement(text)) {
           flags.demoPostNameSteerUsed = true;
-          diag.push('info', 'demo_post_name_steer', { kind: 'opening_reply' });
-          steerReply(buildDemoPostNameMotivationSteer());
+          diag.push('info', 'demo_pre_name_steer', { kind: 'opening_reply' });
+          steerReply(buildDemoPreNameSteer());
         }
       } else if (
         testCall &&
@@ -2436,6 +2442,9 @@ export default defineAgent({
     };
 
     if (playbackGreetingText) {
+      if (testCall && DEMO_LINE_OPENING_PAUSE_MS > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, DEMO_LINE_OPENING_PAUSE_MS));
+      }
       const greetingTtsModel =
         process.env.GREETING_TTS_MODEL?.trim() || activeTtsModel;
       const greetingUsesV3 = isElevenV3Model(greetingTtsModel);

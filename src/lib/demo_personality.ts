@@ -29,6 +29,17 @@ const NOT_NAMES = new Set([
 const JOKE_NAME_PATTERN =
   /\b(mickey mouse|minnie mouse|donald duck|batman|superman|spider\s*man|joe bloggs|john doe|jane doe|test test|harry potter|your man|your one)\b/i;
 
+export function extractDemoCallerNameResponse(text: string): string | null {
+  const introduced = extractCallerIntroducedName(text);
+  if (introduced) return introduced;
+
+  const bare = text.trim().replace(/[.!?,]+$/g, '').trim();
+  if (/^[a-z][a-z'-]{1,19}$/i.test(bare) && !NOT_NAMES.has(bare.toLowerCase())) {
+    return bare.charAt(0).toUpperCase() + bare.slice(1).toLowerCase();
+  }
+  return null;
+}
+
 export function extractCallerIntroducedName(text: string): string | null {
   const t = text.trim();
   if (!t) return null;
@@ -71,31 +82,26 @@ export function buildDemoNameBanterSteer(name: string): string {
   );
 }
 
-/** After the spoken opening — playful name beat + lead with what brought them here. */
-export function buildDemoNameThenMotivationSteer(name: string): string {
-  const banter = looksLikeJokeName(name)
-    ? `ONE playful Irish tease about "${name}" (e.g. "Are you sure that's your name?" — warm, not mean). `
-    : `ONE warm line using "${name}" — optional light humour (e.g. "Lovely to meet you, ${name}"). `;
-  return (
-    `They gave their name on the demo call. ${banter}` +
-    'Then ask ONLY one open question: what brought them to Hello Cara (natural variation). ' +
-    'Two short sentences max (~25 words total). Do not list trades or pitch role-play yet. Do not say "grand".'
-  );
+/** Fixed turn-2 reply after the caller gives their name on the demo line. */
+export function buildDemoAfterNameReply(name: string): string {
+  const first = name.trim().split(/\s+/)[0] ?? name.trim();
+  const firstName = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+  return `Perfect, ${firstName}. Just a quick heads-up, this call may be recorded and transcribed. Anyway, what can I help you with today?`;
 }
 
-/** First reply after opening when they did not give a name — still lead the call. */
-export function buildDemoPostNameMotivationSteer(opts?: { audioCheck?: boolean }): string {
+/** First reply after opening when they did not give a name — ask again naturally. */
+export function buildDemoPreNameSteer(opts?: { audioCheck?: boolean }): string {
   if (opts?.audioCheck) {
     return (
       'They asked if you can hear them. ONE warm Irish line that you hear them fine — ' +
-      'then ask ONLY what brought them to Hello Cara (one open question). ' +
-      'Do not repeat the opening greeting. Do not nag for their name again. Do not say "grand".'
+      'then ask who you are speaking with (one short question). ' +
+      'Do not repeat the opening greeting. Do not say "grand".'
     );
   }
   return (
-    'ONE warm line acknowledging them — match their energy (lively if they sound upbeat). ' +
-    'Then ask ONLY what brought them to Hello Cara (one open question). ' +
-    'Do not repeat the opening greeting. Do not nag for their name again. Do not list trades. Do not say "grand".'
+    'They spoke but did not give their name. ONE warm Irish line acknowledging them — ' +
+    'then ask who you are speaking with (one short question). ' +
+    'Do not repeat the opening greeting. Do not say "grand".'
   );
 }
 
@@ -182,13 +188,11 @@ export function callerSoundsLikeHelloCaraMotivation(text: string): boolean {
 export function formatDemoPersonalityForPrompt(): string {
   return `## Personality & humour (demo host — human, not robotic)
 
-- **Quick-witted Irish host:** warm Donegal phone manner with a wink — like chatting to a mate, not reading a script.
-- **Actually funny (in small doses):** dry one-liners, gentle teasing, self-aware AI jokes (*"I'm not human but I'm not a hold message either"*, *"I'd lose at pub quiz but I'm great on the phone"*).
-- **React to them:** if they're playful, match it (*"haha you're a character"*, *"I like you already"*); if they're serious, stay warm not clownish.
-- **Conversation flow:** after chitchat ask **what brought them to Hello Cara** — **listen** — **then** steer (product answer, trade they mentioned, or role-play). Never jump straight to *"fancy pretending you're ringing a garage?"*
-- **Optional name banter (once per call):** *"Who am I talking to anyway?"* → if they tell you, one playful beat (*"Are you sure that's your name?"*, *"I'd nearly believe you"*).
-- If they **volunteer** their name first, skip the ask — playful beat, then continue.
+- **Natural Irish host:** warm phone manner — like a real receptionist, not a hold message or American cheer.
+- **Light humour when it fits:** dry one-liners, gentle teasing, self-aware AI jokes in small doses.
+- **React to them:** if they're playful, match it; if they're serious, stay warm not clownish.
+- **Conversation flow:** after they say what they need, **listen** — **then** steer (product answer, trade they mentioned, or role-play). Never jump straight to *"fancy pretending you're ringing a garage?"*
+- The opening asks for their name; the recording notice + *"what can I help you with today?"* is spoken automatically after they answer — do not repeat that script yourself.
 - **In role-play (beats 2–3)** stay in character; light humour in character is fine.
-- Aim for a smile every few turns — not every line, not never.
 - **Never** ask for phone number on the demo.`;
 }

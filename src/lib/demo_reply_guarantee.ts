@@ -47,7 +47,7 @@ export function buildDemoCallerReplyNudgeSteer(callerText: string): string {
     /\b(can you hear me|can you hear|hear me ok|hear me okay|are you there|you there)\b/.test(t) ||
     /^(hello|hi)\s+(can you hear|are you there)\b/.test(t);
   const hearMeLine = audioCheck
-    ? 'If they asked whether you can hear them, say yes warmly — then ask what brought them to Hello Cara (one open question). '
+    ? 'If they asked whether you can hear them, say yes warmly — then ask who you are speaking with. '
     : '';
   return (
     `The caller said: "${snippet}". Reply in **one short spoken sentence** (~25 words max). ` +
