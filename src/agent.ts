@@ -85,10 +85,12 @@ import {
   helloCaraAboutSteerInstructions,
 } from './lib/hello_cara_website_facts.js';
 import {
+  buildDemoAfterConsentAckOnly,
   buildDemoAfterConsentReply,
   buildDemoAskNameSteer,
   buildDemoConversationalReplySteer,
   buildDemoFollowMotivationSteer,
+  buildDemoRecordingConsentReminderSteer,
   buildDemoRecordingConsentReply,
   buildDemoRecordingConsentRetrySteer,
   buildDemoRecordingDeclineSteer,
@@ -121,6 +123,7 @@ import {
   callerSoundsLikeAffirmativeConsent,
   callerSoundsLikeAudioCheck,
   callerSoundsLikeRecordingDecline,
+  callerSoundsLikeSocialChitchat,
   callerSoundsLikeVagueDemoOpening,
   callerWindingDownCall,
   assistantSoundsLikeTradeMenu,
@@ -677,6 +680,7 @@ export default defineAgent({
         demoPostNameSteerUsed: false,
         demoRecordingConsentAsked: false,
         demoChitchatOpened: false,
+        demoDeferredChitchat: null,
         demoPersonalityNameAskUsed: false,
       },
       disclosureConfirmed: greetingIncludesAiDisclosure(greetingText),
@@ -1434,15 +1438,31 @@ export default defineAgent({
         if (callerSoundsLikeAffirmativeConsent(text)) {
           flags.demoChitchatOpened = true;
           session.userData.disclosureConfirmed = true;
-          diag.push('info', 'demo_after_consent_reply', { name });
-          programmaticSpeechPending += 1;
-          sayPrepared(session, buildDemoAfterConsentReply(name), {
-            allowInterruptions: true,
-            addToChatCtx: true,
-          });
+          const deferred = flags.demoDeferredChitchat?.trim();
+          flags.demoDeferredChitchat = null;
+          if (deferred) {
+            diag.push('info', 'demo_after_consent_deferred_chitchat', { name });
+            programmaticSpeechPending += 1;
+            sayPrepared(session, buildDemoAfterConsentAckOnly(name), {
+              allowInterruptions: true,
+              addToChatCtx: true,
+            });
+            steerReply(buildDemoConversationalReplySteer(deferred));
+          } else {
+            diag.push('info', 'demo_after_consent_reply', { name });
+            programmaticSpeechPending += 1;
+            sayPrepared(session, buildDemoAfterConsentReply(name), {
+              allowInterruptions: true,
+              addToChatCtx: true,
+            });
+          }
           demoSteerHandledThisTurn = true;
         } else if (callerSoundsLikeRecordingDecline(text)) {
           steerReply(buildDemoRecordingDeclineSteer());
+        } else if (callerSoundsLikeSocialChitchat(text)) {
+          flags.demoDeferredChitchat = text.trim();
+          steerReply(buildDemoRecordingConsentReminderSteer());
+          demoSteerHandledThisTurn = true;
         } else {
           steerReply(buildDemoRecordingConsentRetrySteer());
         }
@@ -1489,6 +1509,9 @@ export default defineAgent({
           steerReply(buildDemoAskNameSteer(text, { audioCheck: true }));
           demoSteerHandledThisTurn = true;
         } else {
+          if (callerSoundsLikeSocialChitchat(text)) {
+            flags.demoDeferredChitchat = text.trim();
+          }
           diag.push('info', 'demo_ask_name_steer', { kind: 'awaiting_name' });
           steerReply(buildDemoAskNameSteer(text));
           demoSteerHandledThisTurn = true;

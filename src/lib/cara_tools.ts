@@ -69,6 +69,8 @@ export type CaraSessionFlags = {
   demoChitchatOpened?: boolean;
   /** Legacy flag — name / pre-name opening handled. */
   demoPostNameSteerUsed?: boolean;
+  /** Chitchat the caller said before consent finished — respond after consent instead of re-asking. */
+  demoDeferredChitchat?: string | null;
   /** Casual "who am I talking to?" moment already used. */
   demoPersonalityNameAskUsed?: boolean;
 };

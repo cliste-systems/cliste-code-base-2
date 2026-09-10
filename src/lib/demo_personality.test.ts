@@ -38,7 +38,16 @@ describe('demo_personality', () => {
       extractDemoCallerNameResponse("Hello, you're through to Brandon."),
       'Brandon',
     );
+    assert.equal(
+      extractDemoCallerNameResponse("Hello there, you're speaking to Brendan."),
+      'Brendan',
+    );
     assert.equal(extractDemoCallerNameResponse('Uh, my name is Brendan.'), 'Brendan');
+  });
+
+  it('does not treat how-are-you replies as names', () => {
+    assert.equal(extractDemoCallerNameResponse("I'm keeping good, yeah, and you?"), null);
+    assert.equal(extractCallerIntroducedName("I'm good thanks"), null);
   });
 
   it('ignores non-name im phrases', () => {

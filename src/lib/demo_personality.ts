@@ -24,6 +24,20 @@ const NOT_NAMES = new Set([
   'bad',
   'donegal',
   'ireland',
+  'keeping',
+  'doing',
+  'feeling',
+  'having',
+  'getting',
+  'going',
+  'speaking',
+  'talking',
+  'saying',
+  'asking',
+  'there',
+  'today',
+  'yeah',
+  'yep',
 ]);
 
 const JOKE_NAME_PATTERN =
@@ -55,6 +69,13 @@ export function extractDemoCallerNameResponse(text: string): string | null {
   const throughTo = text.match(/\bthrough to\s+([a-z][a-z'-]{1,19})\b/i);
   if (throughTo?.[1]) {
     const name = normalizeNameCandidate(throughTo[1]);
+    if (name) return name;
+  }
+
+  // "you're speaking to Brendan", "speaking to John"
+  const speakingTo = text.match(/\b(?:you'?re\s+)?(?:speaking|talking) to\s+([a-z][a-z'-]{1,19})\b/i);
+  if (speakingTo?.[1]) {
+    const name = normalizeNameCandidate(speakingTo[1]);
     if (name) return name;
   }
 
@@ -123,6 +144,19 @@ export function buildDemoRecordingConsentReply(name: string): string {
 export function buildDemoAfterConsentReply(name: string): string {
   const firstName = formatDemoFirstName(name);
   return `Great, thanks ${firstName}. So, how are you keeping today?`;
+}
+
+/** Short ack when the caller already answered how they are keeping before consent finished. */
+export function buildDemoAfterConsentAckOnly(name: string): string {
+  const firstName = formatDemoFirstName(name);
+  return `Great, thanks ${firstName}.`;
+}
+
+export function buildDemoRecordingConsentReminderSteer(): string {
+  return (
+    'They chatted but have not confirmed whether recording/transcription is okay. ONE warm Irish line — ' +
+    'acknowledge their chat briefly, then gently ask again if recording is okay with them. Do not say "grand".'
+  );
 }
 
 /** @deprecated Use buildDemoRecordingConsentReply */
