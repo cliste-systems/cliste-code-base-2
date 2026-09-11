@@ -30,6 +30,27 @@ export function isCartesiaInferenceTtsModel(model: string | null | undefined): b
   return Boolean(model?.trim().toLowerCase().startsWith('cartesia/'));
 }
 
+/** Cartesia inference voices are UUIDs — ignore stale Eleven voice ids on Cartesia profiles. */
+export function isCartesiaVoiceId(voiceId: string | null | undefined): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    voiceId?.trim() ?? '',
+  );
+}
+
+function resolveCartesiaVoiceId(input: {
+  testProfile: CallTestProfile | null;
+  profileUsesCartesiaModel: boolean;
+}): string {
+  const profileVoice = input.testProfile?.voice_id?.trim();
+  if (input.profileUsesCartesiaModel && profileVoice && isCartesiaVoiceId(profileVoice)) {
+    return profileVoice;
+  }
+  return (
+    process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() ||
+    CARTESIA_SIOBHAN_VOICE_ID
+  );
+}
+
 function resolveElevenVoiceId(input: {
   testProfile: CallTestProfile | null;
   orgVoiceId: string | null;
@@ -66,12 +87,10 @@ function resolveCartesiaConfig(input: {
     (isCartesiaInferenceTtsModel(input.envInferenceModel) && input.envInferenceModel) ||
     'cartesia/sonic-3.6';
 
-  const voiceId =
-    (profileModel && isCartesiaInferenceTtsModel(profileModel)
-      ? input.testProfile?.voice_id?.trim()
-      : undefined) ||
-    process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() ||
-    CARTESIA_SIOBHAN_VOICE_ID;
+  const voiceId = resolveCartesiaVoiceId({
+    testProfile: input.testProfile,
+    profileUsesCartesiaModel: Boolean(profileModel && isCartesiaInferenceTtsModel(profileModel)),
+  });
 
   return {
     provider: 'cartesia-inference',

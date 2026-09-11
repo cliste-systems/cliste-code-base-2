@@ -76,6 +76,18 @@ describe('resolveTtsConfig', () => {
     assert.equal(cfg.voiceId, CARTESIA_SIOBHAN_VOICE_ID);
   });
 
+  it('uses Siobhan when Cartesia profile still has a stale Eleven voice id', () => {
+    const staleProfile = {
+      ...cartesiaProfile,
+      tts_model: 'cartesia/sonic-3.6',
+      voice_id: DEFAULT_ELEVEN_VOICE_ID,
+    };
+    delete process.env.LIVEKIT_INFERENCE_TTS_VOICE;
+    const cfg = resolveTtsConfig({ testProfile: staleProfile, orgVoiceId: null });
+    assert.equal(cfg.provider, 'cartesia-inference');
+    assert.equal(cfg.voiceId, CARTESIA_SIOBHAN_VOICE_ID);
+  });
+
   it('uses Eleven profile voice and model when provider is unset', () => {
     delete process.env.CARA_TTS_PROVIDER;
     const cfg = resolveTtsConfig({ testProfile: elevenProfile, orgVoiceId: null });
