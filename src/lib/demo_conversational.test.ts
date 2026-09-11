@@ -31,7 +31,7 @@ describe('demo conversational line', () => {
 
     assert.match(prompt, /Hello Cara demo line/i);
     assert.match(prompt, /Opening \(greeting already played\)/i);
-    assert.match(prompt, /recording \*\*notice\*/i);
+    assert.match(prompt, /just so you're aware/i);
     assert.match(prompt, /how are you keeping/i);
     assert.match(prompt, /Scenario playbooks/i);
     assert.match(prompt, /endPhoneCall/i);

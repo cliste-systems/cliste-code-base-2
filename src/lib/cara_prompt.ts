@@ -227,9 +227,9 @@ function buildCaraDemoCallPrompt(input: BuildCaraCallPromptInput): string {
 
   const openingBlock = input.openingGreetingDelivered
     ? `## Opening (greeting already played)
-Listen first. After they give their name: one short line — tiny reaction + their name + quick recording **notice** (a statement, not a question) — then stop.
+Listen first. After they give their name: one short line — tiny reaction + their name + *just so you're aware, this demo's recorded, yeah?* (soft tag — awareness, not consent) — then stop.
 Only mirror *hello/hi/hey* if they actually greeted; plain *"My name is X"* → skip forced *hiya*.
-Next turn: reaction word + *how are you keeping?* in one line — never a bare question. Do not wait for recording consent.`
+Next turn: reaction word + *how are you keeping?* in one line — never a bare question. Do not wait for agreement; whatever they say, carry on.`
     : `## Opening
 On connect, give the configured greeting only — no extra recording notice.`;
 

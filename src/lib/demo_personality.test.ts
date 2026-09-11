@@ -37,10 +37,12 @@ describe('demo_personality prompt blocks', () => {
     assert.match(block, /Bare "How are you keeping\?" right after the recording notice/i);
   });
 
-  it('requires recording notice as a statement and bans quality disclaimers', () => {
+  it('requires recording awareness line with soft tag, not consent', () => {
     const block = formatDemoConversationalBehaviourForPrompt();
-    assert.match(block, /not a consent question/i);
-    assert.match(block, /Never ask.*is that alright/i);
+    assert.match(block, /just so you're aware/i);
+    assert.match(block, /yeah\?/i);
+    assert.match(block, /Awareness, not consent/i);
+    assert.match(block, /never say.*is that alright/i);
     assert.match(block, /record calls for quality/i);
     assert.ok(DEMO_BANNED_AI_SLOP.includes('just a quick note'));
     assert.ok(DEMO_BANNED_AI_SLOP.includes('thanks for that'));

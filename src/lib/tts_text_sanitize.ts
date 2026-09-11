@@ -187,11 +187,24 @@ function normalizeTtsChunk(text: string, ttsModel = activeTtsModel): string {
 
 /** Brief pause between sentences — replaces periods so Cartesia does not say "dot". */
 const CARTESIA_SENTENCE_BREAK = '<break time="240ms"/>';
+/** Demo outro / goodbye — slower, warmer cadence. */
+const CARTESIA_OUTRO_BREAK = '<break time="400ms"/>';
 /** Greeting-only — keep the intro brisk; no comma micro-pauses. */
 const CARTESIA_GREETING_SENTENCE_BREAK = '<break time="160ms"/>';
 /** Comma-run-on before a question clause — treat like a sentence boundary. */
 const CARTESIA_COMMA_BEFORE_QUESTION =
   /,\s*(?=(?:want to|would you|what|who|are you|is there|is that|do you|did you|can you|could you|how)\b)/gi;
+
+/** Demo outro / goodbye chunks — slower TTS pacing than mid-call speech. */
+export function isFarewellSpeechChunk(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    /\bthanks for calling\b/.test(t) ||
+    /\bbye for now\b/.test(t) ||
+    /\bhave a good (day|evening|one)\b/.test(t) ||
+    /\btake care(?: now)?\b/.test(t)
+  );
+}
 
 function normalizeCartesiaBase(text: string, ttsModel = activeTtsModel): string {
   let out = normalizeTtsChunk(text, ttsModel).trim();
@@ -220,8 +233,15 @@ export function prepareCartesiaGreetingChunk(text: string, ttsModel = activeTtsM
  */
 export function prepareCartesiaSpeechChunk(text: string, ttsModel = activeTtsModel): string {
   let out = normalizeCartesiaBase(text, ttsModel);
-  out = out.replace(CARTESIA_COMMA_BEFORE_QUESTION, ` ${CARTESIA_SENTENCE_BREAK} `);
-  out = out.replace(/([.!?]+)\s*(?=[A-Za-z"'(])/g, `${CARTESIA_SENTENCE_BREAK} `);
+  const farewell = isFarewellSpeechChunk(out);
+  const sentenceBreak = farewell ? CARTESIA_OUTRO_BREAK : CARTESIA_SENTENCE_BREAK;
+
+  if (farewell) {
+    out = out.replace(/^([A-Za-z][^—\n]{0,48}?)\s*[—–-]\s*/, `$1 ${CARTESIA_OUTRO_BREAK} `);
+  }
+
+  out = out.replace(CARTESIA_COMMA_BEFORE_QUESTION, ` ${sentenceBreak} `);
+  out = out.replace(/([.!?]+)\s*(?=[A-Za-z"'(])/g, `${sentenceBreak} `);
   // Keep trailing ? for question intonation; strip terminal . !
   out = out.replace(/[.!]+\s*$/g, '');
   return out.replace(/\s{2,}/g, ' ').trim();
@@ -355,8 +375,10 @@ export function bufferCartesiaStreamBySentence(source: ReadableStream<string>): 
           if (done) break;
           const prepared = prepareCartesiaSpeechChunk(value);
           if (prepared.length >= 1) {
-            const withBreak =
-              chunkIndex > 0 ? `${CARTESIA_SENTENCE_BREAK} ${prepared}` : prepared;
+            const chunkBreak = isFarewellSpeechChunk(value)
+              ? CARTESIA_OUTRO_BREAK
+              : CARTESIA_SENTENCE_BREAK;
+            const withBreak = chunkIndex > 0 ? `${chunkBreak} ${prepared}` : prepared;
             controller.enqueue(withBreak);
             chunkIndex += 1;
           }

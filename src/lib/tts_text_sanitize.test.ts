@@ -149,7 +149,18 @@ describe('tts_text_sanitize', () => {
     assert.doesNotMatch(out, /beautiful day, what/);
   });
 
-  it('prepareCartesiaSpeechChunk keeps commas and dashes flowing without micro-pauses', () => {
+  it('prepareCartesiaSpeechChunk slows farewell outro with outro breaks', () => {
+    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
+    const out = prepareCartesiaSpeechChunk(
+      'Perfect, Martin — thanks for calling Hello Cara today. Have a good day. Bye for now.',
+    );
+    assert.match(out, /Perfect, Martin <break time="400ms"\/> thanks for calling/i);
+    assert.match(out, /<break time="400ms"\/> Have a good day/);
+    assert.match(out, /<break time="400ms"\/> Bye for now/);
+    assert.doesNotMatch(out, /<break time="240ms"\/>/);
+  });
+
+  it('prepareCartesiaSpeechChunk keeps mid-call dashes flowing without outro breaks', () => {
     setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
     const out = prepareCartesiaSpeechChunk(
       'Sure — I can help an electrician by answering calls, taking messages, and sending out appointment reminders. What would you like to try?',
@@ -211,6 +222,31 @@ describe('tts_text_sanitize', () => {
     assert.equal(chunks.length, 2);
     assert.match(chunks[0]!, /need assistance/);
     assert.match(chunks[1]!, /^<break time="240ms"\/> What issue are you experiencing\?/);
+  });
+
+  it('cartesia streamed outro uses slower farewell breaks between sentences', async () => {
+    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
+    const source = new ReadableStream<string>({
+      start(controller) {
+        controller.enqueue(
+          'Perfect, Martin — thanks for calling Hello Cara today. Have a good day. Bye for now.',
+        );
+        controller.close();
+      },
+    });
+    const reader = bufferTtsStreamForCartesia(source).getReader();
+    const chunks: string[] = [];
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    const joined = chunks.join(' ');
+    assert.ok(chunks.length >= 1);
+    assert.match(joined, /thanks for calling Hello Kara today/);
+    assert.match(joined, /<break time="400ms"\/> Have a good day/);
+    assert.match(joined, /<break time="400ms"\/> Bye for now/);
+    assert.doesNotMatch(joined, /<break time="240ms"\/>/);
   });
 
   it('buildTtsNodeInputStream routes cartesia by sentence for faster first audio', async () => {
