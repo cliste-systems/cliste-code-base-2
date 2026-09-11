@@ -79,7 +79,7 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
     : '';
 
   const disclosurePerCallBlock = input.conversationalRetailMode
-    ? `- The fixed opening already played — **I'm Cara, the AI assistant** and **who am I speaking to?** — do not repeat it.
+    ? `- The fixed opening already played — **I'm Cara, the AI assistant** and **can I get your name?** — do not repeat it.
 - After their name: soft **recording** awareness (*just so you're aware, this call may be recorded, yeah?*) — awareness, not consent. AI identity was already in the opening.
 - **Next:** *Now, {name}, what can I help you with today?* — no *how are you keeping?* or other chitchat first.
 - **Never** repeat AI/recording notice later in the call unless they ask.`

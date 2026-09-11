@@ -3,7 +3,7 @@ import { DEMO_BANNED_AI_SLOP } from './demo_personality.js';
 /** Retail lines using the demo conversational opening — name first, soft recording notice. */
 export function formatRetailConversationalOpeningForPrompt(): string {
   return `## Opening (conversational retail — same feel as Hello Cara demo)
-The fixed opening already played on connect — **I'm Cara, the AI assistant** and **who am I speaking to?** — do not repeat it.
+The fixed opening already played on connect — **I'm Cara, the AI assistant** and **can I get your name?** — do not repeat it.
 
 After they give their name:
 - **One short line, ~12–18 words max** — then stop.

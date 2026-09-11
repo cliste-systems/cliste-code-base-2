@@ -33,7 +33,7 @@ export const RETAIL_LINE_OPENING_PAUSE_MS = 1600;
 
 export function buildRetailConversationalOpening(spokenBusinessName: string): string {
   const name = spokenBusinessName.trim() || 'the store';
-  return `Hello, you're through to ${name}. I'm Cara, the AI assistant. Who am I speaking to?`;
+  return `Hello, you're through to ${name}. I'm Cara, the AI assistant. Can I get your name?`;
 }
 
 /** Full store name for conversational retail opening — keeps Donegal Town etc. */

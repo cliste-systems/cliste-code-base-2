@@ -283,14 +283,14 @@ describe('tts_text_sanitize', () => {
   it('prepareCartesiaRetailOpeningChunk keeps retail intro natural', () => {
     setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
     const greeting =
-      "Hello, you're through to Kavanaghs SuperValu Doneigall Town. I'm Cara, the AI assistant. Who am I speaking to?";
+      "Hello, you're through to Kavanaghs SuperValu Doneigall Town. I'm Cara, the AI assistant. Can I get your name?";
     const out = prepareHardcodedSpeechForTts(greeting, {
       greeting: true,
       greetingCommaFlow: false,
       greetingRetailOpening: true,
     });
     assert.match(out, /Hello, you're through to Kavanaghs SuperValu Doneigall Town<break time="240ms"\/> I'm Kara, the AI assistant/);
-    assert.match(out, /<break time="240ms"\/> Who am I speaking to\?/);
+    assert.match(out, /<break time="240ms"\/> Can I get your name\?/);
     assert.doesNotMatch(out, /<break time="480ms"\/>/);
   });
 
