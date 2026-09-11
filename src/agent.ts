@@ -56,6 +56,7 @@ import {
   resolveInferenceSttFallbackModel,
   STT_RECOVERY_SPEECH_LINE,
 } from './lib/resilient_inference_stt.js';
+import { buildResilientSessionTts } from './lib/resilient_inference_tts.js';
 import { prewarmInferenceStt } from './lib/stt_warmup.js';
 import { resolveTtsConfig, CARTESIA_SIOBHAN_VOICE_ID } from './lib/tts_config.js';
 import { greetingIncludesAiDisclosure } from './lib/greeting_compliance.js';
@@ -392,9 +393,11 @@ export default defineAgent({
     void prewarmConfiguredGreetingCaches().catch((e) => {
       console.warn('[agent] greeting_prewarm_failed', e);
     });
-    void prewarmInferenceStt().catch((e) => {
+    try {
+      await prewarmInferenceStt();
+    } catch (e) {
       console.warn('[agent] stt_warmup_failed', e);
-    });
+    }
   },
   entry: async (ctx: JobContext) => {
     await ctx.connect();
@@ -1052,21 +1055,33 @@ export default defineAgent({
 
     setActiveTtsModelForSanitizer(activeTtsModel);
 
-    const sessionTts = useCartesiaInference
-      ? new inference.TTS({
-          model: ttsConfig.model,
-          voice: ttsConfig.voiceId,
-          language: ttsConfig.language,
-        })
-      : createElevenLabsTts({
-          apiKey: elevenApiKey,
-          voiceId: elevenVoiceId,
-          model: elevenModel as elevenlabs.TTSModels,
-          encoding: elevenEncoding as elevenlabs.TTSEncoding,
-          baseURL: elevenBaseUrl,
-          streamingLatency: Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '1', 10) || 1,
-          voiceSettings: resolveElevenVoiceSettings(),
-        });
+    const sessionTts = buildResilientSessionTts({
+      useCartesiaInference,
+      cartesia: {
+        model: ttsConfig.model,
+        voiceId: ttsConfig.voiceId,
+        language: ttsConfig.language,
+      },
+      eleven: elevenApiKey
+        ? {
+            apiKey: elevenApiKey,
+            voiceId: elevenVoiceId,
+            model: elevenModel,
+            encoding: elevenEncoding,
+            baseURL: elevenBaseUrl,
+            streamingLatency:
+              Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '1', 10) || 1,
+            voiceSettings: resolveElevenVoiceSettings(),
+          }
+        : null,
+    });
+
+    if (useCartesiaInference && elevenApiKey) {
+      console.info('[agent] resilient_tts', {
+        primary: ttsConfig.model,
+        fallback: 'elevenlabs-http',
+      });
+    }
 
     const session = new voice.AgentSession<CaraAgentUserData>({
       stt: sessionStt,
@@ -1157,6 +1172,7 @@ export default defineAgent({
     let thinkingStartedAt: number | null = null;
     let userStoppedSpeakingAt: number | null = null;
     let sttFailureDetected = false;
+    let ttsFailureDetected = false;
     let sttRecoverySpeechPlayed = false;
 
     const transcriptParts: TranscriptLine[] = [];
@@ -1275,19 +1291,19 @@ export default defineAgent({
       safeGenerateReply(REPLY_RETRY_INSTRUCTIONS, { force: true });
     };
 
-    const playSttRecoverySpeech = (reason: string) => {
+    const playPipelineRecoverySpeech = (reason: string, stage: 'stt' | 'tts') => {
       if (sttRecoverySpeechPlayed || isCallEnding()) return;
       if (!conversationalRetailLine || testCall) return;
       sttRecoverySpeechPlayed = true;
-      console.warn('[agent] stt_recovery_speech', { reason });
-      diag.push('warn', 'stt_recovery_speech', { reason });
+      console.warn('[agent] pipeline_recovery_speech', { reason, stage });
+      diag.push('warn', 'pipeline_recovery_speech', { reason, stage });
       try {
         sayPrepared(session, STT_RECOVERY_SPEECH_LINE, {
           allowInterruptions: true,
           addToChatCtx: true,
         });
       } catch (e) {
-        console.error('[agent] stt_recovery_speech_failed', e);
+        console.error('[agent] pipeline_recovery_speech_failed', e);
       }
     };
 
@@ -1311,7 +1327,15 @@ export default defineAgent({
           console.warn('[agent] stt_rate_limit_or_transient', sttMeta);
           diag.push('warn', 'stt_rate_limit_or_transient', sttMeta);
         }
-        playSttRecoverySpeech('pipeline_stt_error');
+        playPipelineRecoverySpeech('pipeline_stt_error', 'stt');
+      }
+      if (stage === 'tts') {
+        ttsFailureDetected = true;
+        if (isSttRateLimitOrTransientError(msg, err)) {
+          console.warn('[agent] tts_rate_limit_or_transient', { message: msg.slice(0, 120) });
+          diag.push('warn', 'tts_rate_limit_or_transient', { message: msg.slice(0, 120) });
+        }
+        playPipelineRecoverySpeech('pipeline_tts_error', 'tts');
       }
       const incidentKey = `${stage}:${msg.slice(0, 120)}`;
       if (!pipelineIncidentPosted.has(incidentKey)) {
@@ -2334,7 +2358,7 @@ export default defineAgent({
         });
         const sttFailureOverride = resolveCallOutcomeWithSttFailure({
           transcriptLineCount: transcriptParts.length,
-          sttFailureDetected,
+          sttFailureDetected: sttFailureDetected || ttsFailureDetected,
         });
         if (sttFailureOverride) {
           outcome = sttFailureOverride.outcome;
