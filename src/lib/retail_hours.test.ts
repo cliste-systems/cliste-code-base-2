@@ -60,6 +60,15 @@ describe('retail_hours', () => {
     assert.match(line ?? '', /six in the evening/i);
   });
 
+  it('builds tomorrow hours from STT garble', () => {
+    const line = buildRetailHoursSpokenReply(
+      hours,
+      "Um, he's open tomorrow actually.",
+      'Europe/Dublin',
+    );
+    assert.match(line ?? '', /Tomorrow we're open from/i);
+  });
+
   it('builds correction phrasing for weekday hours', () => {
     const line = buildRetailHoursSpokenReply(hours, "He's open on Thursday.", 'Europe/Dublin', {
       correcting: true,

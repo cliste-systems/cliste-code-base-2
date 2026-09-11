@@ -378,6 +378,24 @@ export function assistantSoundsLikeCorporateAssist(text: string): boolean {
   );
 }
 
+/** Caller thinks they were ignored — respond immediately, never stay silent. */
+export function callerSoundsLikeCallerFrustration(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s'?]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  return (
+    /\b(ignore me|ignoring me|just going to ignore|why are you ignoring|not listening|didn'?t answer|never answered)\b/.test(
+      t,
+    ) ||
+    /\b(are you (still )?there|you there|still there|anyone there)\b/.test(t) ||
+    /^hello\??$/.test(t)
+  );
+}
+
 /** Caller continued the conversation with a new question (not wind-down). */
 export function callerAskedNewQuestion(text: string): boolean {
   const t = text

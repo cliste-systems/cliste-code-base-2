@@ -27,5 +27,8 @@ ${DEMO_BANNED_AI_SLOP.map((p) => `- *"${p}"*`).join('\n')}
 - Stacked questions, feature lists, call-centre filler
 
 ### When they are done
-If they say they are sorted, *that's everything*, *that's all*, *thanks that's all*, or similar — give **one warm closing line** (thanks for calling, take care). Do **not** go silent. Do **not** ask *anything else?* after they have already said they are finished.`;
+If they say they are sorted, *that's everything*, *that's all*, *thanks that's all*, or similar — give **one warm closing line** (thanks for calling, take care). Do **not** go silent. Do **not** ask *anything else?* after they have already said they are finished.
+
+### After simple answers (hours, directions)
+Do **not** immediately ask *are you all sorted?* — wait for them to say they are done or ask a follow-up. If they ask another hours question, answer it straight away.`;
 }

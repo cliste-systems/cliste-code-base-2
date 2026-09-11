@@ -110,6 +110,7 @@ import {
   callerSaidNothingElse,
   callerSoundsLikeAffirmativeConsent,
   callerWindingDownCall,
+  callerSoundsLikeCallerFrustration,
   assistantSoundsLikeCorporateAssist,
 } from './lib/speech_triggers.js';
 import {
@@ -120,6 +121,7 @@ import {
 } from './lib/stt_garble.js';
 import { callerSoundsLikeRetailStaffQuestion } from './lib/retail_staff_questions.js';
 import {
+  buildRetailHoursSpokenReply,
   callerSoundsLikeWeekdayHoursCorrection,
   callerSoundsLikeOpenHoursQuestion,
   formatStructuredHoursForLivePrompt,
@@ -1392,12 +1394,42 @@ export default defineAgent({
       return true;
     };
 
+    const maybeSayRetailProgrammaticReply = (line: string) => {
+      clearCallerReplyNudgeTimer();
+      cancelInFlightReply();
+      bumpReplyTurn('retail_programmatic');
+      const flags = session.userData.sessionFlags;
+      flags.retailSubstantiveExchangeComplete = true;
+      flags.askedAnythingElse = false;
+      flags.awaitingAnythingElseReply = false;
+      sayPrepared(session, line, { allowInterruptions: true });
+    };
+
+    const tryRetailProgrammaticHoursReply = (
+      questionText: string,
+      opts?: { correcting?: boolean; apologise?: boolean },
+    ): boolean => {
+      if (session.userData.sessionFlags.endPhoneCallUsed) return false;
+      const reply = buildRetailHoursSpokenReply(org.business_hours, questionText, bookingTz, {
+        correcting: opts?.correcting,
+      });
+      if (!reply) return false;
+      let line = reply;
+      if (opts?.apologise && !opts?.correcting) {
+        line = `Sorry about that — ${reply.charAt(0).toLowerCase()}${reply.slice(1)}`;
+      }
+      maybeSayRetailProgrammaticReply(line);
+      return true;
+    };
+
     const ingestCallerFinalText = (
       text: string,
       bumpReason: string,
       at: number,
     ): boolean => {
-      lastCallerUtterance = text.trim();
+      const trimmed = text.trim();
+      const priorCallerUtterance = lastCallerUtterance;
+      lastCallerUtterance = trimmed;
       if (isPhantomCallerTranscript(text)) {
         console.info('[agent] noise_fragment_ignored', {
           snippet: text.slice(0, 60),
@@ -1434,30 +1466,32 @@ export default defineAgent({
       if (testCall && armDemoCloseFromCallerText(text, 'conversation_item')) {
         return true;
       }
+      let handledWithProgrammaticReply = false;
       if (
         org.niche === 'retail' &&
-        callerSoundsLikeOpenHoursQuestion(text) &&
+        callerSoundsLikeCallerFrustration(trimmed) &&
+        priorCallerUtterance &&
         !session.userData.sessionFlags.endPhoneCallUsed
       ) {
-        steerReply(
-          'The caller is asking about store opening hours. Use Structured hours in your instructions. Answer for the day they mean in one warm line — store hours, not whether you as an AI will be available.',
-        );
-      } else if (
-        org.niche === 'retail' &&
-        callerSoundsLikeRetailStaffQuestion(text) &&
-        !session.userData.sessionFlags.endPhoneCallUsed
-      ) {
-        steerReply(
-          'The caller is asking about a store or department manager (their speech may be garbled). Answer from your business instructions — store manager, fresh food manager, ambient manager. This is a simple info question: do NOT ask for their name or phone number and do NOT offer to take a message unless they explicitly want a callback.',
-        );
-      } else if (
-        org.niche === 'retail' &&
-        callerSoundsLikeWeekdayHoursCorrection(text) &&
-        !session.userData.sessionFlags.endPhoneCallUsed
-      ) {
-        steerReply(
-          'The caller is correcting opening hours. Use Structured hours in your instructions. Apologise briefly and give the correct weekday hours — do not treat a normal weekday as a bank holiday.',
-        );
+        if (tryRetailProgrammaticHoursReply(priorCallerUtterance, { apologise: true })) {
+          handledWithProgrammaticReply = true;
+        } else {
+          steerReply(
+            `The caller said: "${trimmed.slice(0, 120)}". Apologise briefly for the pause, then answer what they asked about: "${priorCallerUtterance.slice(0, 120)}" in one short sentence. Do not ask anything else first.`,
+          );
+        }
+      } else if (org.niche === 'retail' && !session.userData.sessionFlags.endPhoneCallUsed) {
+        const correcting = callerSoundsLikeWeekdayHoursCorrection(trimmed);
+        if (
+          (callerSoundsLikeOpenHoursQuestion(trimmed) || correcting) &&
+          tryRetailProgrammaticHoursReply(trimmed, { correcting })
+        ) {
+          handledWithProgrammaticReply = true;
+        } else if (callerSoundsLikeRetailStaffQuestion(trimmed)) {
+          steerReply(
+            'The caller is asking about a store or department manager (their speech may be garbled). Answer from your business instructions — store manager, fresh food manager, ambient manager. This is a simple info question: do NOT ask for their name or phone number and do NOT offer to take a message unless they explicitly want a callback.',
+          );
+        }
       } else if (
         !testCall &&
         session.userData.sessionFlags.likelySttGarble &&
@@ -1478,7 +1512,9 @@ export default defineAgent({
       if (!testCall) {
         maybeCloseRetailCallWhenCallerDone(text);
         maybeCloseAfterAnythingElse(text);
-        scheduleCallerReplyNudge();
+        if (!handledWithProgrammaticReply) {
+          scheduleCallerReplyNudge();
+        }
       }
       return true;
     };

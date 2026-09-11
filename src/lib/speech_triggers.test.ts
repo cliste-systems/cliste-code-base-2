@@ -16,6 +16,7 @@ import {
   callerPivotedFromSmsConsent,
   callerSaidNothingElse,
   callerSoundsLikeAudioCheck,
+  callerSoundsLikeCallerFrustration,
   callerSoundsLikeLineEngagement,
   callerSoundsLikeSocialChitchat,
   callerSoundsLikeFollowUpRequest,
@@ -143,6 +144,13 @@ describe('speech_triggers', () => {
     assert.equal(callerSoundsLikeSocialChitchat('Hello?'), false);
     assert.equal(callerSoundsLikeSocialChitchat('Hi there'), false);
     assert.equal(callerSoundsLikeSocialChitchat('Hello, how are you keeping today?'), true);
+  });
+
+  it('detects caller frustration after being ignored', () => {
+    assert.equal(callerSoundsLikeCallerFrustration('Are you just going to ignore me?'), true);
+    assert.equal(callerSoundsLikeCallerFrustration('Hello?'), true);
+    assert.equal(callerSoundsLikeCallerFrustration('Are you still there?'), true);
+    assert.equal(callerSoundsLikeCallerFrustration('Are you open tomorrow?'), false);
   });
 
   it('detects service intake questions', () => {
