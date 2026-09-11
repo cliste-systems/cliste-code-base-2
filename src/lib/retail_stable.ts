@@ -109,7 +109,7 @@ export function buildRetailStockAskNameLine(): string {
 }
 
 export function buildRetailBakeryOrderAskNameLine(): string {
-  return "The bakery team handle cake orders — what's your first name?";
+  return buildRetailAskNameOnlyLine();
 }
 
 export function buildRetailAskNameOnlyLine(): string {

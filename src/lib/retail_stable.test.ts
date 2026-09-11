@@ -26,6 +26,11 @@ describe('retail_stable', () => {
     assert.equal(callerSoundsLikeBakeryCakeOrder('Are ye open tomorrow?'), false);
   });
 
+  it('asks for first name only on cake orders — no redundant bakery preamble', () => {
+    assert.equal(buildRetailBakeryOrderAskNameLine(), "What's your first name?");
+    assert.doesNotMatch(buildRetailBakeryOrderAskNameLine(), /bakery/i);
+  });
+
   it('extracts caller first names', () => {
     assert.equal(extractRetailCallerFirstName('My name is Brandon'), 'Brandon');
     assert.equal(extractRetailCallerFirstName("It's Brendan"), 'Brendan');
