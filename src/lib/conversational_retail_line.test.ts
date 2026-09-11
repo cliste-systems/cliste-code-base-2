@@ -19,19 +19,19 @@ describe('conversational_retail_line', () => {
 
   it('builds a single Cara intro with disclosure and help question', () => {
     assert.equal(
-      buildRetailConversationalOpening('Kavanaghs SuperValu Donegal Town'),
-      "Hello, you're through to Kavanaghs SuperValu Donegal Town. I'm Cara, the AI assistant. This call may be recorded and transcribed. How can I help you today?",
+      buildRetailConversationalOpening('Kavanaghs SuperValu'),
+      "Hello, you're through to Kavanaghs SuperValu. I'm Cara, the AI assistant. This call may be recorded and transcribed. How can I help you today?",
     );
   });
 
-  it('keeps Donegal Town on conversational retail name resolution', () => {
+  it('shortens conversational retail name to trade name without town suffix', () => {
     assert.equal(
       resolveConversationalRetailBusinessName({
         name: 'Kavanaghs SuperValu Donegal Town',
         greeting:
           "You're through to Kavanaghs SuperValu Donegal Town — I'm Cara, the AI assistant.",
       }),
-      'Kavanaghs SuperValu Donegal Town',
+      'Kavanaghs SuperValu',
     );
   });
 });

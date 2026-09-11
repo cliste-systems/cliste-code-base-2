@@ -36,11 +36,11 @@ export function buildRetailConversationalOpening(spokenBusinessName: string): st
   return `Hello, you're through to ${name}. I'm Cara, the AI assistant. This call may be recorded and transcribed. How can I help you today?`;
 }
 
-/** Full store name for conversational retail opening — keeps Donegal Town etc. */
+/** Full store name for conversational retail opening — locals say the trade name on the phone. */
 export function resolveConversationalRetailBusinessName(input: {
   name: string;
   greeting?: string | null;
   agentBaseTown?: string | null;
 }): string {
-  return resolveSpokenBusinessName({ ...input, preserveRetailLocation: true });
+  return resolveSpokenBusinessName({ ...input, preserveRetailLocation: false });
 }

@@ -66,6 +66,8 @@ export type CaraSessionFlags = {
   retailRecordingNoticePlayed?: boolean;
   /** Conversational retail — opening arc finished; normal LLM flow. */
   retailOpeningComplete?: boolean;
+  /** Conversational retail — Cara answered at least one caller errand post-opening. */
+  retailSubstantiveExchangeComplete?: boolean;
 };
 
 export type CaraAgentUserData = {

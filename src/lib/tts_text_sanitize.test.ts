@@ -280,16 +280,22 @@ describe('tts_text_sanitize', () => {
     assert.doesNotMatch(out, /Dun-ih-gall/i);
   });
 
+  it('respells Kavanaghs for Irish TTS', () => {
+    const out = prepareHardcodedSpeechForTts("Hello, you're through to Kavanaghs SuperValu.");
+    assert.match(out, /Kav-an-aw/i);
+    assert.doesNotMatch(out, /\bKavanaghs\b/i);
+  });
+
   it('prepareCartesiaRetailOpeningChunk keeps retail intro natural', () => {
     setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
     const greeting =
-      "Hello, you're through to Kavanaghs SuperValu Doneigall Town. I'm Cara, the AI assistant. This call may be recorded and transcribed. How can I help you today?";
+      "Hello, you're through to Kav-an-aw SuperValu. I'm Cara, the AI assistant. This call may be recorded and transcribed. How can I help you today?";
     const out = prepareHardcodedSpeechForTts(greeting, {
       greeting: true,
       greetingCommaFlow: false,
       greetingRetailOpening: true,
     });
-    assert.match(out, /Hello, you're through to Kavanaghs SuperValu Doneigall Town<break time="240ms"\/> I'm Kara, the AI assistant/);
+    assert.match(out, /Hello, you're through to Kav-an-aw SuperValu<break time="240ms"\/> I'm Kara, the AI assistant/);
     assert.match(out, /<break time="240ms"\/> This call may be recorded and transcribed/);
     assert.match(out, /<break time="240ms"\/> How can I help you today\?/);
     assert.doesNotMatch(out, /<break time="480ms"\/>/);

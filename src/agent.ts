@@ -124,6 +124,7 @@ import {
   callerSoundsLikeOpenHoursQuestion,
   formatStructuredHoursForLivePrompt,
 } from './lib/retail_hours.js';
+import { shouldCloseRetailCallWhenCallerDone } from './lib/retail_call_close.js';
 import {
   getOrgForCall,
   getSendableBusinessFiles,
@@ -705,6 +706,7 @@ export default defineAgent({
         demoScenarioBeat: 0,
         demoCallerReadyToClose: false,
         retailOpeningComplete: conversationalRetailLine,
+        retailSubstantiveExchangeComplete: false,
       },
       disclosureConfirmed: conversationalRetailLine
         ? true
@@ -1474,6 +1476,7 @@ export default defineAgent({
         );
       }
       if (!testCall) {
+        maybeCloseRetailCallWhenCallerDone(text);
         maybeCloseAfterAnythingElse(text);
         scheduleCallerReplyNudge();
       }
@@ -1514,13 +1517,9 @@ export default defineAgent({
       }
     };
 
-    const maybeCloseAfterAnythingElse = (text: string) => {
+    const performWarmProgrammaticClose = () => {
       const flags = session.userData.sessionFlags;
-      if (testCall || !flags.askedAnythingElse || !callerWindingDownCall(text)) return;
-      if (flags.bookingLinkSendInFlight) return;
       if (flags.endPhoneCallUsed || flags.closingCall) return;
-
-      flags.callerRespondedAfterAnythingElse = true;
       flags.closingCall = true;
       clearAllGuardTimers();
       try {
@@ -1531,21 +1530,39 @@ export default defineAgent({
       void (async () => {
         try {
           const closingLine = buildWarmCallClosingLine(
-                {
-                  name: org.name,
-                  greeting: org.greeting,
-                },
-                callSidAttr ?? undefined,
-              );
+            {
+              name: org.name,
+              greeting: org.greeting,
+            },
+            callSidAttr ?? undefined,
+          );
           const handle = sayPrepared(session, closingLine, {
             allowInterruptions: false,
           });
           await waitForSpeechHandlePlayout(handle);
           await disconnectCallerLeg(session, session.userData, async () => {});
         } catch (e) {
-          console.error('[AgentSession] auto close after anything-else failed', e);
+          console.error('[AgentSession] warm programmatic close failed', e);
         }
       })();
+    };
+
+    const maybeCloseRetailCallWhenCallerDone = (text: string) => {
+      if (testCall || !conversationalRetailLine) return;
+      const flags = session.userData.sessionFlags;
+      if (!shouldCloseRetailCallWhenCallerDone(text, flags)) return;
+      flags.callerRespondedAfterAnythingElse = true;
+      performWarmProgrammaticClose();
+    };
+
+    const maybeCloseAfterAnythingElse = (text: string) => {
+      const flags = session.userData.sessionFlags;
+      if (testCall || !flags.askedAnythingElse || !callerWindingDownCall(text)) return;
+      if (flags.bookingLinkSendInFlight) return;
+      if (flags.endPhoneCallUsed || flags.closingCall) return;
+
+      flags.callerRespondedAfterAnythingElse = true;
+      performWarmProgrammaticClose();
     };
 
     const gracefulDisconnect = () => {
@@ -1838,6 +1855,12 @@ export default defineAgent({
 
       const flags = session.userData.sessionFlags;
       if (role === 'assistant' && text.length > 3 && !assistantTextSoundsLikeFakeHangup(text)) {
+        if (
+          conversationalRetailLine &&
+          !lineMatchesGreeting(text, playbackGreetingText)
+        ) {
+          flags.retailSubstantiveExchangeComplete = true;
+        }
         if (assistantAwaitingCallerReply(text)) {
           callerAwaitingReply = true;
         } else {

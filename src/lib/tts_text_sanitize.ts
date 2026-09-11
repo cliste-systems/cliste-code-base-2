@@ -43,6 +43,7 @@ const LEADING_ACK_BEFORE_NAME =
 const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
  [/\bHello Cara\b/gi, 'Hello Kara'],
  [/\bCara\b/g, 'Kara'],
+ [/\bKavanaghs\b/gi, 'Kav-an-aw'],
  [/\bFresha\b/gi, 'Fresh-ah'],
  [/\bshellac\b/gi, 'shel-lack'],
  [/\bkeratin\b/gi, 'care-ah-tin'],
