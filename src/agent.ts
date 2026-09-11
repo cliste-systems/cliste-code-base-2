@@ -78,6 +78,7 @@ import {
   loadDemoScenarios,
 } from './lib/demo_scenarios_loader.js';
 import { persistTestCallReportFromWorker } from './lib/persist_test_call_report.js';
+import { buildDemoCallClosingLine } from './lib/natural_phrasing.js';
 import { buildDemoPersonaGreeting, DEMO_LINE_OPENING_PAUSE_MS, pickCallPersona, type CallPersona } from './lib/persona.js';
 import { resolveSpokenBusinessName } from './lib/spoken_business_name.js';
 import { orgVerticalLabel } from './lib/org_vertical.js';
@@ -87,8 +88,10 @@ import {
   assistantAwaitingCallerReply,
   assistantClaimsLinkWasSent,
   callerAskedNewQuestion,
+  callerExplicitlyRequestedHangup,
   callerPivotedFromSmsConsent,
   callerSaidNothingElse,
+  callerSoundsLikeAffirmativeConsent,
   callerWindingDownCall,
   assistantSoundsLikeCorporateAssist,
 } from './lib/speech_triggers.js';
@@ -657,6 +660,7 @@ export default defineAgent({
         likelySttGarble: false,
         demoScenarioSlug: null,
         demoScenarioBeat: 0,
+        demoCallerReadyToClose: false,
       },
       disclosureConfirmed: greetingIncludesAiDisclosure(greetingText),
       demoLine: testCall,
@@ -1303,6 +1307,12 @@ export default defineAgent({
             snippet: text.slice(0, 120),
           });
         }
+        if (
+          !callerSoundsLikeAffirmativeConsent(text) &&
+          (callerWindingDownCall(text) || callerExplicitlyRequestedHangup(text))
+        ) {
+          flags.demoCallerReadyToClose = true;
+        }
       }
       if (
         org.niche === 'retail' &&
@@ -1348,12 +1358,19 @@ export default defineAgent({
       if (!testCall) {
         maybeCloseAfterAnythingElse(text);
         scheduleCallerReplyNudge();
+      } else if (session.userData.sessionFlags.demoCallerReadyToClose) {
+        maybeCloseDemoCall();
       }
       return true;
     };
 
     const resetClosePhaseIfCallerContinues = (text: string) => {
       const flags = session.userData.sessionFlags;
+      if (flags.demoCallerReadyToClose && (callerAskedNewQuestion(text) || text.trim().length > 14)) {
+        if (!callerWindingDownCall(text) && !callerExplicitlyRequestedHangup(text)) {
+          flags.demoCallerReadyToClose = false;
+        }
+      }
       if (!flags.askedAnythingElse && !flags.awaitingAnythingElseReply) return;
       if (callerSaidNothingElse(text)) return;
       if (callerAskedNewQuestion(text) || text.trim().length > 10) {
@@ -1411,6 +1428,31 @@ export default defineAgent({
           await disconnectCallerLeg(session, session.userData, async () => {});
         } catch (e) {
           console.error('[AgentSession] auto close after anything-else failed', e);
+        }
+      })();
+    };
+
+    const maybeCloseDemoCall = () => {
+      const flags = session.userData.sessionFlags;
+      if (!testCall || !flags.demoCallerReadyToClose) return;
+      if (flags.endPhoneCallUsed || flags.closingCall) return;
+
+      flags.closingCall = true;
+      clearAllGuardTimers();
+      try {
+        session.interrupt();
+      } catch {
+        /* ignore */
+      }
+      void (async () => {
+        try {
+          const handle = sayPrepared(session, buildDemoCallClosingLine(callSidAttr), {
+            allowInterruptions: false,
+          });
+          await waitForSpeechHandlePlayout(handle);
+          await disconnectCallerLeg(session, session.userData, async () => {});
+        } catch (e) {
+          console.error('[AgentSession] auto close demo call failed', e);
         }
       })();
     };
@@ -1754,6 +1796,25 @@ export default defineAgent({
         text.replace(/\?/g, '').trim().length > 80
       ) {
         diag.push('warn', 'premature_anything_else', { snippet: text.slice(0, 120) });
+      }
+
+      if (
+        testCall &&
+        role === 'assistant' &&
+        !flags.endPhoneCallUsed &&
+        !flags.awaitingAnythingElseReply &&
+        assistantTextSoundsLikeTerminalHangup(text)
+      ) {
+        clearGoodbyeForceTimer();
+        goodbyeForceTimer = setTimeout(() => {
+          goodbyeForceTimer = null;
+          if (session.userData.sessionFlags.endPhoneCallUsed) return;
+          void (async () => {
+            await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
+            if (session.userData.sessionFlags.endPhoneCallUsed) return;
+            await disconnectCallerLeg(session, session.userData, async () => {});
+          })();
+        }, 700);
       }
 
       if (

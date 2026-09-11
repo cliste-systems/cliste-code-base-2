@@ -64,8 +64,10 @@ describe('demo conversational line', () => {
       openingGreetingDelivered: true,
     });
 
+    assert.match(prompt, /Ending calls/i);
     assert.match(prompt, /that's all/i);
     assert.match(prompt, /endPhoneCall/i);
+    assert.match(prompt, /does not hang up/i);
     assert.match(prompt, /No real business facts/i);
   });
 });

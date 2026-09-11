@@ -58,6 +58,8 @@ export type CaraSessionFlags = {
   demoScenarioSlug?: string | null;
   /** 1-based beat index within the active demo playbook (1–4) — diagnostics only. */
   demoScenarioBeat?: number;
+  /** Hello Cara demo — caller sounded finished; programmatic close may run. */
+  demoCallerReadyToClose?: boolean;
 };
 
 export type CaraAgentUserData = {

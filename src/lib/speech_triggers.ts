@@ -80,6 +80,11 @@ export function callerWindingDownCall(text: string): boolean {
     return true;
   }
   if (callerExplicitlyRequestedHangup(text)) return true;
+  if (
+    /\b(no you'?re grand|you'?re grand|i'?m sorted|im sorted|happy enough|sorted for now)\b/.test(t)
+  ) {
+    return true;
+  }
   return /\b(thanks|thank you|cheers)\b/.test(t) && callerSaidNothingElse(text);
 }
 
