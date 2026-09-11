@@ -87,12 +87,20 @@ export function assistantTextSoundsLikeTerminalHangup(text: string): boolean {
 
 /** Demo conversational farewell — auto-hangup when LLM forgets endPhoneCall. */
 export function assistantTextSoundsLikeDemoFarewell(text: string): boolean {
-  if (/\?/.test(text)) return false;
-  const t = normalizeGoodbyeText(text);
-  if (!t) return false;
-  if (t.split(' ').length > 18) return false;
-  if (/\b(i'?ll leave you to it|i'?ll let you go)\b/.test(t)) return true;
-  return /\b(take care(?: now)?|have a good one|chat soon|bye(?: for now)?|goodbye)\s*$/.test(t);
+  const cleaned = text.replace(/\[[^\]]*\][^\n]*/g, '').trim();
+  if (!cleaned || /\?/.test(cleaned)) return false;
+
+  const sentences = cleaned.split(/(?<=[.!?])\s+/).filter((part) => part.trim());
+  for (const sentence of sentences) {
+    const t = normalizeGoodbyeText(sentence);
+    if (!t) continue;
+    if (t.split(' ').length > 18) continue;
+    if (/\b(i'?ll leave you to it|i'?ll let you go)\b/.test(t)) return true;
+    if (/\b(take care(?: now)?|have a good one|chat soon|bye(?: for now)?|goodbye)\s*$/.test(t)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function normalizeGoodbyeText(text: string): string {

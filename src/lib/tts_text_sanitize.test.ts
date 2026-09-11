@@ -160,6 +160,15 @@ describe('tts_text_sanitize', () => {
     assert.doesNotMatch(out, /<break time="320ms"\/>/);
   });
 
+  it('strips bracketed fake tool annotations before TTS', () => {
+    const out = prepareHardcodedSpeechForTts(
+      'Lovely, Martin — thanks for calling Hello Cara today. Have a good day. Bye for now. [tool call] Might need actually invoke tool, not textual.',
+    );
+    assert.doesNotMatch(out, /\[tool call\]/i);
+    assert.doesNotMatch(out, /invoke tool/i);
+    assert.match(out, /Bye for now/i);
+  });
+
   it('cartesia buffer streams sentence chunks without trailing periods', async () => {
     setActiveTtsModelForSanitizer('cartesia/sonic-3');
     const source = new ReadableStream<string>({
@@ -182,7 +191,7 @@ describe('tts_text_sanitize', () => {
     assert.doesNotMatch(chunks.join(' '), /\./);
   });
 
-  it('cartesia multi-sentence replies split without extra chunk pauses', async () => {
+  it('cartesia multi-sentence replies pause between streamed chunks', async () => {
     setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
     const source = new ReadableStream<string>({
       start(controller) {
@@ -201,8 +210,7 @@ describe('tts_text_sanitize', () => {
     }
     assert.equal(chunks.length, 2);
     assert.match(chunks[0]!, /need assistance/);
-    assert.match(chunks[1]!, /^What issue are you experiencing\?/);
-    assert.doesNotMatch(chunks[1]!, /^<break time="380ms"\/>/);
+    assert.match(chunks[1]!, /^<break time="240ms"\/> What issue are you experiencing\?/);
   });
 
   it('buildTtsNodeInputStream routes cartesia by sentence for faster first audio', async () => {

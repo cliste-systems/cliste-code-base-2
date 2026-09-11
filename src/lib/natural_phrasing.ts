@@ -146,16 +146,16 @@ type DemoOutroInput = { name?: string; timePhrase: 'day' | 'evening' };
 const DEMO_OUTRO_BUILDERS: Array<(input: DemoOutroInput) => string> = [
   ({ name, timePhrase }) =>
     name
-      ? `Lovely, ${name} — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`
-      : `Lovely — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`,
-  ({ name, timePhrase }) =>
-    name
       ? `Perfect, ${name} — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`
       : `Perfect — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`,
   ({ name, timePhrase }) =>
     name
       ? `No bother at all, ${name} — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`
       : `No bother at all — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`,
+  ({ name, timePhrase }) =>
+    name
+      ? `Lovely, ${name} — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`
+      : `Lovely — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`,
 ];
 
 /** Programmatic close for the Hello Cara demo line after wind-down. */

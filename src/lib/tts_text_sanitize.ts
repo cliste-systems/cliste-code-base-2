@@ -26,6 +26,9 @@ const URL_PATTERN = /https?:\/\/\S+/gi;
 /** v3 expressive tags — must not be spoken on turbo/flash. */
 const V3_AUDIO_TAG = /\[(?:warm|pause|softly|laughs|\w+)\]/gi;
 
+/** LLM stage directions / fake tool annotations — never spoken aloud. */
+const BRACKET_STAGE_DIRECTION = /\[[^\]]*\][^\n]*/g;
+
 /** Model control tokens (e.g. <|end|>) — strip before TTS. */
 const MODEL_CONTROL_TOKEN = /<\|[^|>]*\|>/g;
 
@@ -147,9 +150,11 @@ function collapseStretchedLetters(text: string): string {
 
 function stripV3TagsUnlessV3(text: string, ttsModel: string): string {
   if (isElevenV3Model(ttsModel)) {
-    return text;
+    return text.replace(BRACKET_STAGE_DIRECTION, (match) =>
+      /\[[^\]]*\s[^\]]*\]/.test(match) || /\btool\s+call\b/i.test(match) ? '' : match,
+    );
   }
-  return text.replace(V3_AUDIO_TAG, '');
+  return text.replace(V3_AUDIO_TAG, '').replace(BRACKET_STAGE_DIRECTION, '');
 }
 
 function insertLeadingAckComma(text: string): string {
@@ -343,13 +348,17 @@ export function bufferCartesiaStreamBySentence(source: ReadableStream<string>): 
     async start(controller) {
       const sentenceStream = bufferTtsStreamBySentence(source, { earlyFlush: false });
       const reader = sentenceStream.getReader();
+      let chunkIndex = 0;
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           const prepared = prepareCartesiaSpeechChunk(value);
           if (prepared.length >= 1) {
-            controller.enqueue(prepared);
+            const withBreak =
+              chunkIndex > 0 ? `${CARTESIA_SENTENCE_BREAK} ${prepared}` : prepared;
+            controller.enqueue(withBreak);
+            chunkIndex += 1;
           }
         }
         controller.close();

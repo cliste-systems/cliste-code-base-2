@@ -93,5 +93,11 @@ describe('end_call goodbye detector', () => {
       assistantTextSoundsLikeDemoFarewell('Is there anything else I can help you with?'),
       false,
     );
+    assert.equal(
+      assistantTextSoundsLikeDemoFarewell(
+        'Lovely, Martin — thanks for calling Hello Cara today. Have a good day. Bye for now. [tool call] Might need actually invoke tool, not textual.',
+      ),
+      true,
+    );
   });
 });

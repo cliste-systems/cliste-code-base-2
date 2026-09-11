@@ -31,7 +31,7 @@ describe('demo conversational line', () => {
 
     assert.match(prompt, /Hello Cara demo line/i);
     assert.match(prompt, /Opening \(greeting already played\)/i);
-    assert.match(prompt, /recording \*\*ask\*/i);
+    assert.match(prompt, /recording \*\*notice\*/i);
     assert.match(prompt, /how are you keeping/i);
     assert.match(prompt, /Scenario playbooks/i);
     assert.match(prompt, /endPhoneCall/i);
@@ -70,6 +70,8 @@ describe('demo conversational line', () => {
     assert.match(prompt, /Bye for now/i);
     assert.match(prompt, /endPhoneCall/i);
     assert.match(prompt, /Never say "grand" or "sound"/i);
+    assert.match(prompt, /Rotate openers/i);
+    assert.match(prompt, /\[tool call\]/i);
     assert.match(prompt, /Never say the word "line" aloud/i);
     assert.match(prompt, /No emojis/i);
     assert.match(prompt, /No real business facts/i);
