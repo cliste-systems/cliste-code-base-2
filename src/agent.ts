@@ -56,7 +56,6 @@ import {
   resolveInferenceSttFallbackModel,
   STT_RECOVERY_SPEECH_LINE,
 } from './lib/resilient_inference_stt.js';
-import { buildResilientSessionTts } from './lib/resilient_inference_tts.js';
 import { prewarmInferenceStt } from './lib/stt_warmup.js';
 import { resolveTtsConfig, CARTESIA_SIOBHAN_VOICE_ID } from './lib/tts_config.js';
 import { greetingIncludesAiDisclosure } from './lib/greeting_compliance.js';
@@ -1055,33 +1054,21 @@ export default defineAgent({
 
     setActiveTtsModelForSanitizer(activeTtsModel);
 
-    const sessionTts = buildResilientSessionTts({
-      useCartesiaInference,
-      cartesia: {
-        model: ttsConfig.model,
-        voiceId: ttsConfig.voiceId,
-        language: ttsConfig.language,
-      },
-      eleven: elevenApiKey
-        ? {
-            apiKey: elevenApiKey,
-            voiceId: elevenVoiceId,
-            model: elevenModel,
-            encoding: elevenEncoding,
-            baseURL: elevenBaseUrl,
-            streamingLatency:
-              Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '1', 10) || 1,
-            voiceSettings: resolveElevenVoiceSettings(),
-          }
-        : null,
-    });
-
-    if (useCartesiaInference && elevenApiKey) {
-      console.info('[agent] resilient_tts', {
-        primary: ttsConfig.model,
-        fallback: 'elevenlabs-http',
-      });
-    }
+    const sessionTts = useCartesiaInference
+      ? new inference.TTS({
+          model: ttsConfig.model,
+          voice: ttsConfig.voiceId,
+          language: ttsConfig.language,
+        })
+      : createElevenLabsTts({
+          apiKey: elevenApiKey,
+          voiceId: elevenVoiceId,
+          model: elevenModel as elevenlabs.TTSModels,
+          encoding: elevenEncoding as elevenlabs.TTSEncoding,
+          baseURL: elevenBaseUrl,
+          streamingLatency: Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '1', 10) || 1,
+          voiceSettings: resolveElevenVoiceSettings(),
+        });
 
     const session = new voice.AgentSession<CaraAgentUserData>({
       stt: sessionStt,
