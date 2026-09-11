@@ -65,11 +65,11 @@ describe('demo conversational line', () => {
     });
 
     assert.match(prompt, /Ending calls/i);
-    assert.match(prompt, /that's all/i);
+    assert.match(prompt, /is that everything/i);
+    assert.match(prompt, /thanks for calling Hello Cara today/i);
+    assert.match(prompt, /Bye for now/i);
     assert.match(prompt, /endPhoneCall/i);
-    assert.match(prompt, /does not hang up/i);
-    assert.match(prompt, /adapt, never copy verbatim/i);
-    assert.match(prompt, /was that everything/i);
+    assert.match(prompt, /Never say "grand" or "sound"/i);
     assert.match(prompt, /Never say the word "line" aloud/i);
     assert.match(prompt, /No emojis/i);
     assert.match(prompt, /No real business facts/i);

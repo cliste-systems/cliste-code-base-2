@@ -19,6 +19,7 @@ import {
   callerSoundsLikeSocialChitchat,
   callerSoundsLikeVagueDemoOpening,
   callerWindingDownCall,
+  demoCallerReadyForClose,
 } from './speech_triggers.js';
 
 describe('speech_triggers', () => {
@@ -188,5 +189,24 @@ describe('speech_triggers', () => {
       true,
     );
     assert.equal(assistantSoundsLikeCorporateAssist("I'm good thanks — yourself?"), false);
+  });
+
+  it('gates demo programmatic close on wind-down confirmation', () => {
+    assert.equal(
+      demoCallerReadyForClose("Yeah, that's fine", { awaitingAnythingElseReply: false }),
+      false,
+    );
+    assert.equal(
+      demoCallerReadyForClose("That's all, thanks", { awaitingAnythingElseReply: false }),
+      true,
+    );
+    assert.equal(
+      demoCallerReadyForClose('Yeah', { awaitingAnythingElseReply: true, askedAnythingElse: true }),
+      true,
+    );
+    assert.equal(
+      demoCallerReadyForClose('Thanks', { awaitingAnythingElseReply: false }),
+      false,
+    );
   });
 });

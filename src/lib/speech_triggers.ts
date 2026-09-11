@@ -88,6 +88,31 @@ export function callerWindingDownCall(text: string): boolean {
   return /\b(thanks|thank you|cheers)\b/.test(t) && callerSaidNothingElse(text);
 }
 
+/** Demo programmatic close — after wind-down check or a clear finish signal. */
+export function demoCallerReadyForClose(
+  text: string,
+  flags: { askedAnythingElse?: boolean; awaitingAnythingElseReply?: boolean },
+): boolean {
+  if (callerExplicitlyRequestedHangup(text)) return true;
+  if (callerSaidNothingElse(text)) return true;
+
+  const t = text
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  if (/\b(i'?m sorted|im sorted|that'?s everything|thats everything)\b/.test(t)) return true;
+  if (/\b(bye|goodbye)\b/.test(t) && t.split(' ').length <= 8) return true;
+
+  if (flags.awaitingAnythingElseReply || flags.askedAnythingElse) {
+    if (callerSoundsLikeAffirmativeConsent(text)) return true;
+    if (callerWindingDownCall(text)) return true;
+  }
+
+  return false;
+}
+
 /** Caller wants human/phone booking instead of the SMS link. */
 export function callerAskedPhoneOrHumanBooking(text: string): boolean {
   const t = text

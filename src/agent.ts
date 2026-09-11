@@ -94,6 +94,7 @@ import {
   callerSaidNothingElse,
   callerSoundsLikeAffirmativeConsent,
   callerWindingDownCall,
+  demoCallerReadyForClose,
   assistantSoundsLikeCorporateAssist,
 } from './lib/speech_triggers.js';
 import {
@@ -1308,10 +1309,7 @@ export default defineAgent({
             snippet: text.slice(0, 120),
           });
         }
-        if (
-          !callerSoundsLikeAffirmativeConsent(text) &&
-          (callerWindingDownCall(text) || callerExplicitlyRequestedHangup(text))
-        ) {
+        if (demoCallerReadyForClose(text, flags)) {
           flags.demoCallerReadyToClose = true;
         }
       }
@@ -1452,7 +1450,11 @@ export default defineAgent({
             .map((part) => part.line.slice('Caller: '.length));
           const handle = sayPrepared(
             session,
-            buildDemoCallClosingLine(callSidAttr, inferDemoCallerFirstName(callerLines)),
+            buildDemoCallClosingLine(
+              callSidAttr,
+              inferDemoCallerFirstName(callerLines),
+              localHour,
+            ),
             {
               allowInterruptions: false,
             },

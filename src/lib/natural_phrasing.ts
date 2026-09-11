@@ -36,6 +36,7 @@ export function buildSocialChitchatReply(seed = ''): string {
 }
 
 const WIND_DOWN_PROMPTS = [
+  'So, is that everything for you?',
   'Is that everything for you?',
   'Can I help with anything else at all?',
   'Are you all sorted?',
@@ -131,32 +132,49 @@ export function inferDemoCallerFirstName(callerLines: string[]): string | null {
   return null;
 }
 
-const DEMO_CLOSING_LINES = [
-  'Grand — lovely chatting. Take care now.',
-  'No bother — I\'ll let you go. Have a good one.',
-  'Sound — glad that helped. Take care.',
-  'Ah grand — I\'ll leave you to it. Have a good one.',
-  'Lovely — chat soon. Take care.',
-] as const;
+const DEMO_OUTRO_OPENERS = ['Lovely', 'Perfect', 'No bother at all'] as const;
 
-const DEMO_CLOSING_LINES_WITH_NAME = [
-  (name: string) => `Grand ${name} — lovely chatting. Take care now.`,
-  (name: string) => `No bother ${name} — I'll let you go. Have a good one.`,
-  (name: string) => `Sound — glad that helped, ${name}. Take care.`,
-  (name: string) => `Ah ${name} — I'll leave you to it. Have a good one.`,
-  (name: string) => `Lovely ${name} — chat soon. Take care.`,
-] as const;
+function demoOutroTimePhrase(localHour?: number): 'day' | 'evening' {
+  if (localHour != null && Number.isFinite(localHour) && localHour >= 17) {
+    return 'evening';
+  }
+  return 'day';
+}
+
+type DemoOutroInput = { name?: string; timePhrase: 'day' | 'evening' };
+
+const DEMO_OUTRO_BUILDERS: Array<(input: DemoOutroInput) => string> = [
+  ({ name, timePhrase }) =>
+    name
+      ? `Lovely, ${name} — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`
+      : `Lovely — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`,
+  ({ name, timePhrase }) =>
+    name
+      ? `Perfect, ${name} — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`
+      : `Perfect — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`,
+  ({ name, timePhrase }) =>
+    name
+      ? `No bother at all, ${name} — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`
+      : `No bother at all — thanks for calling Hello Cara today. Have a good ${timePhrase}. Bye for now.`,
+];
 
 /** Programmatic close for the Hello Cara demo line after wind-down. */
-export function buildDemoCallClosingLine(seed = '', callerName?: string | null): string {
-  const name = callerName?.trim();
-  if (name) {
-    const idx = pickIndex(`${seed}:${name}`, DEMO_CLOSING_LINES_WITH_NAME.length);
-    return DEMO_CLOSING_LINES_WITH_NAME[idx]!(name);
-  }
-  const idx = pickIndex(seed.trim() || String(Date.now()), DEMO_CLOSING_LINES.length);
-  return DEMO_CLOSING_LINES[idx]!;
+export function buildDemoCallClosingLine(
+  seed = '',
+  callerName?: string | null,
+  localHour?: number,
+): string {
+  const name = callerName?.trim() || undefined;
+  const timePhrase = demoOutroTimePhrase(localHour);
+  const idx = pickIndex(
+    name ? `${seed}:${name}:${timePhrase}` : `${seed}:${timePhrase}`,
+    DEMO_OUTRO_BUILDERS.length,
+  );
+  return DEMO_OUTRO_BUILDERS[idx]!({ name, timePhrase });
 }
+
+/** @internal exported for tests */
+export { demoOutroTimePhrase };
 
 /** Demo wrap-beat question counts as wind-down for close flow. */
 export function assistantAskedDemoWrap(text: string): boolean {

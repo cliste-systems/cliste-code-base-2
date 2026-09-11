@@ -6,6 +6,7 @@ import {
   buildDemoCallClosingLine,
   buildWarmCallClosingLine,
   buildWindDownPrompt,
+  demoOutroTimePhrase,
   inferDemoCallerFirstName,
   softenSpokenFarewell,
 } from './natural_phrasing.js';
@@ -39,11 +40,22 @@ describe('natural_phrasing', () => {
     assert.doesNotMatch(b, /\bbye\b/i);
   });
 
-  it('builds conversational demo closes with optional caller name', () => {
-    assert.match(buildDemoCallClosingLine('seed-a'), /take care|have a good one/i);
-    assert.doesNotMatch(buildDemoCallClosingLine('seed-a'), /thanks for trying Hello Cara/i);
-    assert.match(buildDemoCallClosingLine('seed-a', 'Mary'), /Mary/);
-    assert.match(buildDemoCallClosingLine('seed-a', 'Mary'), /take care|have a good one/i);
+  it('builds Hello Cara outro with name and time of day', () => {
+    const day = buildDemoCallClosingLine('seed-a', 'Abigail', 14);
+    assert.match(day, /Abigail/);
+    assert.match(day, /thanks for calling Hello Cara today/i);
+    assert.match(day, /Have a good day/i);
+    assert.match(day, /Bye for now/i);
+    assert.doesNotMatch(day, /\bgrand\b/i);
+    assert.doesNotMatch(day, /\bsound\b/i);
+
+    const evening = buildDemoCallClosingLine('seed-a', 'Abigail', 18);
+    assert.match(evening, /Have a good evening/i);
+  });
+
+  it('uses day outro before 5pm Dublin hour', () => {
+    assert.equal(demoOutroTimePhrase(16), 'day');
+    assert.equal(demoOutroTimePhrase(17), 'evening');
   });
 
   it('infers demo caller first name from intro lines', () => {
