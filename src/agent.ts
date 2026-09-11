@@ -24,7 +24,7 @@ import {
   countAssistantTranscriptChars,
   estimateCallCostUsd,
 } from './lib/call_cost_estimate.js';
-import { buildSessionStt } from './lib/session_stt.js';
+import { postprocessCallTranscript } from './lib/call_postprocess.js';
 import { insertCallLog, updateCallLogEnrichment } from './lib/call_logs.js';
 import {
   buildCloseDiagnosticsPayload,
@@ -980,19 +980,14 @@ export default defineAgent({
           ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
         };
 
-    const sttFallbackModel =
-      process.env.LIVEKIT_INFERENCE_STT_FALLBACK_MODEL?.trim() ||
-      (conversationalRetailLine ? 'assemblyai/universal-streaming' : null);
-
-    const sessionStt = buildSessionStt({
-      primaryModel: inferenceSttModel,
-      fallbackModel: sttFallbackModel,
+    const sessionStt = new inference.STT({
+      model: inferenceSttModel,
       language: inferenceSttLanguage,
       modelOptions: sttModelOptions,
     });
 
     const pipelineLabel = {
-      stt: sttFallbackModel ? `${inferenceSttModel}+${sttFallbackModel}` : inferenceSttModel,
+      stt: inferenceSttModel,
       sttKeytermCount: sttKeyterms.length,
       sttNeuralTurn: useSttNeuralTurnDetection,
       latencyProfile,
