@@ -12,10 +12,12 @@ export function sayPrepared(
     addToChatCtx?: boolean;
   },
 ): ReturnType<voice.AgentSession<unknown>['say']> {
-  const { greeting, greetingCommaFlow, ttsModel, allowInterruptions, addToChatCtx } = options ?? {};
+  const { greeting, greetingCommaFlow, greetingRetailOpening, ttsModel, allowInterruptions, addToChatCtx } =
+    options ?? {};
   const prepOptions: PrepareHardcodedSpeechOptions = {};
   if (greeting) prepOptions.greeting = true;
   if (greetingCommaFlow !== undefined) prepOptions.greetingCommaFlow = greetingCommaFlow;
+  if (greetingRetailOpening) prepOptions.greetingRetailOpening = true;
   if (ttsModel) prepOptions.ttsModel = ttsModel;
   (session.userData as CaraAgentUserData).preparedSpeechSingleUtteranceNext = true;
   return session.say(prepareHardcodedSpeechForTts(text, prepOptions), {

@@ -27,7 +27,7 @@ describe('resolveAiDisclosure', () => {
   it('skips disclosure on conversational retail opening', () => {
     const result = resolveAiDisclosure({
       greetingText:
-        "Hello, you're through to Kavanaghs SuperValu Donegal Town — I'm Cara, the AI assistant. Who am I speaking to?",
+        "Hello, you're through to Kavanaghs SuperValu Donegal Town. I'm Cara, the AI assistant. Who am I speaking to?",
       niche: 'retail',
       conversationalOpening: true,
     });

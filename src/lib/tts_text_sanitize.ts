@@ -48,6 +48,7 @@ const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
  [/\bkeratin\b/gi, 'care-ah-tin'],
  [/\bGrafton\b/gi, 'Graft-on'],
  [/\bDublin\b/gi, 'Dub-lin'],
+ [/\bDonegal\b/gi, 'Dun-ih-gall'],
  [/\bgarages\b/gi, 'gar-idges'],
  [/\bgarage\b/gi, 'gar-idge'],
  [/\bsalons\b/gi, 'sal-ons'],
@@ -191,6 +192,8 @@ const CARTESIA_SENTENCE_BREAK = '<break time="240ms"/>';
 const CARTESIA_OUTRO_BREAK = '<break time="400ms"/>';
 /** Greeting-only — keep the intro brisk; no comma micro-pauses. */
 const CARTESIA_GREETING_SENTENCE_BREAK = '<break time="160ms"/>';
+/** Kavanaghs-style retail opening — unhurried, clear clauses. */
+const CARTESIA_RETAIL_OPENING_BREAK = '<break time="480ms"/>';
 /** Comma-run-on before a question clause — treat like a sentence boundary. */
 const CARTESIA_COMMA_BEFORE_QUESTION =
   /,\s*(?=(?:want to|would you|what|who|are you|is there|is that|do you|did you|can you|could you|how)\b)/gi;
@@ -223,6 +226,17 @@ function normalizeCartesiaBase(text: string, ttsModel = activeTtsModel): string 
 export function prepareCartesiaGreetingChunk(text: string, ttsModel = activeTtsModel): string {
   let out = normalizeCartesiaBase(text, ttsModel);
   out = out.replace(/([.!?]+)\s*(?=[A-Za-z"'(])/g, `${CARTESIA_GREETING_SENTENCE_BREAK} `);
+  out = out.replace(/[.!]+\s*$/g, '');
+  return out.replace(/\s{2,}/g, ' ').trim();
+}
+
+/** Slower retail store opening — longer pauses between hello, store name, Cara intro, and name ask. */
+export function prepareCartesiaRetailOpeningChunk(text: string, ttsModel = activeTtsModel): string {
+  let out = normalizeCartesiaBase(text, ttsModel);
+  const br = CARTESIA_RETAIL_OPENING_BREAK;
+  out = out.replace(/^Hello,\s*/i, `Hello, ${br} `);
+  out = out.replace(/\s*[—–-]\s*(I'm\b)/i, `. ${br} $1`);
+  out = out.replace(/([.!?]+)\s*(?=[A-Za-z"'(])/g, `${br} `);
   out = out.replace(/[.!]+\s*$/g, '');
   return out.replace(/\s{2,}/g, ' ').trim();
 }
@@ -268,6 +282,8 @@ export type PrepareHardcodedSpeechOptions = {
   greeting?: boolean;
   /** When false, keep sentence breaks for live TTS (less rushed than comma-flow). */
   greetingCommaFlow?: boolean;
+  /** Slower Cartesia pacing for Kavanaghs-style retail opening. */
+  greetingRetailOpening?: boolean;
   ttsModel?: string;
 };
 
@@ -279,7 +295,12 @@ export function prepareHardcodedSpeechForTts(
   const ttsModel = options?.ttsModel ?? activeTtsModel;
   if (options?.greeting) {
     const greeting = prepareGreetingForTts(text, { commaFlow: options.greetingCommaFlow !== false });
-    return isCartesiaInferenceTtsModel(ttsModel) ? prepareCartesiaGreetingChunk(greeting, ttsModel) : greeting;
+    if (isCartesiaInferenceTtsModel(ttsModel)) {
+      return options.greetingRetailOpening
+        ? prepareCartesiaRetailOpeningChunk(greeting, ttsModel)
+        : prepareCartesiaGreetingChunk(greeting, ttsModel);
+    }
+    return greeting;
   }
   const normalized = normalizeTtsChunk(text, ttsModel).trim();
   return isCartesiaInferenceTtsModel(ttsModel) ? prepareCartesiaSpeechChunk(normalized, ttsModel) : normalized;

@@ -76,6 +76,7 @@ import {
   buildRetailConversationalOpening,
   isConversationalRetailLine,
   resolveConversationalRetailBusinessName,
+  RETAIL_LINE_OPENING_PAUSE_MS,
 } from './lib/conversational_retail_line.js';
 import { getActiveCallTestProfile } from './lib/test_profile.js';
 import {
@@ -2371,8 +2372,13 @@ export default defineAgent({
     };
 
     if (playbackGreetingText) {
-      if (demoExperienceStack && DEMO_LINE_OPENING_PAUSE_MS > 0) {
-        await new Promise<void>((resolve) => setTimeout(resolve, DEMO_LINE_OPENING_PAUSE_MS));
+      const openingPauseMs = conversationalRetailLine
+        ? RETAIL_LINE_OPENING_PAUSE_MS
+        : testCall
+          ? DEMO_LINE_OPENING_PAUSE_MS
+          : 0;
+      if (openingPauseMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, openingPauseMs));
       }
       const greetingTtsModel =
         process.env.GREETING_TTS_MODEL?.trim() || activeTtsModel;
@@ -2406,6 +2412,7 @@ export default defineAgent({
         const handle = sayPrepared(session, playbackGreetingText, {
           greeting: true,
           greetingCommaFlow: false,
+          greetingRetailOpening: conversationalRetailLine,
           addToChatCtx: false,
           allowInterruptions: demoExperienceStack,
         });

@@ -273,6 +273,26 @@ describe('tts_text_sanitize', () => {
     assert.doesNotMatch(chunks.join(' '), /\./);
   });
 
+  it('respells Donegal for Irish TTS', () => {
+    const out = prepareHardcodedSpeechForTts('Kavanaghs SuperValu Donegal Town.');
+    assert.match(out, /Dun-ih-gall/i);
+    assert.doesNotMatch(out, /\bDonegal\b/i);
+  });
+
+  it('prepareCartesiaRetailOpeningChunk slows the Kavanaghs intro', () => {
+    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
+    const greeting =
+      "Hello, you're through to Kavanaghs SuperValu Dun-ih-gall Town. I'm Cara, the AI assistant. Who am I speaking to?";
+    const out = prepareHardcodedSpeechForTts(greeting, {
+      greeting: true,
+      greetingCommaFlow: false,
+      greetingRetailOpening: true,
+    });
+    assert.match(out, /Hello, <break time="480ms"\/> you're through to Kavanaghs SuperValu Dun-ih-gall Town/);
+    assert.match(out, /<break time="480ms"\/> I'm Kara, the AI assistant/);
+    assert.match(out, /<break time="480ms"\/> Who am I speaking to\?/);
+  });
+
   it('prepareCartesiaGreetingChunk keeps intro brisk — sentence breaks only', () => {
     setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
     const greeting =

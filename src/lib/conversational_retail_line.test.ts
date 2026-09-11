@@ -20,7 +20,7 @@ describe('conversational_retail_line', () => {
   it('builds a name-first store opening with Cara and AI disclosure', () => {
     assert.equal(
       buildRetailConversationalOpening('Kavanaghs SuperValu Donegal Town'),
-      "Hello, you're through to Kavanaghs SuperValu Donegal Town — I'm Cara, the AI assistant. Who am I speaking to?",
+      "Hello, you're through to Kavanaghs SuperValu Donegal Town. I'm Cara, the AI assistant. Who am I speaking to?",
     );
   });
 
