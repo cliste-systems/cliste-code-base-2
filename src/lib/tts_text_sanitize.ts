@@ -26,6 +26,9 @@ const URL_PATTERN = /https?:\/\/\S+/gi;
 /** v3 expressive tags — must not be spoken on turbo/flash. */
 const V3_AUDIO_TAG = /\[(?:warm|pause|softly|laughs|\w+)\]/gi;
 
+/** Model control tokens (e.g. <|end|>) — strip before TTS. */
+const MODEL_CONTROL_TOKEN = /<\|[^|>]*\|>/g;
+
 /** Tricky terms → TTS-friendly spellings (word-boundary replacements). */
 const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
  [/\bHello Cara\b/gi, 'Hello Kara'],
@@ -141,6 +144,7 @@ function stripV3TagsUnlessV3(text: string, ttsModel: string): string {
 function normalizeTtsChunk(text: string, ttsModel = activeTtsModel): string {
   const stripped = stripV3TagsUnlessV3(
     text
+      .replace(MODEL_CONTROL_TOKEN, '')
       .replace(ALL_CAPS_WORD, (word) => (word === 'AI' ? word : word.toLowerCase()))
       .replace(URL_PATTERN, '')
       .replace(FORBIDDEN_SPOKEN, '')

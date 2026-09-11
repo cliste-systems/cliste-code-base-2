@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  assistantTextSoundsLikeDemoFarewell,
   assistantTextSoundsLikeGoodbye,
   assistantTextSoundsLikeTerminalHangup,
   buildWarmCallClosingLine,
@@ -59,6 +60,27 @@ describe('end_call goodbye detector', () => {
   it('does not match anything-else check (question)', () => {
     assert.equal(
       assistantTextSoundsLikeGoodbye('Is there anything else I can help you with?'),
+      false,
+    );
+  });
+
+  it('detects demo conversational farewells for auto-hangup', () => {
+    assert.equal(
+      assistantTextSoundsLikeDemoFarewell('No bother, Francis — I\'ll leave you to it. Take care.'),
+      true,
+    );
+    assert.equal(
+      assistantTextSoundsLikeDemoFarewell('Thanks, Francis — take care now.'),
+      true,
+    );
+    assert.equal(
+      assistantTextSoundsLikeDemoFarewell(
+        'Lovely — for a salon I can handle calls while you\'re busy and take care of messages.',
+      ),
+      false,
+    );
+    assert.equal(
+      assistantTextSoundsLikeDemoFarewell('Is there anything else I can help you with?'),
       false,
     );
   });

@@ -85,6 +85,16 @@ export function assistantTextSoundsLikeTerminalHangup(text: string): boolean {
   return /^lovely,?\s*thanks for (ringing|calling|trying)\b/.test(t);
 }
 
+/** Demo conversational farewell — auto-hangup when LLM forgets endPhoneCall. */
+export function assistantTextSoundsLikeDemoFarewell(text: string): boolean {
+  if (/\?/.test(text)) return false;
+  const t = normalizeGoodbyeText(text);
+  if (!t) return false;
+  if (t.split(' ').length > 18) return false;
+  if (/\b(i'?ll leave you to it|i'?ll let you go)\b/.test(t)) return true;
+  return /\b(take care(?: now)?|have a good one|chat soon|bye(?: for now)?|goodbye)\s*$/.test(t);
+}
+
 function normalizeGoodbyeText(text: string): string {
   return text
     .replace(/\*+/g, ' ')

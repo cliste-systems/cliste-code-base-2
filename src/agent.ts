@@ -29,6 +29,7 @@ import {
 } from './lib/call_close_diagnostics.js';
 import { createCallDiagnosticSession } from './lib/call_diagnostic_bundle.js';
 import {
+  assistantTextSoundsLikeDemoFarewell,
   assistantTextSoundsLikeFakeHangup,
   assistantTextSoundsLikeGoodbye,
   assistantTextSoundsLikeTerminalHangup,
@@ -741,11 +742,11 @@ export default defineAgent({
       useBuilderDemoStack
         ? process.env.LIVEKIT_TEST_STT_LATENCY_PROFILE?.trim() ||
             process.env.LIVEKIT_STT_LATENCY_PROFILE ||
-            'balanced'
+            'snappy'
         : testCall
           ? process.env.LIVEKIT_TEST_STT_LATENCY_PROFILE?.trim() ||
               process.env.LIVEKIT_STT_LATENCY_PROFILE ||
-              'balanced'
+              'snappy'
           : process.env.LIVEKIT_STT_LATENCY_PROFILE,
     );
     const silenceDefaults = assemblyAiTurnSilenceDefaults(inferenceSttModel, latencyProfile);
@@ -756,14 +757,14 @@ export default defineAgent({
     )
       ? Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '', 10)
       : useBuilderDemoStack
-        ? undefined
+        ? 250
         : endpointDefaults.minDelayMs;
     const endpointMaxMs = Number.isFinite(
       Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '', 10),
     )
       ? Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '', 10)
       : useBuilderDemoStack
-        ? undefined
+        ? Number.parseInt(process.env.LIVEKIT_TEST_ENDPOINTING_MAX_MS ?? '2000', 10)
         : testCall
           ? Number.parseInt(process.env.LIVEKIT_TEST_ENDPOINTING_MAX_MS ?? '1200', 10)
           : endpointDefaults.maxDelayMs;
@@ -1810,7 +1811,7 @@ export default defineAgent({
         role === 'assistant' &&
         !flags.endPhoneCallUsed &&
         !flags.awaitingAnythingElseReply &&
-        assistantTextSoundsLikeTerminalHangup(text)
+        assistantTextSoundsLikeDemoFarewell(text)
       ) {
         clearGoodbyeForceTimer();
         goodbyeForceTimer = setTimeout(() => {

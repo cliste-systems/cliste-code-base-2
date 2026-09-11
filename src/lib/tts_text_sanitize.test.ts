@@ -37,6 +37,12 @@ describe('tts_text_sanitize', () => {
     assert.doesNotMatch(out, /\bbye\b/i);
   });
 
+  it('strips model control tokens before TTS', () => {
+    const out = prepareHardcodedSpeechForTts('No bother — take care. <|end|>');
+    assert.doesNotMatch(out, /<\|/);
+    assert.match(out, /take care/i);
+  });
+
   it('maps is that alright to okay for TTS (avoids drawn-out alright)', () => {
     const out = prepareHardcodedSpeechForTts(
       "I can text you our booking link — is that alright?",
