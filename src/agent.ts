@@ -96,7 +96,7 @@ import {
   shouldArmDemoCloseFromCallerText,
   shouldDropLlmTtsWhileClosing,
 } from './lib/demo_close.js';
-import { buildDemoCallClosingLine, inferDemoCallerFirstName } from './lib/natural_phrasing.js';
+import { buildDemoCallClosingLine, buildWindDownPrompt, inferDemoCallerFirstName } from './lib/natural_phrasing.js';
 import { buildDemoPersonaGreeting, DEMO_LINE_OPENING_PAUSE_MS, pickCallPersona, type CallPersona } from './lib/persona.js';
 import { resolveSpokenBusinessName } from './lib/spoken_business_name.js';
 import { orgVerticalLabel } from './lib/org_vertical.js';
@@ -127,7 +127,10 @@ import {
   callerSoundsLikeOpenHoursQuestion,
   formatStructuredHoursForLivePrompt,
 } from './lib/retail_hours.js';
-import { shouldCloseRetailCallWhenCallerDone } from './lib/retail_call_close.js';
+import {
+  shouldAskRetailWindDownQuestion,
+  shouldCloseRetailCallWhenCallerDone,
+} from './lib/retail_call_close.js';
 import {
   buildRetailAskNameOnlyLine,
   buildRetailCallbackConfirmationLine,
@@ -730,6 +733,7 @@ export default defineAgent({
         ? true
         : greetingIncludesAiDisclosure(greetingText),
       demoLine: testCall,
+      conversationalRetailLine,
       factoryFreshLine,
       ...(callPersona ? { callPersona } : {}),
       ...(endCallTarget ? { endCallTarget } : {}),
@@ -1421,6 +1425,35 @@ export default defineAgent({
       sayPrepared(session, line, { allowInterruptions: true });
     };
 
+    const sayRetailWindDownQuestion = () => {
+      clearCallerReplyNudgeTimer();
+      cancelInFlightReply();
+      bumpReplyTurn('retail_wind_down');
+      const flags = session.userData.sessionFlags;
+      flags.askedAnythingElse = true;
+      flags.awaitingAnythingElseReply = true;
+      flags.callerRespondedAfterAnythingElse = false;
+      flags.anythingElseAskCount += 1;
+      clearAllGuardTimers();
+      sayPrepared(session, buildWindDownPrompt(callSidAttr ?? ''), { allowInterruptions: true });
+    };
+
+    const scheduleRetailForceHangup = (reason: string) => {
+      if (!conversationalRetailLine || testCall) return;
+      if (session.userData.sessionFlags.endPhoneCallUsed) return;
+      clearGoodbyeForceTimer();
+      diag.push('info', 'retail_force_hangup', { reason });
+      goodbyeForceTimer = setTimeout(() => {
+        goodbyeForceTimer = null;
+        if (session.userData.sessionFlags.endPhoneCallUsed) return;
+        void (async () => {
+          await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
+          if (session.userData.sessionFlags.endPhoneCallUsed) return;
+          await disconnectCallerLeg(session, session.userData, async () => {});
+        })();
+      }, 700);
+    };
+
     const tryRetailProgrammaticHoursReply = (
       questionText: string,
       opts?: { correcting?: boolean; apologise?: boolean },
@@ -1556,8 +1589,16 @@ export default defineAgent({
         );
       }
       if (!testCall) {
-        maybeCloseRetailCallWhenCallerDone(text);
-        maybeCloseAfterAnythingElse(text);
+        if (
+          conversationalRetailLine &&
+          shouldAskRetailWindDownQuestion(trimmed, session.userData.sessionFlags)
+        ) {
+          sayRetailWindDownQuestion();
+          handledWithProgrammaticReply = true;
+        } else {
+          maybeCloseRetailCallWhenCallerDone(text);
+          maybeCloseAfterAnythingElse(text);
+        }
         if (!handledWithProgrammaticReply) {
           scheduleCallerReplyNudge();
         }
@@ -1599,9 +1640,12 @@ export default defineAgent({
       }
     };
 
+    let warmCloseStarted = false;
+
     const performWarmProgrammaticClose = () => {
       const flags = session.userData.sessionFlags;
-      if (flags.endPhoneCallUsed || flags.closingCall) return;
+      if (flags.endPhoneCallUsed || warmCloseStarted) return;
+      warmCloseStarted = true;
       flags.closingCall = true;
       clearAllGuardTimers();
       try {
@@ -1641,7 +1685,7 @@ export default defineAgent({
       const flags = session.userData.sessionFlags;
       if (testCall || !flags.askedAnythingElse || !callerWindingDownCall(text)) return;
       if (flags.bookingLinkSendInFlight) return;
-      if (flags.endPhoneCallUsed || flags.closingCall) return;
+      if (flags.endPhoneCallUsed) return;
 
       flags.callerRespondedAfterAnythingElse = true;
       performWarmProgrammaticClose();
@@ -1958,8 +2002,12 @@ export default defineAgent({
         clearAllGuardTimers();
       }
       if (role === 'assistant' && assistantTextSoundsLikeGoodbye(text)) {
-        flags.closingCall = true;
-        clearAllGuardTimers();
+        if (conversationalRetailLine && !testCall && !flags.endPhoneCallUsed) {
+          scheduleRetailForceHangup('assistant_goodbye');
+        } else {
+          flags.closingCall = true;
+          clearAllGuardTimers();
+        }
       }
       if (
         role === 'assistant' &&
@@ -2041,20 +2089,26 @@ export default defineAgent({
         !testCall &&
         role === 'assistant' &&
         !flags.endPhoneCallUsed &&
-        !flags.awaitingAnythingElseReply &&
+        (conversationalRetailLine ||
+          !flags.awaitingAnythingElseReply ||
+          flags.callerRespondedAfterAnythingElse) &&
         assistantTextSoundsLikeTerminalHangup(text) &&
         /\bthanks for (ringing|calling|trying)\b/i.test(text)
       ) {
-        clearGoodbyeForceTimer();
-        goodbyeForceTimer = setTimeout(() => {
-          goodbyeForceTimer = null;
-          if (session.userData.sessionFlags.endPhoneCallUsed) return;
-          void (async () => {
-            await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
+        if (conversationalRetailLine) {
+          scheduleRetailForceHangup('terminal_hangup');
+        } else {
+          clearGoodbyeForceTimer();
+          goodbyeForceTimer = setTimeout(() => {
+            goodbyeForceTimer = null;
             if (session.userData.sessionFlags.endPhoneCallUsed) return;
-            await disconnectCallerLeg(session, session.userData, async () => {});
-          })();
-        }, 700);
+            void (async () => {
+              await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
+              if (session.userData.sessionFlags.endPhoneCallUsed) return;
+              await disconnectCallerLeg(session, session.userData, async () => {});
+            })();
+          }, 700);
+        }
       }
 
       if (!testCall && role === 'assistant' && assistantTextSoundsLikeFakeHangup(text)) {
@@ -2103,6 +2157,14 @@ export default defineAgent({
             out.createdAt,
             `${prefix}${truncateForTranscript(out.output, MAX_TOOL_SNIPPET_CHARS)}`,
           );
+        }
+        if (
+          conversationalRetailLine &&
+          !testCall &&
+          call.name === 'endPhoneCall' &&
+          out?.isError
+        ) {
+          scheduleRetailForceHangup('endPhoneCall_error');
         }
         if (
           conversationalRetailLine &&

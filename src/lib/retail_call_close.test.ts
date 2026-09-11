@@ -1,40 +1,50 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { shouldCloseRetailCallWhenCallerDone } from './retail_call_close.js';
+import {
+  shouldAskRetailWindDownQuestion,
+  shouldCloseRetailCallWhenCallerDone,
+} from './retail_call_close.js';
 
 const baseFlags = {
   retailSubstantiveExchangeComplete: true,
   askedAnythingElse: false,
   awaitingAnythingElseReply: false,
+  callerRespondedAfterAnythingElse: false,
   bookingLinkSendInFlight: false,
-  callbackRequested: false,
-  actionTicketCreated: false,
   endPhoneCallUsed: false,
   closingCall: false,
 };
 
-describe('shouldCloseRetailCallWhenCallerDone', () => {
-  it('closes when caller says that is everything after a substantive exchange', () => {
+describe('retail_call_close', () => {
+  it('asks wind-down before closing when caller sounds finished', () => {
+    assert.equal(
+      shouldAskRetailWindDownQuestion("Well, that's everything I wanted to know.", baseFlags),
+      true,
+    );
     assert.equal(
       shouldCloseRetailCallWhenCallerDone(
         "Well, that's everything I wanted to know.",
         baseFlags,
       ),
-      true,
+      false,
     );
   });
 
-  it('closes on imminent close phrases', () => {
-    assert.equal(
-      shouldCloseRetailCallWhenCallerDone("No thanks, that's everything", baseFlags),
-      true,
-    );
+  it('closes after wind-down was asked and caller says no', () => {
+    const afterWindDown = {
+      ...baseFlags,
+      askedAnythingElse: true,
+      awaitingAnythingElseReply: true,
+      callerRespondedAfterAnythingElse: true,
+    };
+    assert.equal(shouldCloseRetailCallWhenCallerDone('No, that is everything, thanks', afterWindDown), true);
+    assert.equal(shouldAskRetailWindDownQuestion('No, that is everything, thanks', afterWindDown), false);
   });
 
-  it('does not close before Cara has answered something', () => {
+  it('does not ask wind-down before Cara has answered something', () => {
     assert.equal(
-      shouldCloseRetailCallWhenCallerDone("That's everything", {
+      shouldAskRetailWindDownQuestion("That's everything", {
         ...baseFlags,
         retailSubstantiveExchangeComplete: false,
       }),
@@ -42,33 +52,33 @@ describe('shouldCloseRetailCallWhenCallerDone', () => {
     );
   });
 
-  it('does not close when anything-else flow is already active', () => {
+  it('does not close when wind-down was asked but caller has not answered yet', () => {
     assert.equal(
-      shouldCloseRetailCallWhenCallerDone('No', {
+      shouldCloseRetailCallWhenCallerDone('Okay', {
         ...baseFlags,
         askedAnythingElse: true,
+        awaitingAnythingElseReply: true,
       }),
       false,
     );
+    assert.equal(shouldCloseRetailCallWhenCallerDone('No', {
+      ...baseFlags,
+      askedAnythingElse: true,
+      awaitingAnythingElseReply: true,
+    }), true);
   });
 
   it('does not close when caller asks a new question', () => {
     assert.equal(
       shouldCloseRetailCallWhenCallerDone(
         "That's everything — can you repeat the number?",
-        baseFlags,
+        { ...baseFlags, askedAnythingElse: true, callerRespondedAfterAnythingElse: true },
       ),
       false,
     );
   });
 
-  it('does not close mid callback capture', () => {
-    assert.equal(
-      shouldCloseRetailCallWhenCallerDone("That's all, thanks", {
-        ...baseFlags,
-        callbackRequested: true,
-      }),
-      false,
-    );
+  it('closes on explicit hang-up without wind-down', () => {
+    assert.equal(shouldCloseRetailCallWhenCallerDone('Please hang up now', baseFlags), true);
   });
 });

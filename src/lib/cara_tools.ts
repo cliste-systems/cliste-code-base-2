@@ -87,6 +87,8 @@ export type CaraAgentUserData = {
   disclosureConfirmed: boolean;
   /** Hello Cara demo line — stricter tool and closing rules. */
   demoLine?: boolean;
+  /** Kavanaghs-style retail line — programmatic wind-down and close. */
+  conversationalRetailLine?: boolean;
   /** Vanilla Cartesia Siobhan baseline — no demo orchestrator or TTS sanitization. */
   factoryFreshLine?: boolean;
   /** Next session.say() should be one Cartesia synthesis (programmatic lines). */
@@ -841,6 +843,28 @@ export class CaraTools {
             }
           },
         );
+      }
+      if (ud.conversationalRetailLine) {
+        if (
+          !ud.sessionFlags.askedAnythingElse &&
+          !ud.sessionFlags.callerRespondedAfterAnythingElse
+        ) {
+          return {
+            ok: false,
+            message:
+              'Ask if there is anything else you can help with first. Wait for their answer, then give one warm thanks-for-calling line and call endPhoneCall.',
+          };
+        }
+        if (
+          ud.sessionFlags.awaitingAnythingElseReply &&
+          !ud.sessionFlags.callerRespondedAfterAnythingElse
+        ) {
+          return {
+            ok: false,
+            message:
+              'Wait for the caller to answer your anything-else question before invoking endPhoneCall.',
+          };
+        }
       }
       if (
         (ud.sessionFlags.askedAnythingElse || ud.sessionFlags.awaitingAnythingElseReply) &&
