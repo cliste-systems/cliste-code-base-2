@@ -24,6 +24,17 @@ describe('resolveAiDisclosure', () => {
     assert.equal(result.text, '');
   });
 
+  it('skips disclosure on conversational retail opening', () => {
+    const result = resolveAiDisclosure({
+      greetingText:
+        "Hello, you're through to Kavanaghs SuperValu Donegal Town — I'm Cara, the AI assistant. Who am I speaking to?",
+      niche: 'retail',
+      conversationalOpening: true,
+    });
+    assert.equal(result.disabled, true);
+    assert.equal(result.text, '');
+  });
+
   it('never uses salon or booking disclosure copy', () => {
     const prev = process.env.CLISTE_AI_DISCLOSURE_OPENING;
     process.env.CLISTE_AI_DISCLOSURE_OPENING = 'on';

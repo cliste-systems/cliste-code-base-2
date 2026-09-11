@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import { resolveSpokenBusinessName } from './spoken_business_name.js';
 
 describe('resolveSpokenBusinessName', () => {
-  it('drops trailing town from retail banner names', () => {
+  it('drops trailing town from retail banner names by default', () => {
     assert.equal(
       resolveSpokenBusinessName({
         name: "Murphy's SuperValu Killarney",
@@ -12,6 +12,16 @@ describe('resolveSpokenBusinessName', () => {
           "You're through to Murphy's SuperValu Killarney — I'm Cara, the AI assistant.",
       }),
       "Murphy's SuperValu",
+    );
+  });
+
+  it('keeps location when preserveRetailLocation is set', () => {
+    assert.equal(
+      resolveSpokenBusinessName({
+        name: 'Kavanaghs SuperValu Donegal Town',
+        preserveRetailLocation: true,
+      }),
+      'Kavanaghs SuperValu Donegal Town',
     );
   });
 

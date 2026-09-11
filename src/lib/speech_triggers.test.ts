@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { callerSoundsLikeImminentClose } from './demo_close.js';
 import {
   assistantAskedAnythingElse,
   assistantAskedServiceIntake,
@@ -207,6 +208,14 @@ describe('speech_triggers', () => {
     );
     assert.equal(
       demoCallerReadyForClose('Thanks', { awaitingAnythingElseReply: false }),
+      false,
+    );
+  });
+
+  it('detects imminent interim close phrases for early STT arm', () => {
+    assert.equal(callerSoundsLikeImminentClose("No thanks, that's everything"), true);
+    assert.equal(
+      callerSoundsLikeImminentClose("That's everything — can you repeat the number?"),
       false,
     );
   });

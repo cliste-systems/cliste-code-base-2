@@ -5,6 +5,8 @@ export type SpokenBusinessNameInput = {
   name: string;
   greeting?: string | null;
   agentBaseTown?: string | null;
+  /** Keep location suffix on retail banner names (e.g. SuperValu Donegal Town). */
+  preserveRetailLocation?: boolean;
 };
 
 /** Name locals would say on the phone — trade name, not "Owner's Banner Town". */
@@ -15,7 +17,9 @@ export function resolveSpokenBusinessName(input: SpokenBusinessNameInput): strin
 
   spoken = stripCountySuffix(spoken);
   spoken = stripSuffixToken(spoken, input.agentBaseTown);
-  spoken = stripTrailingTownAfterRetailBanner(spoken);
+  if (!input.preserveRetailLocation) {
+    spoken = stripTrailingTownAfterRetailBanner(spoken);
+  }
 
   return spoken.trim() || fallback || 'us';
 }

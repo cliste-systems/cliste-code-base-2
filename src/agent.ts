@@ -72,6 +72,11 @@ import {
 } from './lib/pipeline_incident.js';
 import { isTestCall } from './lib/test_call.js';
 import { isFactoryFreshLine } from './lib/factory_fresh_line.js';
+import {
+  buildRetailConversationalOpening,
+  isConversationalRetailLine,
+  resolveConversationalRetailBusinessName,
+} from './lib/conversational_retail_line.js';
 import { getActiveCallTestProfile } from './lib/test_profile.js';
 import {
   detectDemoScenario,
@@ -82,6 +87,13 @@ import {
   loadDemoScenarios,
 } from './lib/demo_scenarios_loader.js';
 import { persistTestCallReportFromWorker } from './lib/persist_test_call_report.js';
+import {
+  drainReadableStream,
+  emptyTextStream,
+  settleInterruptedAgentSpeech,
+  shouldArmDemoCloseFromCallerText,
+  shouldDropLlmTtsWhileClosing,
+} from './lib/demo_close.js';
 import { buildDemoCallClosingLine, inferDemoCallerFirstName } from './lib/natural_phrasing.js';
 import { buildDemoPersonaGreeting, DEMO_LINE_OPENING_PAUSE_MS, pickCallPersona, type CallPersona } from './lib/persona.js';
 import { resolveSpokenBusinessName } from './lib/spoken_business_name.js';
@@ -97,7 +109,6 @@ import {
   callerSaidNothingElse,
   callerSoundsLikeAffirmativeConsent,
   callerWindingDownCall,
-  demoCallerReadyForClose,
   assistantSoundsLikeCorporateAssist,
 } from './lib/speech_triggers.js';
 import {
@@ -402,6 +413,13 @@ export default defineAgent({
       (isTestCall(calledNumber) ||
         isTestCall(routing.phone) ||
         isTestCall(org.phone_number));
+    const conversationalRetailLine =
+      !factoryFreshLine &&
+      !testCall &&
+      (isConversationalRetailLine(calledNumber) ||
+        isConversationalRetailLine(routing.phone) ||
+        isConversationalRetailLine(org.phone_number));
+    const demoExperienceStack = testCall || conversationalRetailLine;
     const testProfile =
       factoryFreshLine || !testCall ? null : await getActiveCallTestProfile();
     const demoScenarios: DemoScenario[] = testCall ? await loadDemoScenarios() : [];
@@ -414,6 +432,11 @@ export default defineAgent({
       console.info('[agent] test_call', {
         calledNumber: maskPhone(calledNumber),
         profile: testProfile?.name ?? '(none)',
+      });
+    } else if (conversationalRetailLine) {
+      console.info('[agent] conversational_retail_line', {
+        calledNumber: maskPhone(calledNumber),
+        orgSlug: org.slug,
       });
     }
     const blockResult = await checkCallerBlocklist({
@@ -524,15 +547,24 @@ export default defineAgent({
       ...(localHour != null && Number.isFinite(localHour) ? { localHour } : {}),
     });
     const useDemoPersonaGreeting = testCall && !factoryFreshLine;
+    const useConversationalOpening = useDemoPersonaGreeting || conversationalRetailLine;
     const playbackGreetingText = factoryFreshLine
       ? greetingText || "Hello, you're through to Cara."
       : useDemoPersonaGreeting && callPersona
         ? buildDemoPersonaGreeting(callPersona, personaSeed)
-        : greetingText;
-    const skipGreetingCache = useDemoPersonaGreeting && Boolean(playbackGreetingText);
+        : conversationalRetailLine
+          ? buildRetailConversationalOpening(
+              resolveConversationalRetailBusinessName({
+                name: org.name,
+                greeting: org.greeting,
+              }),
+            )
+          : greetingText;
+    const skipGreetingCache = useConversationalOpening && Boolean(playbackGreetingText);
     console.info('[agent] call_persona', {
       variant: callPersona.variant,
       demoLine: testCall,
+      conversationalRetailLine,
       greetingPreview: playbackGreetingText.slice(0, 80),
       personaGreeting: useDemoPersonaGreeting,
     });
@@ -548,9 +580,10 @@ export default defineAgent({
       ttsModel: activeTtsModel,
       niche: org.niche,
       businessType: org.agent_business_type,
-      openingGreetingDelivered: Boolean(playbackGreetingText),
+      openingGreetingDelivered: useConversationalOpening ? false : Boolean(playbackGreetingText),
       structuredHoursBlock,
       demoMode: testCall && !factoryFreshLine,
+      conversationalRetailMode: conversationalRetailLine,
       ...(callPersona ? { persona: callPersona } : {}),
       ...(testCall
         ? { demoPlaybookBlock: demoPlaybookBlockFromScenarios(demoScenarios) }
@@ -667,7 +700,9 @@ export default defineAgent({
         demoScenarioBeat: 0,
         demoCallerReadyToClose: false,
       },
-      disclosureConfirmed: greetingIncludesAiDisclosure(greetingText),
+      disclosureConfirmed: conversationalRetailLine
+        ? false
+        : greetingIncludesAiDisclosure(greetingText),
       demoLine: testCall,
       factoryFreshLine,
       ...(callPersona ? { callPersona } : {}),
@@ -685,13 +720,13 @@ export default defineAgent({
     const inferenceSttModel =
       testProfile?.stt_model?.trim() ||
       process.env.LIVEKIT_INFERENCE_STT_MODEL?.trim() ||
-      (testCall ? 'assemblyai/universal-3-5-pro' : 'assemblyai/u3-rt-pro');
+      (demoExperienceStack ? 'assemblyai/universal-3-5-pro' : 'assemblyai/u3-rt-pro');
     const inferenceSttLanguage = process.env.LIVEKIT_INFERENCE_STT_LANGUAGE?.trim() || 'en';
     const inferenceLlmModel =
       testProfile?.llm_model?.trim() ||
       process.env.LIVEKIT_INFERENCE_LLM_MODEL?.trim() ||
-      (testCall ? 'openai/gpt-5.6-luna' : 'openai/gpt-4.1');
-    const useBuilderDemoStack = testCall;
+      (demoExperienceStack ? 'openai/gpt-5.6-luna' : 'openai/gpt-4.1');
+    const useBuilderDemoStack = demoExperienceStack;
 
     const elevenVoiceId = activeVoiceId;
     const elevenEncoding = process.env.ELEVEN_TTS_ENCODING?.trim() || 'pcm_24000';
@@ -799,7 +834,7 @@ export default defineAgent({
 
     const interruptionMinMs = Number.parseInt(
       process.env.LIVEKIT_INTERRUPTION_MIN_MS ??
-        (testCall ? '450' : '200'),
+        (demoExperienceStack ? '450' : '200'),
       10,
     );
     const interruptionMinWords = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_WORDS ?? '1', 10);
@@ -970,7 +1005,7 @@ export default defineAgent({
       maxToolSteps: 5,
       turnHandling: {
         preemptiveGeneration: {
-          enabled: testCall
+          enabled: demoExperienceStack
             ? process.env.LIVEKIT_TEST_PREEMPTIVE_GENERATION?.trim() === '1'
             : process.env.LIVEKIT_PREEMPTIVE_GENERATION?.trim() === '1',
         },
@@ -984,28 +1019,32 @@ export default defineAgent({
         },
         interruption: {
           mode: interruptionMode,
-          discardAudioIfUninterruptible:
-            process.env.LIVEKIT_DISCARD_AUDIO_IF_UNINTERRUPTIBLE?.trim().toLowerCase() === 'true',
+          discardAudioIfUninterruptible: (() => {
+            const raw = process.env.LIVEKIT_DISCARD_AUDIO_IF_UNINTERRUPTIBLE?.trim().toLowerCase();
+            if (raw === 'true') return true;
+            if (raw === 'false') return false;
+            return demoExperienceStack;
+          })(),
           minDuration: Number.isFinite(interruptionMinMs) ? interruptionMinMs : 200,
           minWords: Number.isFinite(interruptionMinWords) ? interruptionMinWords : 1,
         },
       },
     });
 
-    const deadAirMs = testCall
+    const deadAirMs = demoExperienceStack
       ? Number.parseInt(process.env.DEMO_DEAD_AIR_MS ?? '20000', 10)
       : Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MS ?? '10000', 10);
     const deadAirCloseMs = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_CLOSE_MS ?? '8000', 10);
     const deadAirMaxPrompts = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MAX_PROMPTS ?? '2', 10);
     const responseFillerMs = Number.parseInt(
-      process.env.LIVEKIT_RESPONSE_FILLER_MS ?? (testCall ? '1000' : '0'),
+      process.env.LIVEKIT_RESPONSE_FILLER_MS ?? (demoExperienceStack ? '1000' : '0'),
       10,
     );
     const responseFillerMaxPerCall = Number.parseInt(
       process.env.LIVEKIT_RESPONSE_FILLER_MAX_PER_CALL ?? '3',
       10,
     );
-    const postGreetingGraceMs = testCall
+    const postGreetingGraceMs = demoExperienceStack
       ? Number.parseInt(process.env.LIVEKIT_TEST_POST_GREETING_GRACE_MS ?? '3500', 10)
       : Number.parseInt(process.env.LIVEKIT_POST_GREETING_GRACE_MS ?? '5000', 10);
     const postGreetingInterruptGraceMs = Number.parseInt(
@@ -1148,7 +1187,7 @@ export default defineAgent({
     const canPlayRecoverySpeech = (): boolean => {
       if (isCallEnding()) return false;
       if (session.userState === 'speaking') return false;
-      if (!testCall && inListenGrace()) return false;
+      if (!demoExperienceStack && inListenGrace()) return false;
       return true;
     };
 
@@ -1275,6 +1314,75 @@ export default defineAgent({
       sayPrepared(session, text, { addToChatCtx: false, ...opts });
     };
 
+    let demoCloseOutroQueued = false;
+
+    const maybeCloseDemoCall = () => {
+      const flags = session.userData.sessionFlags;
+      if (!testCall || !flags.demoCallerReadyToClose) return;
+      if (flags.endPhoneCallUsed || demoCloseOutroQueued) return;
+
+      demoCloseOutroQueued = true;
+      flags.closingCall = true;
+      clearAllGuardTimers();
+      bumpReplyTurn('demo_programmatic_close');
+      cancelInFlightReply();
+      void (async () => {
+        try {
+          await settleInterruptedAgentSpeech(session, {
+            isGenerateReplyInFlight: () => generateReplyInFlight,
+            lastHandle: lastAssistantSpeechHandle,
+          });
+          const callerLines = transcriptParts
+            .filter((part) => part.line.startsWith('Caller:'))
+            .map((part) => part.line.slice('Caller: '.length));
+          const handle = sayPrepared(
+            session,
+            buildDemoCallClosingLine(
+              callSidAttr,
+              inferDemoCallerFirstName(callerLines),
+              localHour,
+            ),
+            {
+              allowInterruptions: false,
+            },
+          );
+          await waitForSpeechHandlePlayout(handle);
+          await disconnectCallerLeg(session, session.userData, async () => {});
+        } catch (e) {
+          console.error('[AgentSession] auto close demo call failed', e);
+        }
+      })();
+    };
+
+    const armDemoCloseFromCallerText = (
+      text: string,
+      source: 'stt_final' | 'stt_interim' | 'conversation_item',
+    ): boolean => {
+      if (!testCall || session.userData.sessionFlags.endPhoneCallUsed) return false;
+      const flags = session.userData.sessionFlags;
+      const interim = source === 'stt_interim';
+      if (!shouldArmDemoCloseFromCallerText(text, flags, { interim })) {
+        return false;
+      }
+      if (!flags.demoCallerReadyToClose) {
+        flags.demoCallerReadyToClose = true;
+        if (source.startsWith('stt_')) {
+          console.info('[agent] demo_close_armed_early', {
+            source,
+            snippet: text.slice(0, 120),
+          });
+          diag.push('info', 'demo_close_armed_early', {
+            source,
+            snippet: text.slice(0, 120),
+          });
+        }
+      }
+      flags.closingCall = true;
+      cancelInFlightReply();
+      maybeCloseDemoCall();
+      return true;
+    };
+
     const ingestCallerFinalText = (
       text: string,
       bumpReason: string,
@@ -1313,9 +1421,9 @@ export default defineAgent({
             snippet: text.slice(0, 120),
           });
         }
-        if (demoCallerReadyForClose(text, flags)) {
-          flags.demoCallerReadyToClose = true;
-        }
+      }
+      if (testCall && armDemoCloseFromCallerText(text, 'conversation_item')) {
+        return true;
       }
       if (
         org.niche === 'retail' &&
@@ -1361,8 +1469,6 @@ export default defineAgent({
       if (!testCall) {
         maybeCloseAfterAnythingElse(text);
         scheduleCallerReplyNudge();
-      } else if (session.userData.sessionFlags.demoCallerReadyToClose) {
-        maybeCloseDemoCall();
       }
       return true;
     };
@@ -1431,39 +1537,6 @@ export default defineAgent({
           await disconnectCallerLeg(session, session.userData, async () => {});
         } catch (e) {
           console.error('[AgentSession] auto close after anything-else failed', e);
-        }
-      })();
-    };
-
-    const maybeCloseDemoCall = () => {
-      const flags = session.userData.sessionFlags;
-      if (!testCall || !flags.demoCallerReadyToClose) return;
-      if (flags.endPhoneCallUsed || flags.closingCall) return;
-
-      flags.closingCall = true;
-      clearAllGuardTimers();
-      bumpReplyTurn('demo_programmatic_close');
-      cancelInFlightReply();
-      void (async () => {
-        try {
-          const callerLines = transcriptParts
-            .filter((part) => part.line.startsWith('Caller:'))
-            .map((part) => part.line.slice('Caller: '.length));
-          const handle = sayPrepared(
-            session,
-            buildDemoCallClosingLine(
-              callSidAttr,
-              inferDemoCallerFirstName(callerLines),
-              localHour,
-            ),
-            {
-              allowInterruptions: false,
-            },
-          );
-          await waitForSpeechHandlePlayout(handle);
-          await disconnectCallerLeg(session, session.userData, async () => {});
-        } catch (e) {
-          console.error('[AgentSession] auto close demo call failed', e);
         }
       })();
     };
@@ -1564,13 +1637,13 @@ export default defineAgent({
       if (f.askedAnythingElse && f.callerRespondedAfterAnythingElse) return;
       if (f.bookingLinkSendInFlight) return;
       if (callerAwaitingReply) return;
-      if (inListenGrace() && !testCall) return;
+      if (inListenGrace() && !demoExperienceStack) return;
       deadAirTimer = setTimeout(() => {
         deadAirTimer = null;
         try {
           if (isCallEnding()) return;
           if (callerAwaitingReply) return;
-          if (inListenGrace() && !testCall) return;
+          if (inListenGrace() && !demoExperienceStack) return;
           if (session.agentState !== 'listening' || session.userState === 'speaking') return;
           if (deadAirPromptCount >= deadAirMaxPrompts) {
             if (session.agentState === 'speaking' || session.agentState === 'thinking') return;
@@ -1597,6 +1670,15 @@ export default defineAgent({
         }
       }, deadAirMs);
     };
+
+    if (testCall) {
+      session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
+        const text = ev.transcript?.trim();
+        if (!text || session.userData.sessionFlags.endPhoneCallUsed) return;
+        const source = ev.isFinal ? 'stt_final' : 'stt_interim';
+        armDemoCloseFromCallerText(text, source);
+      });
+    }
 
     session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
       resetDeadAirTimer();
@@ -2218,9 +2300,21 @@ export default defineAgent({
         text: ReadableStream<string>,
         modelSettings: Parameters<voice.Agent<CaraAgentUserData>['ttsNode']>[1],
       ) {
-        const singleUtterance =
-          this.singleUtteranceTtsNext ||
+        const preparedSpeechNext =
           this.session.userData.preparedSpeechSingleUtteranceNext === true;
+        const singleUtterance = this.singleUtteranceTtsNext || preparedSpeechNext;
+        if (
+          shouldDropLlmTtsWhileClosing({
+            closingCall: this.session.userData.sessionFlags.closingCall === true,
+            preparedSpeechSingleUtteranceNext: preparedSpeechNext,
+            singleUtteranceTtsNext: this.singleUtteranceTtsNext,
+          })
+        ) {
+          this.singleUtteranceTtsNext = false;
+          this.session.userData.preparedSpeechSingleUtteranceNext = false;
+          await drainReadableStream(text);
+          return voice.Agent.default.ttsNode(this, emptyTextStream(), modelSettings);
+        }
         this.singleUtteranceTtsNext = false;
         this.session.userData.preparedSpeechSingleUtteranceNext = false;
         if (this.session.userData.factoryFreshLine) {
@@ -2253,6 +2347,7 @@ export default defineAgent({
       niche: org.niche,
       businessType: org.agent_business_type,
       demoLine: testCall,
+      conversationalOpening: conversationalRetailLine,
     });
     console.info('[ai-disclosure] resolved at boot', {
       disabled: aiDisclosure.disabled,
@@ -2276,7 +2371,7 @@ export default defineAgent({
     };
 
     if (playbackGreetingText) {
-      if (testCall && DEMO_LINE_OPENING_PAUSE_MS > 0) {
+      if (demoExperienceStack && DEMO_LINE_OPENING_PAUSE_MS > 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, DEMO_LINE_OPENING_PAUSE_MS));
       }
       const greetingTtsModel =
@@ -2312,7 +2407,7 @@ export default defineAgent({
           greeting: true,
           greetingCommaFlow: false,
           addToChatCtx: false,
-          allowInterruptions: testCall,
+          allowInterruptions: demoExperienceStack,
         });
         greetingPlayedFlag = true;
         greetingSource = 'live_tts';
@@ -2353,7 +2448,7 @@ export default defineAgent({
           const handle = session.say('', {
             audio: pcmToAudioFrameStream(cachedPcm, sampleRate),
             addToChatCtx: false,
-            allowInterruptions: testCall,
+            allowInterruptions: demoExperienceStack,
           });
           greetingAudioSpeechPending += 1;
           greetingPlaybackStarted = true;

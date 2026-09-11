@@ -121,6 +121,24 @@ describe('buildCaraCallPrompt', () => {
     assert.doesNotMatch(prompt, /### Electrician/);
   });
 
+  it('uses conversational retail opening on Kavanaghs-style lines', () => {
+    const prompt = buildCaraCallPrompt({
+      ...baseInput,
+      niche: 'retail',
+      businessType: 'Retail & Grocery',
+      conversationalRetailMode: true,
+      openingGreetingDelivered: false,
+    });
+
+    assert.match(prompt, /conversational retail/i);
+    assert.match(prompt, /I'm Cara, the AI assistant/i);
+    assert.match(prompt, /who am I speaking to/i);
+    assert.match(prompt, /this call may be recorded/i);
+    assert.match(prompt, /how are you keeping/i);
+    assert.match(prompt, /takeCallbackMessage/i);
+    assert.doesNotMatch(prompt, /Hello Cara demo line/i);
+  });
+
   it('includes conversational sections and persona block last on production calls', () => {
     const persona = pickCallPersona({
       businessName: baseInput.businessName,

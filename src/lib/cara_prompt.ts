@@ -2,6 +2,10 @@ import { DEFAULT_ELEVEN_TTS_MODEL } from './tts_config.js';
 import { isElevenV3Model } from './elevenlabs-v3-http-tts.js';
 import type { CallerLineInfo } from './phone_classify.js';
 import { formatDemoScenariosForPrompt } from './demo_scenarios.js';
+import {
+  formatRetailConversationalBehaviourForPrompt,
+  formatRetailConversationalOpeningForPrompt,
+} from './retail_conversational.js';
 import { formatRoutesForPrompt, type RoutingLink } from './routing_links.js';
 import { orgVerticalLabel } from './org_vertical.js';
 import type { CallPersona } from './persona.js';
@@ -23,6 +27,8 @@ export type BuildCaraCallPromptInput = {
   structuredHoursBlock?: string | null;
   /** Hello Cara demo line — conversational showcase, no business facts or routes. */
   demoMode?: boolean;
+  /** Retail line using demo conversational opening + stack; keeps production tools. */
+  conversationalRetailMode?: boolean;
   /** Structured trade/general playbooks — from Supabase or built-in defaults. */
   demoPlaybookBlock?: string;
   /** Per-call conversational variety — retail/production calls only. */
@@ -60,21 +66,33 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
 - If nothing fits, takeCallbackMessage — do not invent answers.`;
 
   const businessLabel = vertical === 'retail' ? 'retail store' : 'business';
-  const personaBlock = input.persona ? formatPersonaMannerBlock(input.persona) : '';
+  const personaBlock = input.persona
+    ? formatPersonaMannerBlock(input.persona, {
+        demoMode: input.demoMode || input.conversationalRetailMode,
+      })
+    : '';
   const callerBlock = formatCallerLineBlock(input.callerLine);
   const hasCallerId = input.callerLine.kind !== 'unknown' && Boolean(input.callerLine.e164);
+
+  const conversationalOpeningBlock = input.conversationalRetailMode
+    ? `\n${formatRetailConversationalOpeningForPrompt()}\n${formatRetailConversationalBehaviourForPrompt()}`
+    : '';
+
+  const disclosurePerCallBlock = input.conversationalRetailMode
+    ? `- The fixed opening already played — **I'm Cara, the AI assistant** and **who am I speaking to?** — do not repeat it.
+- After their name: soft **recording** awareness (*just so you're aware, this call may be recorded, yeah?*) — awareness, not consent. AI identity was already in the opening.
+- **Never** repeat AI/recording notice later in the call unless they ask.`
+    : input.openingGreetingDelivered
+      ? `- The caller already heard your AI + recording notice in the opening greeting.
+- **Never** repeat it or add a second disclosure (no extra GDPR/booking lines).
+- After the greeting, listen — then answer their question in one short line.`
+      : `- On connect, include the AI and call-recording notice once, then ask how you can help.`;
 
   const callerIdPerCallBlock = hasCallerId
     ? `- Number on file: **${input.callerLine.display}** (${input.callerLine.e164})${input.callerLine.canReceiveSms ? ' — SMS-capable' : ''}.
 - I **already have** their number. I **never** ask them to provide, give, or spell out their phone number.
 - takeCallbackMessage: **name** + **staffSummary** only — **omit callbackPhone**.`
     : `- Caller ID withheld — ask for a mobile or email when I need to send something or call back.`;
-
-  const disclosurePerCallBlock = input.openingGreetingDelivered
-    ? `- The caller already heard your AI + recording notice in the opening greeting.
-- **Never** repeat it or add a second disclosure (no extra GDPR/booking lines).
-- After the greeting, listen — then answer their question in one short line.`
-    : `- On connect, include the AI and call-recording notice once, then ask how you can help.`;
 
   return `You are Cara, answering live phone calls for **${input.businessName}** (${businessLabel}).
 
@@ -181,7 +199,7 @@ ${callerIdPerCallBlock}
 
 ### Opening on this call
 ${disclosurePerCallBlock}
-${personaBlock}`;
+${conversationalOpeningBlock}${personaBlock}`;
 }
 
 function formatPersonaMannerBlock(persona: CallPersona, opts?: { demoMode?: boolean }): string {

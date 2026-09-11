@@ -39,13 +39,15 @@ export function resolveAiDisclosure(input?: {
   niche?: string | null;
   businessType?: string | null;
   demoLine?: boolean;
+  /** Name-first opening — recording notice is spoken after the caller gives their name. */
+  conversationalOpening?: boolean;
 }): ResolvedAiDisclosure {
   const greetingText = input?.greetingText?.trim() ?? '';
   if (greetingText && greetingIncludesAiDisclosure(greetingText)) {
     return { text: '', disabled: true, source: 'greeting-includes' };
   }
 
-  if (input?.demoLine) {
+  if (input?.demoLine || input?.conversationalOpening) {
     return { text: '', disabled: true, source: 'env-disabled' };
   }
 
