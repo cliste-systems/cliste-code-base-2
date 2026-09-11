@@ -84,6 +84,14 @@ describe('tts_text_sanitize', () => {
     assert.match(out, /Fresh-ah/i);
   });
 
+  it('respells garage and salon for Irish TTS', () => {
+    const out = prepareHardcodedSpeechForTts('We run a garage and a salon.');
+    assert.match(out, /gar-idge/i);
+    assert.match(out, /sal-on/i);
+    assert.doesNotMatch(out, /\bgarage\b/i);
+    assert.doesNotMatch(out, /\bsalon\b/i);
+  });
+
   it('maps Cara to Irish Kara for TTS', () => {
     setActiveTtsModelForSanitizer('cartesia/sonic-3');
     const out = prepareHardcodedSpeechForTts("Hello, you're through to Cara.");
@@ -126,9 +134,19 @@ describe('tts_text_sanitize', () => {
       "Yeah, I can hear you fine. What would you like to try?",
     );
     assert.match(out, /Yeah, I can hear you fine/);
-    assert.match(out, /<break time="160ms"\/> What would you like to try\?/);
+    assert.match(out, /<break time="240ms"\/> What would you like to try\?/);
     assert.doesNotMatch(out, /\./);
-    assert.doesNotMatch(out, /<break time="240ms"\/>/);
+    assert.doesNotMatch(out, /<break time="160ms"\/>/);
+  });
+
+  it('prepareCartesiaSpeechChunk pauses before comma-run-on questions', () => {
+    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
+    const out = prepareCartesiaSpeechChunk(
+      "It's a beautiful day, what kind of business have you got Joe?",
+    );
+    assert.match(out, /It's a beautiful day/);
+    assert.match(out, /<break time="240ms"\/> what kind of business have you got Joe\?/);
+    assert.doesNotMatch(out, /beautiful day, what/);
   });
 
   it('prepareCartesiaSpeechChunk keeps commas and dashes flowing without micro-pauses', () => {
@@ -137,8 +155,8 @@ describe('tts_text_sanitize', () => {
       'Sure — I can help an electrician by answering calls, taking messages, and sending out appointment reminders. What would you like to try?',
     );
     assert.match(out, /Sure — I can help an electrician by answering calls, taking messages/);
-    assert.match(out, /<break time="160ms"\/> What would you like to try\?/);
-    assert.doesNotMatch(out, /<break time="240ms"\/>/);
+    assert.match(out, /<break time="240ms"\/> What would you like to try\?/);
+    assert.doesNotMatch(out, /<break time="160ms"\/>/);
     assert.doesNotMatch(out, /<break time="320ms"\/>/);
   });
 
@@ -207,7 +225,7 @@ describe('tts_text_sanitize', () => {
     assert.ok(chunks.length >= 1);
     assert.match(chunks.join(' '), /One clause/);
     assert.match(chunks.join(' '), /Two clause/);
-    assert.match(chunks.join(' '), /<break time="160ms"\/>/);
+    assert.match(chunks.join(' '), /<break time="240ms"\/>/);
     assert.doesNotMatch(chunks.join(' '), /\./);
   });
 

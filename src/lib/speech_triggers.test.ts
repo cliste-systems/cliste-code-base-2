@@ -17,6 +17,7 @@ import {
   callerSoundsLikeAudioCheck,
   callerSoundsLikeLineEngagement,
   callerSoundsLikeSocialChitchat,
+  callerSoundsLikeFollowUpRequest,
   callerSoundsLikeVagueDemoOpening,
   callerWindingDownCall,
   demoCallerReadyForClose,
@@ -207,6 +208,23 @@ describe('speech_triggers', () => {
     assert.equal(
       demoCallerReadyForClose('Thanks', { awaitingAnythingElseReply: false }),
       false,
+    );
+  });
+
+  it('does not close when wind-down line also asks a follow-up', () => {
+    assert.equal(
+      callerSoundsLikeFollowUpRequest("That's everything — can you repeat the number?"),
+      true,
+    );
+    assert.equal(
+      demoCallerReadyForClose("That's everything — can you repeat the number?", {
+        awaitingAnythingElseReply: false,
+      }),
+      false,
+    );
+    assert.equal(
+      demoCallerReadyForClose("That's all, thanks", { awaitingAnythingElseReply: false }),
+      true,
     );
   });
 });

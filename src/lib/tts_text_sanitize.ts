@@ -45,6 +45,10 @@ const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
  [/\bkeratin\b/gi, 'care-ah-tin'],
  [/\bGrafton\b/gi, 'Graft-on'],
  [/\bDublin\b/gi, 'Dub-lin'],
+ [/\bgarages\b/gi, 'gar-idges'],
+ [/\bgarage\b/gi, 'gar-idge'],
+ [/\bsalons\b/gi, 'sal-ons'],
+ [/\bsalon\b/gi, 'sal-on'],
 ];
 
 let activeTtsModel =
@@ -177,9 +181,12 @@ function normalizeTtsChunk(text: string, ttsModel = activeTtsModel): string {
 }
 
 /** Brief pause between sentences — replaces periods so Cartesia does not say "dot". */
-const CARTESIA_SENTENCE_BREAK = '<break time="160ms"/>';
-/** Greeting-only — same light sentence boundary pause, no comma micro-pauses. */
+const CARTESIA_SENTENCE_BREAK = '<break time="240ms"/>';
+/** Greeting-only — keep the intro brisk; no comma micro-pauses. */
 const CARTESIA_GREETING_SENTENCE_BREAK = '<break time="160ms"/>';
+/** Comma-run-on before a question clause — treat like a sentence boundary. */
+const CARTESIA_COMMA_BEFORE_QUESTION =
+  /,\s*(?=(?:want to|would you|what|who|are you|is there|is that|do you|did you|can you|could you|how)\b)/gi;
 
 function normalizeCartesiaBase(text: string, ttsModel = activeTtsModel): string {
   let out = normalizeTtsChunk(text, ttsModel).trim();
@@ -208,6 +215,7 @@ export function prepareCartesiaGreetingChunk(text: string, ttsModel = activeTtsM
  */
 export function prepareCartesiaSpeechChunk(text: string, ttsModel = activeTtsModel): string {
   let out = normalizeCartesiaBase(text, ttsModel);
+  out = out.replace(CARTESIA_COMMA_BEFORE_QUESTION, ` ${CARTESIA_SENTENCE_BREAK} `);
   out = out.replace(/([.!?]+)\s*(?=[A-Za-z"'(])/g, `${CARTESIA_SENTENCE_BREAK} `);
   // Keep trailing ? for question intonation; strip terminal . !
   out = out.replace(/[.!]+\s*$/g, '');

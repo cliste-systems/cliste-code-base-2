@@ -88,12 +88,31 @@ export function callerWindingDownCall(text: string): boolean {
   return /\b(thanks|thank you|cheers)\b/.test(t) && callerSaidNothingElse(text);
 }
 
+/** Follow-up request during wind-down — keep the call open even if they also said "that's all". */
+export function callerSoundsLikeFollowUpRequest(text: string): boolean {
+  const raw = text.trim();
+  if (!raw) return false;
+  if (/\?\s*$/.test(raw)) return true;
+
+  const t = raw
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+
+  return /\b(repeat|say that again|what was|what s the|what was the|can you|could you|one more|actually|wait|hang on|before you go)\b/.test(
+    t,
+  );
+}
+
 /** Demo programmatic close — after wind-down check or a clear finish signal. */
 export function demoCallerReadyForClose(
   text: string,
   flags: { askedAnythingElse?: boolean; awaitingAnythingElseReply?: boolean },
 ): boolean {
   if (callerExplicitlyRequestedHangup(text)) return true;
+  if (callerSoundsLikeFollowUpRequest(text)) return false;
   if (callerSaidNothingElse(text)) return true;
 
   const t = text
