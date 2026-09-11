@@ -1,6 +1,5 @@
-import { prewarmConfiguredGreetingCaches } from './greeting_prewarm.js';
 import { ensureGreetingPcmCached } from './greeting_audio_cache.js';
-import { resolveElevenVoiceSettings, voiceSettingsCacheFingerprint } from './call_participant.js';
+import { resolveElevenVoiceSettings } from './call_participant.js';
 import { getOrgForCall, resolveOrgVoiceId } from './supabase.js';
 import { resolveTtsConfig } from './tts_config.js';
 
@@ -35,7 +34,7 @@ async function prewarmGreetingForTarget(input: {
   const pcm = await ensureGreetingPcmCached({
     orgId: org.id,
     greetingText,
-    apiKey,
+    apiKey: input.apiKey,
     voiceId: tts.voiceId,
     encoding,
     baseURL,
