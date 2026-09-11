@@ -11,6 +11,7 @@ import {
   cli,
   defineAgent,
   inference,
+  stt as lkStt,
   voice,
 } from '@livekit/agents';
 import type { RemoteParticipant } from '@livekit/rtc-node';
@@ -48,6 +49,15 @@ import {
 } from './lib/call_participant.js';
 import { createElevenLabsTts, isElevenV3Model } from './lib/elevenlabs-v3-http-tts.js';
 import { prewarmConfiguredGreetingCaches } from './lib/greeting_prewarm.js';
+import {
+  buildResilientInferenceStt,
+  classifySttPipelineError,
+  isSttRateLimitOrTransientError,
+  resolveCallOutcomeWithSttFailure,
+  resolveInferenceSttFallbackModel,
+  STT_RECOVERY_SPEECH_LINE,
+} from './lib/resilient_inference_stt.js';
+import { prewarmInferenceStt } from './lib/stt_warmup.js';
 import { resolveTtsConfig, CARTESIA_SIOBHAN_VOICE_ID } from './lib/tts_config.js';
 import { greetingIncludesAiDisclosure } from './lib/greeting_compliance.js';
 import {
@@ -382,6 +392,9 @@ export default defineAgent({
     proc.userData.vad = await silero.VAD.load();
     void prewarmConfiguredGreetingCaches().catch((e) => {
       console.warn('[agent] greeting_prewarm_failed', e);
+    });
+    void prewarmInferenceStt().catch((e) => {
+      console.warn('[agent] stt_warmup_failed', e);
     });
   },
   entry: async (ctx: JobContext) => {
@@ -952,8 +965,39 @@ export default defineAgent({
           ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
         };
 
+    const inferenceSttFallbackModel = resolveInferenceSttFallbackModel(
+      inferenceSttModel,
+      demoExperienceStack,
+    );
+    const sessionStt = demoExperienceStack
+      ? new inference.STT({
+          model: inferenceSttModel,
+          language: inferenceSttLanguage,
+          modelOptions: sttModelOptions,
+        })
+      : buildResilientInferenceStt({
+          primaryModel: inferenceSttModel,
+          fallbackModel: inferenceSttFallbackModel,
+          language: inferenceSttLanguage,
+          primaryOptions: sttModelOptions,
+          fallbackKeyterms: sttKeyterms,
+          fallbackDomainPrompt: sttDomainPrompt,
+          fallbackMinTurnSilenceMs: sttMinTurnSilenceMs,
+          fallbackMaxTurnSilenceMs: sttMaxTurnSilenceMs,
+          fallbackEotConfidence: sttEotConfidence,
+        });
+
+    if (inferenceSttFallbackModel && !demoExperienceStack) {
+      console.info('[agent] resilient_stt', {
+        primary: inferenceSttModel,
+        fallback: inferenceSttFallbackModel,
+      });
+    }
+
     const pipelineLabel = {
-      stt: inferenceSttModel,
+      stt: inferenceSttFallbackModel
+        ? `${inferenceSttModel}+${inferenceSttFallbackModel}`
+        : inferenceSttModel,
       sttKeytermCount: sttKeyterms.length,
       sttNeuralTurn: useSttNeuralTurnDetection,
       latencyProfile,
@@ -1026,11 +1070,7 @@ export default defineAgent({
         });
 
     const session = new voice.AgentSession<CaraAgentUserData>({
-      stt: new inference.STT({
-        model: inferenceSttModel,
-        language: inferenceSttLanguage,
-        modelOptions: sttModelOptions,
-      }),
+      stt: sessionStt,
       ...(useBuilderDemoStack ? {} : { vad: ctx.proc.userData.vad as silero.VAD }),
       llm: llmInstance,
       tts: sessionTts,
@@ -1117,6 +1157,8 @@ export default defineAgent({
     let llmReplySpeechQueued = false;
     let thinkingStartedAt: number | null = null;
     let userStoppedSpeakingAt: number | null = null;
+    let sttFailureDetected = false;
+    let sttRecoverySpeechPlayed = false;
 
     const transcriptParts: TranscriptLine[] = [];
     let transcriptSeq = 0;
@@ -1234,6 +1276,22 @@ export default defineAgent({
       safeGenerateReply(REPLY_RETRY_INSTRUCTIONS, { force: true });
     };
 
+    const playSttRecoverySpeech = (reason: string) => {
+      if (sttRecoverySpeechPlayed || isCallEnding()) return;
+      if (!conversationalRetailLine || testCall) return;
+      sttRecoverySpeechPlayed = true;
+      console.warn('[agent] stt_recovery_speech', { reason });
+      diag.push('warn', 'stt_recovery_speech', { reason });
+      try {
+        sayPrepared(session, STT_RECOVERY_SPEECH_LINE, {
+          allowInterruptions: true,
+          addToChatCtx: true,
+        });
+      } catch (e) {
+        console.error('[agent] stt_recovery_speech_failed', e);
+      }
+    };
+
     session.on(voice.AgentSessionEventTypes.Error, (ev) => {
       const err = ev.error;
       const msg =
@@ -1247,6 +1305,15 @@ export default defineAgent({
       console.error('[AgentSession] pipeline error', msg, err);
       const stage = classifyPipelineErrorStage(msg);
       diag.push('error', `pipeline_${stage}_error`, { message: msg, stage });
+      if (stage === 'stt') {
+        sttFailureDetected = true;
+        const sttMeta = classifySttPipelineError(msg, err);
+        if (sttMeta.retryable || isSttRateLimitOrTransientError(msg, err)) {
+          console.warn('[agent] stt_rate_limit_or_transient', sttMeta);
+          diag.push('warn', 'stt_rate_limit_or_transient', sttMeta);
+        }
+        playSttRecoverySpeech('pipeline_stt_error');
+      }
       const incidentKey = `${stage}:${msg.slice(0, 120)}`;
       if (!pipelineIncidentPosted.has(incidentKey)) {
         pipelineIncidentPosted.add(incidentKey);
@@ -1264,7 +1331,10 @@ export default defineAgent({
               : stage === 'llm'
                 ? resolvedLlm.label
                 : inferenceSttModel,
-          retryable: true,
+          retryable:
+            stage === 'stt'
+              ? classifySttPipelineError(msg, err).retryable
+              : true,
         });
       }
       retryFailedReplyOnce('pipeline_error');
@@ -2263,6 +2333,14 @@ export default defineAgent({
           callbackRequested: ud.sessionFlags.callbackRequested,
           endPhoneCallUsed: ud.sessionFlags.endPhoneCallUsed,
         });
+        const sttFailureOverride = resolveCallOutcomeWithSttFailure({
+          transcriptLineCount: transcriptParts.length,
+          sttFailureDetected,
+        });
+        if (sttFailureOverride) {
+          outcome = sttFailureOverride.outcome;
+          aiSummary = sttFailureOverride.aiSummary;
+        }
 
         const verbatimRaw = mergeTranscriptLines(transcriptParts);
         verbatim = verbatimRaw ? redactPii(verbatimRaw) : null;
@@ -2273,7 +2351,7 @@ export default defineAgent({
           durationSeconds,
           outcome,
           transcript: verbatim,
-          aiSummary: null,
+          aiSummary,
         });
 
         const disclosureConfirmed = ud.disclosureConfirmed;
@@ -2312,7 +2390,7 @@ export default defineAgent({
           outcome,
           transcript: verbatim,
           transcript_review: null as string | null,
-          ai_summary: null as string | null,
+          ai_summary: aiSummary,
           disclosure_confirmed: disclosureConfirmed,
           ...(testCall
             ? {
@@ -2387,6 +2465,7 @@ export default defineAgent({
           cara_question?: string;
           suggested_section?: string;
         }> = [];
+        const presetAiSummary = aiSummary;
         if (verbatim) {
           const pp = await postprocessCallTranscript({
             verbatim,
@@ -2396,7 +2475,7 @@ export default defineAgent({
             actionTicketCreated: ud.sessionFlags.actionTicketCreated,
           });
           transcriptReview = pp.transcriptReview ? redactPii(pp.transcriptReview) : null;
-          aiSummary = pp.aiSummary ? redactPii(pp.aiSummary) : null;
+          aiSummary = pp.aiSummary ? redactPii(pp.aiSummary) : presetAiSummary;
           knowledgeGaps = pp.knowledgeGaps;
           didPostprocess = true;
         }
