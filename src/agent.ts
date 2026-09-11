@@ -2037,7 +2037,14 @@ export default defineAgent({
     });
 
     let callLogWritten = false;
-    session.on(voice.AgentSessionEventTypes.Close, async () => {
+    let callFinalizePromise: Promise<void> | null = null;
+    ctx.addShutdownCallback(async () => {
+      if (callFinalizePromise) {
+        await callFinalizePromise;
+      }
+    });
+
+    session.on(voice.AgentSessionEventTypes.Close, () => {
       if (callLogWritten) return;
       clearAllGuardTimers();
 
@@ -2048,6 +2055,8 @@ export default defineAgent({
         orgName: org.name,
       });
 
+      const udSnapshot = session.userData;
+      callFinalizePromise = (async () => {
       let durationSeconds = 0;
       let outcome = 'answered';
       let verbatim: string | null = null;
@@ -2055,8 +2064,15 @@ export default defineAgent({
       let aiSummary: string | null = null;
 
       try {
-        const ud = session.userData;
-        if (!ud?.organizationId) return;
+        const ud = udSnapshot;
+        if (!ud?.organizationId) {
+          console.error('[agent] call log skipped — missing organizationId on close');
+          return;
+        }
+        console.info('[agent] call_close_finalize_start', {
+          organizationId: ud.organizationId,
+          transcriptLines: transcriptParts.length,
+        });
 
         const transcriptFlushMs = Number.parseInt(
           process.env.LIVEKIT_TRANSCRIPT_FLUSH_MS ?? '300',
@@ -2331,6 +2347,7 @@ export default defineAgent({
           });
         }
       }
+      })();
     });
 
     class CaraVoiceAgent extends voice.Agent<CaraAgentUserData> {
