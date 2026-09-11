@@ -1,7 +1,7 @@
 import { normalizePhoneE164 } from './phone_normalize.js';
 
 /** Spare Irish Twilio line — vanilla LiveKit Cartesia Siobhan, no demo orchestrator. */
-const DEFAULT_FACTORY_FRESH_NUMBERS = ['+353749759508'];
+const DEFAULT_FACTORY_FRESH_NUMBERS: string[] = [];
 
 function factoryFreshNumberSet(): Set<string> {
   const fromEnv = (process.env.CARA_FACTORY_FRESH_CALLED_NUMBERS ?? '')
@@ -28,5 +28,9 @@ export function isFactoryFreshLine(calledNumber: string | null | undefined): boo
 }
 
 export function primaryFactoryFreshCalledNumber(): string {
-  return DEFAULT_FACTORY_FRESH_NUMBERS[0]!;
+  const fromEnv = (process.env.CARA_FACTORY_FRESH_CALLED_NUMBERS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)[0];
+  return fromEnv ?? '';
 }
