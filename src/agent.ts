@@ -24,7 +24,7 @@ import {
   countAssistantTranscriptChars,
   estimateCallCostUsd,
 } from './lib/call_cost_estimate.js';
-import { postprocessCallTranscript } from './lib/call_postprocess.js';
+import { buildSessionStt } from './lib/session_stt.js';
 import { insertCallLog, updateCallLogEnrichment } from './lib/call_logs.js';
 import {
   buildCloseDiagnosticsPayload,
@@ -55,7 +55,7 @@ import {
   STT_RECOVERY_SPEECH_LINE,
 } from './lib/resilient_inference_stt.js';
 import { prewarmInferenceStt } from './lib/stt_warmup.js';
-import { resolveTtsConfig, CARTESIA_SIOBHAN_VOICE_ID } from './lib/tts_config.js';
+import { resolveTtsConfig, CARTESIA_SIOBHAN_VOICE_ID, DEFAULT_ELEVEN_TTS_MODEL } from './lib/tts_config.js';
 import { greetingIncludesAiDisclosure } from './lib/greeting_compliance.js';
 import {
   ensureGreetingPcmCached,
@@ -526,18 +526,34 @@ export default defineAgent({
     const hasCallerIdOnFile =
       callerLine.kind !== 'unknown' && Boolean(callerLine.e164);
 
-    const ttsConfig = factoryFreshLine
-      ? {
+    const ttsConfig = (() => {
+      if (factoryFreshLine) {
+        return {
           provider: 'cartesia-inference' as const,
           model: process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3',
           voiceId: process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() || CARTESIA_SIOBHAN_VOICE_ID,
           language: process.env.LIVEKIT_INFERENCE_TTS_LANGUAGE?.trim() || 'en',
           label: `factory-fresh:${process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3'}:siobhan`,
-        }
-      : resolveTtsConfig({
-          testProfile,
-          orgVoiceId: resolveOrgVoiceId(org),
-        });
+        };
+      }
+      if (conversationalRetailLine) {
+        const voiceId =
+          resolveOrgVoiceId(org) ||
+          process.env.ELEVEN_VOICE_ID?.trim() ||
+          'odyUrTN5HMVKujvVAgWW';
+        const model = process.env.ELEVEN_TTS_MODEL?.trim() || DEFAULT_ELEVEN_TTS_MODEL;
+        return {
+          provider: 'elevenlabs' as const,
+          model,
+          voiceId,
+          label: `elevenlabs:retail:${model}:${voiceId}`,
+        };
+      }
+      return resolveTtsConfig({
+        testProfile,
+        orgVoiceId: resolveOrgVoiceId(org),
+      });
+    })();
     const useCartesiaInference = ttsConfig.provider === 'cartesia-inference';
     const activeTtsModel = ttsConfig.model;
     const activeVoiceId = ttsConfig.voiceId;
@@ -964,14 +980,19 @@ export default defineAgent({
           ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
         };
 
-    const sessionStt = new inference.STT({
-      model: inferenceSttModel,
+    const sttFallbackModel =
+      process.env.LIVEKIT_INFERENCE_STT_FALLBACK_MODEL?.trim() ||
+      (conversationalRetailLine ? 'assemblyai/universal-streaming' : null);
+
+    const sessionStt = buildSessionStt({
+      primaryModel: inferenceSttModel,
+      fallbackModel: sttFallbackModel,
       language: inferenceSttLanguage,
       modelOptions: sttModelOptions,
     });
 
     const pipelineLabel = {
-      stt: inferenceSttModel,
+      stt: sttFallbackModel ? `${inferenceSttModel}+${sttFallbackModel}` : inferenceSttModel,
       sttKeytermCount: sttKeyterms.length,
       sttNeuralTurn: useSttNeuralTurnDetection,
       latencyProfile,
@@ -2456,6 +2477,7 @@ export default defineAgent({
             outcome,
             inferenceLlmModel,
             actionTicketCreated: ud.sessionFlags.actionTicketCreated,
+            businessHours: org.business_hours,
           });
           transcriptReview = pp.transcriptReview ? redactPii(pp.transcriptReview) : null;
           aiSummary = pp.aiSummary ? redactPii(pp.aiSummary) : presetAiSummary;

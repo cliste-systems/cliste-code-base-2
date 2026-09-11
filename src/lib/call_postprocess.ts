@@ -1,6 +1,11 @@
 import { llm } from '@livekit/agents';
 
+import { parseBankHolidayConfig, parseBusinessHoursSchedule } from './business_hours.js';
 import { createCaraLlm } from './llm_provider.js';
+import {
+  callerSoundsLikeBankHolidayQuestion,
+  callerSoundsLikeOpenHoursQuestion,
+} from './retail_hours.js';
 
 /** Avoid overwhelming inference context on very long calls. */
 const MAX_VERBATIM_FOR_LLM = 48_000;
@@ -100,6 +105,35 @@ export function normalizePostprocessKnowledgeGaps(
   return out;
 }
 
+function orgHasStructuredBusinessHours(raw: unknown): boolean {
+  if (raw == null) return false;
+  if (parseBusinessHoursSchedule(raw)) return true;
+  const bank = parseBankHolidayConfig(raw);
+  return Boolean(bank?.configured);
+}
+
+function gapTextLooksLikeStructuredHours(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  return (
+    callerSoundsLikeOpenHoursQuestion(t) || callerSoundsLikeBankHolidayQuestion(t)
+  );
+}
+
+/** Drop hours/bank-holiday gaps when the org already has structured business_hours. */
+export function filterKnowledgeGapsForStructuredHours(
+  gaps: PostprocessKnowledgeGap[],
+  businessHours: unknown,
+): PostprocessKnowledgeGap[] {
+  if (!orgHasStructuredBusinessHours(businessHours)) {
+    return gaps;
+  }
+  return gaps.filter((gap) => {
+    const combined = [gap.topic, gap.caller_context ?? ''].filter(Boolean).join(' ');
+    return !gapTextLooksLikeStructuredHours(combined);
+  });
+}
+
 function fallbackSummary(outcome: string): string {
   const o = outcome.toLowerCase();
   if (o.includes('link_sent')) {
@@ -138,7 +172,7 @@ ${input.verbatimForLlm}
 Return ONLY valid JSON with keys "transcriptReview", "summary", and "knowledgeGaps" (no markdown outside JSON).
 - transcriptReview: Full conversation with the same line prefixes (Caller:, Assistant:, [Tool], etc.). Fix obvious speech-to-text mistakes. Include every turn and tool step — do not drop filler lines or omit lines. Do not invent facts.
 - summary: 2–4 short sentences in Irish/British English for the business owner: what the caller wanted, what happened, and the result.
-- knowledgeGaps: Array (may be empty). Include an item when the caller asked about a service or topic Cara could not answer from the business menu/instructions, or Cara took a message because something was unlisted or unknown. Each item: {"topic":"short label","caller_context":"optional staff excerpt","cara_question":"optional owner question","suggested_section":"faq|services|services_not_offered|business_rules"}. Omit payment/health/ID details. Do not duplicate routine Action Inbox handoffs already covered by the outcome. Max 3 items.`;
+- knowledgeGaps: Array (may be empty). Include an item when the caller asked about a service or topic Cara could not answer from the business menu/instructions, or Cara took a message because something was unlisted or unknown. Each item: {"topic":"short label","caller_context":"optional staff excerpt","cara_question":"optional owner question","suggested_section":"faq|services|services_not_offered|business_rules"}. Omit payment/health/ID details. Do not emit gaps for opening hours, bank holidays, or St Patrick's Day when structured hours exist — those are handled programmatically. Do not duplicate routine Action Inbox handoffs already covered by the outcome. Max 3 items.`;
 
   const chatCtx = llm.ChatContext.empty();
   chatCtx.addMessage({
@@ -172,6 +206,7 @@ export async function postprocessCallTranscript(input: {
   outcome: string;
   inferenceLlmModel: string;
   actionTicketCreated?: boolean;
+  businessHours?: unknown;
 }): Promise<CallPostprocessResult> {
   const verbatim = input.verbatim?.trim() ?? '';
   const emptyGaps: PostprocessKnowledgeGap[] = [];
@@ -207,7 +242,11 @@ export async function postprocessCallTranscript(input: {
     if (result) {
       const verbatimLines = countTranscriptLines(verbatim);
       const reviewLines = countTranscriptLines(result.transcriptReview);
-      const knowledgeGaps = input.actionTicketCreated ? [] : result.knowledgeGaps;
+      let knowledgeGaps = input.actionTicketCreated ? [] : result.knowledgeGaps;
+      knowledgeGaps = filterKnowledgeGapsForStructuredHours(
+        knowledgeGaps,
+        input.businessHours,
+      );
       if (verbatimLines > 0 && reviewLines < Math.ceil(verbatimLines * 0.7)) {
         return {
           transcriptReview: verbatim,

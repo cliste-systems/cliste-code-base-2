@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  filterKnowledgeGapsForStructuredHours,
   normalizePostprocessKnowledgeGaps,
   parsePostprocessJsonPayload,
 } from './call_postprocess.js';
@@ -30,6 +31,33 @@ describe('normalizePostprocessKnowledgeGaps', () => {
       { actionTicketCreated: true },
     );
     assert.deepEqual(gaps, []);
+  });
+});
+
+describe('filterKnowledgeGapsForStructuredHours', () => {
+  const hoursConfig = {
+    monday: { open: '09:00', close: '18:00' },
+    bank_holidays: { configured: true, open: false },
+  };
+
+  it('drops St Patrick and opening-hours gaps when structured hours exist', () => {
+    const gaps = filterKnowledgeGapsForStructuredHours(
+      [
+        { topic: "St Patrick's Day opening hours" },
+        { topic: 'Balayage', caller_context: 'Caller asked about balayage.' },
+      ],
+      hoursConfig,
+    );
+    assert.equal(gaps.length, 1);
+    assert.equal(gaps[0]?.topic, 'Balayage');
+  });
+
+  it('passes all gaps through when no structured hours', () => {
+    const gaps = filterKnowledgeGapsForStructuredHours(
+      [{ topic: "St Patrick's Day opening hours" }],
+      null,
+    );
+    assert.equal(gaps.length, 1);
   });
 });
 

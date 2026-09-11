@@ -50,6 +50,7 @@ export type FinalizeCallSessionInput = {
   inferenceSttModel: string;
   elevenModel: string;
   usageRecordIdPromise: Promise<string | null>;
+  businessHours?: unknown;
 };
 
 export async function finalizeCallSession(input: FinalizeCallSessionInput): Promise<void> {
@@ -184,6 +185,7 @@ export async function finalizeCallSession(input: FinalizeCallSessionInput): Prom
       outcome,
       inferenceLlmModel,
       actionTicketCreated: ud.sessionFlags.actionTicketCreated,
+      businessHours: input.businessHours,
     });
     transcriptReview = pp.transcriptReview ? redactPii(pp.transcriptReview) : null;
     aiSummary = pp.aiSummary ? redactPii(pp.aiSummary) : null;
