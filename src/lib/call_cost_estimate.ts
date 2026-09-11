@@ -5,7 +5,7 @@
  * - LiveKit Cloud (room / participant / agent minutes — single blended rate by default)
  * - Speech-to-text via LiveKit Inference (set to 0 if fully bundled in LiveKit)
  * - LLM (OpenAI-style pricing for voice-turn + tool calls; rough token model)
- * - TTS (ElevenLabs — default flat USD/min; optional per‑character model if USD/min is 0)
+ * - TTS (Cartesia per-character via LiveKit Inference; ElevenLabs flat USD/min fallback)
  * - Twilio SIP voice + SMS segments sent on the call
  * - Supabase (negligible per row)
  * - Post-call LLM (transcript review / summary in call_postprocess)
@@ -55,16 +55,34 @@ function envInt(key: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** Count assistant speech characters in a verbatim transcript (excludes Caller/Tool lines). */
+export function countAssistantTranscriptChars(transcript: string): number {
+  let total = 0;
+  for (const block of transcript.split(/\n\n+/)) {
+    const trimmed = block.trim();
+    if (trimmed.startsWith('Assistant:')) {
+      total += trimmed.slice('Assistant:'.length).trim().length;
+    }
+  }
+  return total;
+}
+
+function isCartesiaTtsModel(ttsModel: string): boolean {
+  return ttsModel.toLowerCase().includes('cartesia');
+}
+
 /**
  * @param smsSegmentsSent — Twilio SMS count (booking link + confirmation texts, etc.)
  * @param didPostprocess — transcript review LLM ran after the call
  * @param transcriptChars — length of verbatim transcript (for postprocess token heuristic)
+ * @param assistantTranscriptChars — assistant speech chars for Cartesia per-character billing
  */
 export function estimateCallCostUsd(input: {
   durationSeconds: number;
   smsSegmentsSent: number;
   didPostprocess: boolean;
   transcriptChars: number;
+  assistantTranscriptChars?: number;
   sttModel: string;
   llmModel: string;
   ttsModel: string;
@@ -78,17 +96,17 @@ export function estimateCallCostUsd(input: {
   const livekitPerMin = envFloat('CALL_COST_LIVEKIT_USD_PER_MIN', 0.01);
   const livekit = durationMin * livekitPerMin;
 
-  /* STT via LiveKit Inference. Set fraction or CALL_COST_STT_USD_PER_MIN=0 if bundled in LK. */
-  const sttFraction = envFloat('CALL_COST_STT_BILLED_FRACTION_OF_WALL', 0.5);
-  const sttPerMin = envFloat('CALL_COST_STT_USD_PER_MIN', 0.006);
+  /* STT via LiveKit Inference — billed on streamed audio for the full session. */
+  const sttFraction = envFloat('CALL_COST_STT_BILLED_FRACTION_OF_WALL', 1);
+  const sttPerMin = envFloat('CALL_COST_STT_USD_PER_MIN', 0.0075);
   const stt = durationMin * sttFraction * sttPerMin;
 
-  /* Voice LLM: token heuristics per minute of call (tool + reply turns). */
+  /* Voice LLM: token heuristics per minute of call (tool + reply turns). Defaults match GPT-5.6 Luna. */
   const llmFlatPerMin = envFloat('CALL_COST_LLM_USD_PER_MIN_FLAT', Number.NaN);
   const inTokPerMin = envFloat('CALL_COST_LLM_INPUT_TOKENS_PER_MIN', 1400);
   const outTokPerMin = envFloat('CALL_COST_LLM_OUTPUT_TOKENS_PER_MIN', 450);
-  const inPerM = envFloat('CALL_COST_LLM_INPUT_USD_PER_1M_TOKENS', 0.15);
-  const outPerM = envFloat('CALL_COST_LLM_OUTPUT_USD_PER_1M_TOKENS', 0.6);
+  const inPerM = envFloat('CALL_COST_LLM_INPUT_USD_PER_1M_TOKENS', 0.2);
+  const outPerM = envFloat('CALL_COST_LLM_OUTPUT_USD_PER_1M_TOKENS', 1.2);
   const inTok = durationMin * inTokPerMin;
   const outTok = durationMin * outTokPerMin;
   const llmVoiceFromTokens = (inTok / 1_000_000) * inPerM + (outTok / 1_000_000) * outPerM;
@@ -97,26 +115,35 @@ export function estimateCallCostUsd(input: {
     : llmVoiceFromTokens;
 
   /**
-   * TTS billing. Default flat USD/min depends on provider when CALL_COST_TTS_USD_PER_MIN unset.
-   * Cartesia via LiveKit Inference ~$50/1M chars (~$0.04/min). Eleven direct ~$0.13/min.
+   * TTS billing.
+   * Cartesia via LiveKit Inference: $50/1M chars (Build/Ship tier).
+   * ElevenLabs: flat USD/min when per-character billing is unavailable.
    */
-  let ttsUsdPerMin = envFloat('CALL_COST_TTS_USD_PER_MIN', Number.NaN);
-  if (!Number.isFinite(ttsUsdPerMin)) {
-    ttsUsdPerMin = input.ttsModel.toLowerCase().includes('cartesia') ? 0.04 : 0.13;
-  }
+  const ttsUsdPerMinOverride = envFloat('CALL_COST_TTS_USD_PER_MIN', Number.NaN);
+  const cartesiaPer1mChars = envFloat('CALL_COST_CARTESIA_USD_PER_1M_CHARS', 50);
+  const cartesiaSsmlOverhead = envFloat('CALL_COST_CARTESIA_SSML_OVERHEAD_FRACTION', 0.2);
+  const ttsCharsPerMin = envFloat('CALL_COST_TTS_CHARS_PER_MIN', 220);
+  const ttsPer1kChars = envFloat('CALL_COST_TTS_USD_PER_1K_CHARS', 0.05);
+  const assistantChars = Math.max(0, input.assistantTranscriptChars ?? 0);
+  const cartesiaChars =
+    assistantChars > 0 ? assistantChars * (1 + cartesiaSsmlOverhead) : durationMin * ttsCharsPerMin;
+
   let tts: number;
-  if (ttsUsdPerMin > 0) {
-    tts = durationMin * ttsUsdPerMin;
+  if (Number.isFinite(ttsUsdPerMinOverride) && ttsUsdPerMinOverride > 0) {
+    tts = durationMin * ttsUsdPerMinOverride;
+  } else if (isCartesiaTtsModel(input.ttsModel) && assistantChars > 0) {
+    tts = (cartesiaChars / 1_000_000) * cartesiaPer1mChars;
+  } else if (isCartesiaTtsModel(input.ttsModel)) {
+    tts = durationMin * envFloat('CALL_COST_CARTESIA_FALLBACK_USD_PER_MIN', 0.04);
   } else {
-    const ttsCharsPerMin = envFloat('CALL_COST_TTS_CHARS_PER_MIN', 220);
-    const ttsPer1kChars = envFloat('CALL_COST_TTS_USD_PER_1K_CHARS', 0.12);
-    const ttsChars = durationMin * ttsCharsPerMin;
-    tts = (ttsChars / 1000) * ttsPer1kChars;
+    const elevenPerMin = envFloat('CALL_COST_ELEVENLABS_USD_PER_MIN', 0.13);
+    tts = durationMin * elevenPerMin;
   }
 
-  /* Twilio: SIP inbound (adjust for region / number type). */
-  const twilioVoicePerMin = envFloat('CALL_COST_TWILIO_VOICE_USD_PER_MIN', 0.009);
-  const twilioVoice = durationMin * twilioVoicePerMin;
+  /* Twilio Elastic SIP: per-minute rounding (invoice-accurate). */
+  const twilioVoicePerMin = envFloat('CALL_COST_TWILIO_VOICE_USD_PER_MIN', 0.006);
+  const twilioBilledMinutes = input.durationSeconds > 0 ? Math.ceil(durationMin) : 0;
+  const twilioVoice = twilioBilledMinutes * twilioVoicePerMin;
 
   const twilioSmsEach = envFloat('CALL_COST_TWILIO_SMS_USD_EACH', 0.008);
   const twilioSms = Math.max(0, input.smsSegmentsSent) * twilioSmsEach;
@@ -155,8 +182,8 @@ export function estimateCallCostUsd(input: {
   );
 
   const assumptions =
-    'Heuristic estimate from call duration + SMS count; STT/TTS/LLM use fixed ratios. ' +
-    'Tune CALL_COST_* env vars to match LiveKit, Twilio, ElevenLabs, and OpenAI invoices. ' +
+    'Heuristic estimate from call duration + SMS count; Cartesia TTS uses assistant transcript chars. ' +
+    'Twilio billed in whole-minute increments. Tune CALL_COST_* env vars to match LiveKit, Twilio, and OpenAI invoices. ' +
     'Does not include matchServiceFromUtterance OpenAI calls, Action Inbox email, or one-off egress.';
 
   return {
@@ -172,7 +199,7 @@ export function estimateCallCostUsd(input: {
       tts: input.ttsModel,
     },
     assumptions,
-    ratesVersion: '2026-04-03',
+    ratesVersion: '2026-09-11',
   };
 }
 

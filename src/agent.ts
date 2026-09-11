@@ -20,7 +20,10 @@ import { fileURLToPath } from 'node:url';
 import { buildCaraCallPrompt } from './lib/cara_prompt.js';
 import { resolveAiDisclosure } from './lib/ai_disclosure.js';
 import { CaraTools, type CaraAgentUserData } from './lib/cara_tools.js';
-import { estimateCallCostUsd } from './lib/call_cost_estimate.js';
+import {
+  countAssistantTranscriptChars,
+  estimateCallCostUsd,
+} from './lib/call_cost_estimate.js';
 import { postprocessCallTranscript } from './lib/call_postprocess.js';
 import { insertCallLog, updateCallLogEnrichment } from './lib/call_logs.js';
 import {
@@ -2091,6 +2094,7 @@ export default defineAgent({
           smsSegmentsSent: ud.sessionFlags.smsSent,
           didPostprocess,
           transcriptChars: verbatim?.length ?? 0,
+          assistantTranscriptChars: verbatim ? countAssistantTranscriptChars(verbatim) : 0,
           sttModel: inferenceSttModel,
           llmModel: inferenceLlmModel,
           ttsModel: String(activeTtsModel),

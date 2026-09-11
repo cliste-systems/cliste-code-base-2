@@ -1,6 +1,6 @@
 import type { voice } from '@livekit/agents';
 
-import { estimateCallCostUsd } from './call_cost_estimate.js';
+import { countAssistantTranscriptChars, estimateCallCostUsd } from './call_cost_estimate.js';
 import { insertCallLog, updateCallLogEnrichment } from './call_logs.js';
 import { postprocessCallTranscript } from './call_postprocess.js';
 import type { CaraAgentUserData } from './cara_tools.js';
@@ -196,6 +196,7 @@ export async function finalizeCallSession(input: FinalizeCallSessionInput): Prom
     smsSegmentsSent: ud.sessionFlags.smsSent,
     didPostprocess,
     transcriptChars: verbatim?.length ?? 0,
+    assistantTranscriptChars: verbatim ? countAssistantTranscriptChars(verbatim) : 0,
     sttModel: inferenceSttModel,
     llmModel: inferenceLlmModel,
     ttsModel: elevenModel,
