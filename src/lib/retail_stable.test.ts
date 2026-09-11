@@ -3,9 +3,11 @@ import { describe, it } from 'node:test';
 
 import {
   buildRetailAskNameOnlyLine,
+  buildRetailBakeryOrderAskNameLine,
   buildRetailCallbackConfirmationLine,
   buildRetailCallbackNumberConfirmLine,
   buildRetailStockAskNameLine,
+  callerSoundsLikeBakeryCakeOrder,
   callerSoundsLikeStockOrPriceQuestion,
   extractRetailCallerFirstName,
   isTakeCallbackNameValidationError,
@@ -16,6 +18,12 @@ describe('retail_stable', () => {
     assert.equal(callerSoundsLikeStockOrPriceQuestion('Do you have bread in stock?'), true);
     assert.equal(callerSoundsLikeStockOrPriceQuestion('How much is the milk?'), true);
     assert.equal(callerSoundsLikeStockOrPriceQuestion('Are ye open tomorrow?'), false);
+  });
+
+  it('detects bakery and garbled cake orders', () => {
+    assert.equal(callerSoundsLikeBakeryCakeOrder('Do you do cake orders?'), true);
+    assert.equal(callerSoundsLikeBakeryCakeOrder('Can I do a take order please?'), true);
+    assert.equal(callerSoundsLikeBakeryCakeOrder('Are ye open tomorrow?'), false);
   });
 
   it('extracts caller first names', () => {

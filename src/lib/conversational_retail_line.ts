@@ -38,8 +38,8 @@ export function isConversationalRetailLine(calledNumber: string | null | undefin
   return normalized ? set.has(normalized) : false;
 }
 
-/** Silence before the Kavanaghs retail opening plays (ms). */
-export const RETAIL_LINE_OPENING_PAUSE_MS = 1600;
+/** Brief pause before retail greeting — keep ring time minimal (demo line uses its own pause). */
+export const RETAIL_LINE_OPENING_PAUSE_MS = 400;
 
 export function buildRetailConversationalOpening(spokenBusinessName: string): string {
   const name = spokenBusinessName.trim() || 'the store';

@@ -40,6 +40,10 @@ export type BuildCaraCallPromptInput = {
  * in this wrapper take precedence for flow, tools, and caller ID.
  */
 function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string {
+  if (input.conversationalRetailMode) {
+    return buildCaraConversationalRetailPrompt(input);
+  }
+
   const owner = input.customPrompt.trim() || 'Be professional, concise, and helpful.';
   const routesBlock = formatRoutesForPrompt(input.routingLinks);
   const vertical = orgVerticalLabel({
@@ -208,6 +212,42 @@ ${callerIdPerCallBlock}
 ### Opening on this call
 ${disclosurePerCallBlock}
 ${conversationalOpeningBlock}${personaBlock}`;
+}
+
+/** Slim retail-only prompt — no demo persona, backchannels, or Hello Cara manner blocks. */
+function buildCaraConversationalRetailPrompt(input: BuildCaraCallPromptInput): string {
+  const owner = input.customPrompt.trim() || 'Be professional, concise, and helpful.';
+  const routesBlock = formatRoutesForPrompt(input.routingLinks);
+  const callerBlock = formatCallerLineBlock(input.callerLine);
+  const hasCallerId = input.callerLine.kind !== 'unknown' && Boolean(input.callerLine.e164);
+
+  const callerIdPerCallBlock = hasCallerId
+    ? `- Number on file: **${input.callerLine.display}** (${input.callerLine.e164})${input.callerLine.canReceiveSms ? ' — SMS-capable' : ''}.
+- For callbacks and orders: confirm *Is ${input.callerLine.display} the best number to contact you on?* — **never** ask them to read out their mobile number.
+- takeCallbackMessage: **name** + **staffSummary** only — **omit callbackPhone**.`
+    : `- Caller ID withheld — ask for a mobile when logging a callback or order.`;
+
+  return `You are Cara on the phone for **${input.businessName}** (retail store).
+
+${formatRetailConversationalOpeningForPrompt()}
+${formatRetailStableBehaviourForPrompt()}
+
+## Business instructions
+${owner}
+${input.structuredHoursBlock ? `\n## Structured hours (authoritative)\n${input.structuredHoursBlock}` : ''}
+
+## Active routes
+${routesBlock}
+
+## This call
+- Today: ${input.todayLocal} (${input.bookingTimeZone}) | UTC: ${input.nowUtcIso}
+- ${callerBlock}
+
+### Caller on this line
+${callerIdPerCallBlock}
+
+### Opening on this call
+- The full opening already played — listen first; do not repeat greeting or recording notice.`;
 }
 
 function formatPersonaMannerBlock(persona: CallPersona, opts?: { demoMode?: boolean }): string {

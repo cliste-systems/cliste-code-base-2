@@ -121,7 +121,7 @@ describe('buildCaraCallPrompt', () => {
     assert.doesNotMatch(prompt, /### Electrician/);
   });
 
-  it('uses conversational retail opening on Kavanaghs-style lines', () => {
+  it('uses slim conversational retail prompt without demo persona blocks', () => {
     const prompt = buildCaraCallPrompt({
       ...baseInput,
       niche: 'retail',
@@ -133,10 +133,14 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /programmatic/i);
     assert.match(prompt, /how can I help you today/i);
     assert.match(prompt, /recording notice/i);
+    assert.match(prompt, /Retail phone — stable mode/i);
+    assert.match(prompt, /takeCallbackMessage/i);
     assert.doesNotMatch(prompt, /can I get your name please/i);
     assert.doesNotMatch(prompt, /who am I speaking to/i);
-    assert.match(prompt, /takeCallbackMessage/i);
     assert.doesNotMatch(prompt, /Hello Cara demo line/i);
+    assert.doesNotMatch(prompt, /## How you talk/i);
+    assert.doesNotMatch(prompt, /## Sound human/i);
+    assert.doesNotMatch(prompt, /## Your manner on this call/i);
   });
 
   it('includes conversational sections and persona block last on production calls', () => {

@@ -5,6 +5,7 @@ import {
   buildRetailConversationalOpening,
   isConversationalRetailLine,
   resolveConversationalRetailBusinessName,
+  RETAIL_LINE_OPENING_PAUSE_MS,
   shouldUseDemoExperienceStack,
 } from './conversational_retail_line.js';
 
@@ -40,6 +41,10 @@ describe('conversational_retail_line', () => {
       buildRetailConversationalOpening('Kavanaghs SuperValu Donegal Town'),
       "Hello, you're through to Kavanaghs SuperValu Donegal Town. I'm Cara, the AI assistant. This call may be recorded and transcribed. How can I help you today?",
     );
+  });
+
+  it('uses a short opening pause so Cara speaks quickly after connect', () => {
+    assert.equal(RETAIL_LINE_OPENING_PAUSE_MS, 400);
   });
 
   it('keeps Donegal Town on conversational retail name resolution', () => {

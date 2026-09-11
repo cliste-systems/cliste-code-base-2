@@ -133,9 +133,11 @@ import {
 } from './lib/retail_call_close.js';
 import {
   buildRetailAskNameOnlyLine,
+  buildRetailBakeryOrderAskNameLine,
   buildRetailCallbackConfirmationLine,
   buildRetailCallbackNumberConfirmLine,
   buildRetailStockAskNameLine,
+  callerSoundsLikeBakeryCakeOrder,
   callerSoundsLikeStockOrPriceQuestion,
   extractRetailCallerFirstName,
   isTakeCallbackNameValidationError,
@@ -609,7 +611,7 @@ export default defineAgent({
       structuredHoursBlock,
       demoMode: testCall && !factoryFreshLine,
       conversationalRetailMode: conversationalRetailLine,
-      ...(callPersona ? { persona: callPersona } : {}),
+      ...(callPersona && !conversationalRetailLine ? { persona: callPersona } : {}),
       ...(testCall
         ? { demoPlaybookBlock: demoPlaybookBlockFromScenarios(demoScenarios) }
         : {}),
@@ -1557,6 +1559,16 @@ export default defineAgent({
             maybeSayRetailProgrammaticReply(buildRetailCallbackConfirmationLine(name));
             handledWithProgrammaticReply = true;
           }
+        } else if (
+          conversationalRetailLine &&
+          !flags.awaitingRetailCallerName &&
+          !flags.actionTicketCreated &&
+          callerSoundsLikeBakeryCakeOrder(trimmed)
+        ) {
+          flags.awaitingRetailCallerName = true;
+          flags.pendingCallbackSummary = trimmed;
+          maybeSayRetailProgrammaticReply(buildRetailBakeryOrderAskNameLine());
+          handledWithProgrammaticReply = true;
         } else if (
           conversationalRetailLine &&
           !flags.awaitingRetailCallerName &&
