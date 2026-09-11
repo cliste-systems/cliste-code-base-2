@@ -49,11 +49,9 @@ import {
 import { createElevenLabsTts, isElevenV3Model } from './lib/elevenlabs-v3-http-tts.js';
 import { prewarmConfiguredGreetingCaches } from './lib/greeting_prewarm.js';
 import {
-  buildResilientInferenceStt,
   classifySttPipelineError,
   isSttRateLimitOrTransientError,
   resolveCallOutcomeWithSttFailure,
-  resolveInferenceSttFallbackModel,
   STT_RECOVERY_SPEECH_LINE,
 } from './lib/resilient_inference_stt.js';
 import { prewarmInferenceStt } from './lib/stt_warmup.js';
@@ -966,39 +964,14 @@ export default defineAgent({
           ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
         };
 
-    const inferenceSttFallbackModel = resolveInferenceSttFallbackModel(
-      inferenceSttModel,
-      demoExperienceStack,
-    );
-    const sessionStt = demoExperienceStack
-      ? new inference.STT({
-          model: inferenceSttModel,
-          language: inferenceSttLanguage,
-          modelOptions: sttModelOptions,
-        })
-      : buildResilientInferenceStt({
-          primaryModel: inferenceSttModel,
-          fallbackModel: inferenceSttFallbackModel,
-          language: inferenceSttLanguage,
-          primaryOptions: sttModelOptions,
-          fallbackKeyterms: sttKeyterms,
-          fallbackDomainPrompt: sttDomainPrompt,
-          fallbackMinTurnSilenceMs: sttMinTurnSilenceMs,
-          fallbackMaxTurnSilenceMs: sttMaxTurnSilenceMs,
-          fallbackEotConfidence: sttEotConfidence,
-        });
-
-    if (inferenceSttFallbackModel && !demoExperienceStack) {
-      console.info('[agent] resilient_stt', {
-        primary: inferenceSttModel,
-        fallback: inferenceSttFallbackModel,
-      });
-    }
+    const sessionStt = new inference.STT({
+      model: inferenceSttModel,
+      language: inferenceSttLanguage,
+      modelOptions: sttModelOptions,
+    });
 
     const pipelineLabel = {
-      stt: inferenceSttFallbackModel
-        ? `${inferenceSttModel}+${inferenceSttFallbackModel}`
-        : inferenceSttModel,
+      stt: inferenceSttModel,
       sttKeytermCount: sttKeyterms.length,
       sttNeuralTurn: useSttNeuralTurnDetection,
       latencyProfile,

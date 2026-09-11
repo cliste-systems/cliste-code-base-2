@@ -5,7 +5,6 @@ import {
   classifySttPipelineError,
   isSttRateLimitOrTransientError,
   resolveCallOutcomeWithSttFailure,
-  resolveInferenceSttFallbackModel,
   STT_FAILURE_AI_SUMMARY,
 } from './resilient_inference_stt.js';
 import { shouldUseDemoExperienceStack } from './conversational_retail_line.js';
@@ -32,17 +31,6 @@ describe('resilient_inference_stt', () => {
 
     const ok = classifySttPipelineError('tts synthesize failed');
     assert.equal(ok.retryable, false);
-  });
-
-  it('resolves fallback model for production but not demo stack', () => {
-    assert.equal(
-      resolveInferenceSttFallbackModel('assemblyai/u3-rt-pro', false),
-      'assemblyai/universal-streaming',
-    );
-    assert.equal(
-      resolveInferenceSttFallbackModel('assemblyai/u3-rt-pro', true),
-      null,
-    );
   });
 
   it('does not use demo experience stack for conversational retail alone', () => {
