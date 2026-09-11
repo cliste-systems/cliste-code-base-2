@@ -89,7 +89,11 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
       : `- On connect, include the AI and call-recording notice once, then ask how you can help.`;
 
   const callerIdPerCallBlock = hasCallerId
-    ? `- Number on file: **${input.callerLine.display}** (${input.callerLine.e164})${input.callerLine.canReceiveSms ? ' — SMS-capable' : ''}.
+    ? input.conversationalRetailMode
+      ? `- Number on file: **${input.callerLine.display}** (${input.callerLine.e164})${input.callerLine.canReceiveSms ? ' — SMS-capable' : ''}.
+- For callbacks and orders: confirm *Is ${input.callerLine.display} the best number to contact you on?* — **never** ask them to read out or give their mobile number.
+- takeCallbackMessage: **name** + **staffSummary** only — **omit callbackPhone**.`
+      : `- Number on file: **${input.callerLine.display}** (${input.callerLine.e164})${input.callerLine.canReceiveSms ? ' — SMS-capable' : ''}.
 - I **already have** their number. I **never** ask them to provide, give, or spell out their phone number.
 - takeCallbackMessage: **name** + **staffSummary** only — **omit callbackPhone**.`
     : `- Caller ID withheld — ask for a mobile or email when I need to send something or call back.`;

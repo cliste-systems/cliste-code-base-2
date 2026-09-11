@@ -40,6 +40,17 @@ describe('natural_phrasing', () => {
     assert.doesNotMatch(b, /\bbye\b/i);
   });
 
+  it('keeps Donegal Town in warm close when preserveRetailLocation is set', () => {
+    const line = buildWarmCallClosingLine(
+      {
+        name: 'Kavanaghs SuperValu Donegal Town',
+        preserveRetailLocation: true,
+      },
+      'seed',
+    );
+    assert.match(line, /Donegal Town/);
+  });
+
   it('builds Hello Cara outro with name and time of day', () => {
     const day = buildDemoCallClosingLine('seed-a', 'Abigail', 14);
     assert.match(day, /Abigail/);

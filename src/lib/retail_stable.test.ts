@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   buildRetailAskNameOnlyLine,
   buildRetailCallbackConfirmationLine,
+  buildRetailCallbackNumberConfirmLine,
   buildRetailStockAskNameLine,
   callerSoundsLikeStockOrPriceQuestion,
   extractRetailCallerFirstName,
@@ -28,6 +29,7 @@ describe('retail_stable', () => {
     assert.match(buildRetailStockAskNameLine(), /first name/i);
     assert.match(buildRetailAskNameOnlyLine(), /first name/i);
     assert.match(buildRetailCallbackConfirmationLine('Brandon'), /Brandon/);
+    assert.match(buildRetailCallbackNumberConfirmLine('+353 87 *** 5938'), /best number to contact you on/i);
   });
 
   it('detects takeCallbackMessage name validation errors', () => {

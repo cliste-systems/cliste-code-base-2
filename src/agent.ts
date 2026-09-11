@@ -134,6 +134,7 @@ import {
 import {
   buildRetailAskNameOnlyLine,
   buildRetailCallbackConfirmationLine,
+  buildRetailCallbackNumberConfirmLine,
   buildRetailStockAskNameLine,
   callerSoundsLikeStockOrPriceQuestion,
   extractRetailCallerFirstName,
@@ -1641,6 +1642,7 @@ export default defineAgent({
     };
 
     let warmCloseStarted = false;
+    let retailNumberConfirmSpoken = false;
 
     const performWarmProgrammaticClose = () => {
       const flags = session.userData.sessionFlags;
@@ -1659,6 +1661,7 @@ export default defineAgent({
             {
               name: org.name,
               greeting: org.greeting,
+              preserveRetailLocation: conversationalRetailLine,
             },
             callSidAttr ?? undefined,
           );
@@ -2015,12 +2018,22 @@ export default defineAgent({
         assistantAskedForPhoneNumber(text) &&
         !flags.endPhoneCallUsed
       ) {
-        console.warn('[agent] blocked phone-number ask — caller ID on file', {
-          display: callerLine.display,
-        });
-        void safeGenerateReply(
-          `You must NOT ask for their phone number — caller ID is already on file (${callerLine.display}). Apologise in one short sentence, then continue helping. For messages or cancellations use takeCallbackMessage with name and staffSummary only — omit callbackPhone.`,
-        );
+        if (conversationalRetailLine && !testCall && !retailNumberConfirmSpoken) {
+          retailNumberConfirmSpoken = true;
+          console.info('[agent] retail_number_confirm', { display: callerLine.display });
+          cancelInFlightReply();
+          bumpReplyTurn('retail_number_confirm');
+          sayPrepared(session, buildRetailCallbackNumberConfirmLine(callerLine.display), {
+            allowInterruptions: true,
+          });
+        } else if (!conversationalRetailLine) {
+          console.warn('[agent] blocked phone-number ask — caller ID on file', {
+            display: callerLine.display,
+          });
+          void safeGenerateReply(
+            `You must NOT ask for their phone number — caller ID is already on file (${callerLine.display}). Apologise in one short sentence, then continue helping. For messages or cancellations use takeCallbackMessage with name and staffSummary only — omit callbackPhone.`,
+          );
+        }
       }
 
       if (

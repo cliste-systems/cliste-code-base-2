@@ -49,6 +49,8 @@ const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
  [/\bkeratin\b/gi, 'care-ah-tin'],
  [/\bGrafton\b/gi, 'Graft-on'],
  [/\bDublin\b/gi, 'Dub-lin'],
+ [/\bDonegal Town\b/gi, 'Doneygall Town'],
+ [/\bDonegal\b/gi, 'Doneygall'],
  [/\bSt\.?\s+Patrick'?s?\s+Day\b/gi, "Saint Patrick's Day"],
  [/\bgarages\b/gi, 'gar-idges'],
  [/\bgarage\b/gi, 'gar-idge'],

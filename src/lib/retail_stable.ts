@@ -104,6 +104,12 @@ export function buildRetailCallbackConfirmationLine(firstName: string): string {
   return `Thanks ${name} — I've passed that to the team and they'll ring you back.`;
 }
 
+/** Confirm caller ID on file — never ask them to read their number out. */
+export function buildRetailCallbackNumberConfirmLine(displayNumber: string): string {
+  const number = displayNumber.trim() || 'this number';
+  return `Is ${number} the best number to contact you on?`;
+}
+
 /** takeCallbackMessage validation failures that should trigger programmatic name recovery. */
 export function isTakeCallbackNameValidationError(output: string): boolean {
   const t = output.toLowerCase();
@@ -123,5 +129,6 @@ export function formatRetailStableBehaviourForPrompt(): string {
 - **Never** ask *are you all sorted?* right after answering hours — wait for them.
 - **Never** say *grand*.
 - Stock, prices, and availability: you cannot confirm on the phone — say the team can ring them back and ask for their first name.
+- When caller ID is on file for a callback or order: confirm with *Is [their number] the best number to contact you on?* — **never** ask them to read out or give their mobile number.
 - When they say they are finished (*that's everything*, *thanks that's all*): ask **once** if there is anything else you can help with — wait for their answer — then one warm thanks-for-calling close. Do **not** call endPhoneCall until after that anything-else question.`;
 }
