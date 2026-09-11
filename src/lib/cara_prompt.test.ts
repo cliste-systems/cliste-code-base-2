@@ -127,12 +127,13 @@ describe('buildCaraCallPrompt', () => {
       niche: 'retail',
       businessType: 'Retail & Grocery',
       conversationalRetailMode: true,
-      openingGreetingDelivered: false,
+      openingGreetingDelivered: true,
     });
 
     assert.match(prompt, /programmatic/i);
-    assert.match(prompt, /can I get your name please/i);
-    assert.match(prompt, /what can I help you with today/i);
+    assert.match(prompt, /how can I help you today/i);
+    assert.match(prompt, /recording notice/i);
+    assert.doesNotMatch(prompt, /can I get your name please/i);
     assert.doesNotMatch(prompt, /who am I speaking to/i);
     assert.match(prompt, /takeCallbackMessage/i);
     assert.doesNotMatch(prompt, /Hello Cara demo line/i);

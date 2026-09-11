@@ -78,7 +78,6 @@ import {
   resolveConversationalRetailBusinessName,
   RETAIL_LINE_OPENING_PAUSE_MS,
 } from './lib/conversational_retail_line.js';
-import { resolveRetailOpeningTurn } from './lib/retail_opening.js';
 import { getActiveCallTestProfile } from './lib/test_profile.js';
 import {
   detectDemoScenario,
@@ -582,7 +581,11 @@ export default defineAgent({
       ttsModel: activeTtsModel,
       niche: org.niche,
       businessType: org.agent_business_type,
-      openingGreetingDelivered: useConversationalOpening ? false : Boolean(playbackGreetingText),
+      openingGreetingDelivered: conversationalRetailLine
+        ? true
+        : useConversationalOpening
+          ? false
+          : Boolean(playbackGreetingText),
       structuredHoursBlock,
       demoMode: testCall && !factoryFreshLine,
       conversationalRetailMode: conversationalRetailLine,
@@ -701,12 +704,10 @@ export default defineAgent({
         demoScenarioSlug: null,
         demoScenarioBeat: 0,
         demoCallerReadyToClose: false,
-        retailCallerName: null,
-        retailRecordingNoticePlayed: false,
-        retailOpeningComplete: false,
+        retailOpeningComplete: conversationalRetailLine,
       },
       disclosureConfirmed: conversationalRetailLine
-        ? false
+        ? true
         : greetingIncludesAiDisclosure(greetingText),
       demoLine: testCall,
       factoryFreshLine,
@@ -1389,38 +1390,6 @@ export default defineAgent({
       return true;
     };
 
-    const applyConversationalRetailOpeningTurn = (text: string): boolean => {
-      if (!conversationalRetailLine) return false;
-      const flags = session.userData.sessionFlags;
-      const turn = resolveRetailOpeningTurn(text, flags);
-
-      if (turn.kind === 'none') return false;
-
-      if (turn.kind === 'defer_to_llm') {
-        flags.retailOpeningComplete = true;
-        console.info('[agent] retail_opening_defer', { snippet: text.slice(0, 80) });
-        return false;
-      }
-
-      cancelInFlightReply();
-      clearCallerReplyNudgeTimer();
-
-      if (turn.kind === 'recording_notice') {
-        flags.retailCallerName = turn.callerName;
-        flags.retailRecordingNoticePlayed = true;
-        bumpReplyTurn('retail_recording_notice');
-        sayPrepared(session, turn.line);
-        console.info('[agent] retail_opening_recording', { callerName: turn.callerName });
-        return true;
-      }
-
-      flags.retailOpeningComplete = true;
-      bumpReplyTurn('retail_help_pivot');
-      sayPrepared(session, turn.line);
-      console.info('[agent] retail_opening_complete', { callerName: turn.callerName });
-      return true;
-    };
-
     const ingestCallerFinalText = (
       text: string,
       bumpReason: string,
@@ -1438,9 +1407,6 @@ export default defineAgent({
       if (isDuplicateCallerUtterance(key, at)) return false;
       settleGreetingPhase('caller_spoke');
       appendTranscriptLine(at, `Caller: ${text}`);
-      if (applyConversationalRetailOpeningTurn(text)) {
-        return true;
-      }
       session.userData.sessionFlags.likelySttGarble = false;
       noteCallerGarble(session.userData.sessionFlags, session.userData.organizationId, text);
       resetClosePhaseIfCallerContinues(text);

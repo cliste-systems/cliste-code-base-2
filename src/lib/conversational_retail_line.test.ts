@@ -17,10 +17,10 @@ describe('conversational_retail_line', () => {
     assert.equal(isConversationalRetailLine('+353749389378'), false);
   });
 
-  it('builds a name-first store opening with Cara and AI disclosure', () => {
+  it('builds a single Cara intro with disclosure and help question', () => {
     assert.equal(
       buildRetailConversationalOpening('Kavanaghs SuperValu Donegal Town'),
-      "Hello, you're through to Kavanaghs SuperValu Donegal Town. I'm Cara, the AI assistant. Can I get your name please?",
+      "Hello, you're through to Kavanaghs SuperValu Donegal Town. I'm Cara, the AI assistant. This call may be recorded and transcribed. How can I help you today?",
     );
   });
 

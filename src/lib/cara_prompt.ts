@@ -79,8 +79,8 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
     : '';
 
   const disclosurePerCallBlock = input.conversationalRetailMode
-    ? `- Opening arc (name → recording → help question) is **already handled programmatically** before your first reply.
-- Do **not** repeat greeting, name ask, recording notice, or *what can I help you with today?*
+    ? `- The full opening (intro, AI + recording notice, *how can I help you today?*) **already played** before your first reply.
+- Do **not** repeat greeting, recording notice, or *how can I help you today?*
 - Answer their store question from business instructions; use retail tools when needed.`
     : input.openingGreetingDelivered
       ? `- The caller already heard your AI + recording notice in the opening greeting.
@@ -95,7 +95,7 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
     : `- Caller ID withheld — ask for a mobile or email when I need to send something or call back.`;
 
   const socialChitchatBlock = input.conversationalRetailMode
-    ? `**After opening** — the help question was already asked programmatically. Answer their errand; no social chitchat before they state what they need.`
+    ? `**After opening** — *how can I help you today?* was already asked in the greeting. Answer their errand; no social chitchat before they state what they need.`
     : `**Social chitchat** — if they ask how you are / how you're keeping: one warm line back then pivot to help — **then stop and listen**. Never *"I'm here to assist"* or *"What can I assist you with today"*.`;
 
   return `You are Cara, answering live phone calls for **${input.businessName}** (${businessLabel}).
