@@ -85,14 +85,75 @@ const CLOSING_BUILDERS: ClosingBuilder[] = [
   (name) => `Lovely — thanks for calling ${name}. Take care.`,
 ];
 
+const DEMO_CLOSING_SKIP_NAMES = new Set([
+  'hello',
+  'hi',
+  'hey',
+  'yeah',
+  'yes',
+  'yep',
+  'no',
+  'nope',
+  'thanks',
+  'thank',
+  'good',
+  'grand',
+  'lovely',
+  'perfect',
+  'sound',
+  'okay',
+  'ok',
+  'there',
+  'morning',
+  'evening',
+]);
+
+function capitalizeName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return trimmed;
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
+}
+
+/** Best-effort first name from demo caller lines — for programmatic close only. */
+export function inferDemoCallerFirstName(callerLines: string[]): string | null {
+  for (const raw of callerLines) {
+    const text = raw.trim();
+    if (!text) continue;
+    const intro = text.match(/\b(?:my name is|i'?m|this is|it'?s)\s+([A-Za-z]{2,20})\b/i);
+    if (intro?.[1] && !DEMO_CLOSING_SKIP_NAMES.has(intro[1].toLowerCase())) {
+      return capitalizeName(intro[1]);
+    }
+    const bare = text.match(/^([A-Za-z]{2,20})\b[,.]?(\s|$)/);
+    if (bare?.[1] && !DEMO_CLOSING_SKIP_NAMES.has(bare[1].toLowerCase())) {
+      return capitalizeName(bare[1]);
+    }
+  }
+  return null;
+}
+
 const DEMO_CLOSING_LINES = [
-  'Lovely — thanks for trying Hello Cara. Take care.',
-  'Perfect — thanks for trying Hello Cara. Have a good one.',
-  'No bother — thanks for trying Hello Cara. Take care.',
+  'Grand — lovely chatting. Take care now.',
+  'No bother — I\'ll let you go. Have a good one.',
+  'Sound — glad that helped. Take care.',
+  'Ah grand — I\'ll leave you to it. Have a good one.',
+  'Lovely — chat soon. Take care.',
+] as const;
+
+const DEMO_CLOSING_LINES_WITH_NAME = [
+  (name: string) => `Grand ${name} — lovely chatting. Take care now.`,
+  (name: string) => `No bother ${name} — I'll let you go. Have a good one.`,
+  (name: string) => `Sound — glad that helped, ${name}. Take care.`,
+  (name: string) => `Ah ${name} — I'll leave you to it. Have a good one.`,
+  (name: string) => `Lovely ${name} — chat soon. Take care.`,
 ] as const;
 
 /** Programmatic close for the Hello Cara demo line after wind-down. */
-export function buildDemoCallClosingLine(seed = ''): string {
+export function buildDemoCallClosingLine(seed = '', callerName?: string | null): string {
+  const name = callerName?.trim();
+  if (name) {
+    const idx = pickIndex(`${seed}:${name}`, DEMO_CLOSING_LINES_WITH_NAME.length);
+    return DEMO_CLOSING_LINES_WITH_NAME[idx]!(name);
+  }
   const idx = pickIndex(seed.trim() || String(Date.now()), DEMO_CLOSING_LINES.length);
   return DEMO_CLOSING_LINES[idx]!;
 }

@@ -78,7 +78,7 @@ import {
   loadDemoScenarios,
 } from './lib/demo_scenarios_loader.js';
 import { persistTestCallReportFromWorker } from './lib/persist_test_call_report.js';
-import { buildDemoCallClosingLine } from './lib/natural_phrasing.js';
+import { buildDemoCallClosingLine, inferDemoCallerFirstName } from './lib/natural_phrasing.js';
 import { buildDemoPersonaGreeting, DEMO_LINE_OPENING_PAUSE_MS, pickCallPersona, type CallPersona } from './lib/persona.js';
 import { resolveSpokenBusinessName } from './lib/spoken_business_name.js';
 import { orgVerticalLabel } from './lib/org_vertical.js';
@@ -1446,9 +1446,16 @@ export default defineAgent({
       }
       void (async () => {
         try {
-          const handle = sayPrepared(session, buildDemoCallClosingLine(callSidAttr), {
-            allowInterruptions: false,
-          });
+          const callerLines = transcriptParts
+            .filter((part) => part.line.startsWith('Caller:'))
+            .map((part) => part.line.slice('Caller: '.length));
+          const handle = sayPrepared(
+            session,
+            buildDemoCallClosingLine(callSidAttr, inferDemoCallerFirstName(callerLines)),
+            {
+              allowInterruptions: false,
+            },
+          );
           await waitForSpeechHandlePlayout(handle);
           await disconnectCallerLeg(session, session.userData, async () => {});
         } catch (e) {

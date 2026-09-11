@@ -802,7 +802,7 @@ export class CaraTools {
 
   readonly endPhoneCall = llm.tool({
     description:
-      'End the call after a warm Irish goodbye (e.g. "Lovely — thanks for calling Murphy\'s SuperValu. Take care."). Invoke in the same turn as your farewell — never abrupt "ok bye", bare "bye", or "grand". On the Hello Cara demo line: when the caller sounds finished ("that\'s all", "thanks", "no you\'re grand", "I\'m sorted") — not only the word "bye" — say goodbye and call this tool in that same turn; do not ask another question after they wind down.',
+      'End the call after a warm Irish goodbye (e.g. "Lovely — thanks for calling Murphy\'s SuperValu. Take care."). Invoke in the same turn as your farewell — never abrupt "ok bye", bare "bye", or "grand". On the Hello Cara demo line: when the caller sounds finished ("that\'s all", "thanks", "no you\'re grand", "I\'m sorted") — close conversationally in one line (their name if you have it, e.g. "Grand Mary — I\'ll leave you to it. Take care.") then call this tool in that same turn; do not ask another question after they wind down.',
     parameters: z.object({}),
     execute: async (_args, { ctx }) => {
       const ud = readCaraUserData(ctx);

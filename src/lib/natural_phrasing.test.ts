@@ -3,8 +3,10 @@ import { describe, it } from 'node:test';
 
 import {
   assistantAskedWindDown,
+  buildDemoCallClosingLine,
   buildWarmCallClosingLine,
   buildWindDownPrompt,
+  inferDemoCallerFirstName,
   softenSpokenFarewell,
 } from './natural_phrasing.js';
 
@@ -35,5 +37,18 @@ describe('natural_phrasing', () => {
     assert.match(b, /Murphy's SuperValu/);
     assert.doesNotMatch(a, /\bbye\b/i);
     assert.doesNotMatch(b, /\bbye\b/i);
+  });
+
+  it('builds conversational demo closes with optional caller name', () => {
+    assert.match(buildDemoCallClosingLine('seed-a'), /take care|have a good one/i);
+    assert.doesNotMatch(buildDemoCallClosingLine('seed-a'), /thanks for trying Hello Cara/i);
+    assert.match(buildDemoCallClosingLine('seed-a', 'Mary'), /Mary/);
+    assert.match(buildDemoCallClosingLine('seed-a', 'Mary'), /take care|have a good one/i);
+  });
+
+  it('infers demo caller first name from intro lines', () => {
+    assert.equal(inferDemoCallerFirstName(['Hello there, my name is Mary.']), 'Mary');
+    assert.equal(inferDemoCallerFirstName(['Mary']), 'Mary');
+    assert.equal(inferDemoCallerFirstName(['Hello there']), null);
   });
 });
