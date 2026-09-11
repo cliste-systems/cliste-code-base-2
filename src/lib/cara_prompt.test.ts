@@ -57,14 +57,14 @@ describe('buildCaraCallPrompt', () => {
     });
 
     assert.match(prompt, /Hello Cara demo line/i);
-    assert.match(prompt, /not a real shop/i);
+    assert.match(prompt, /Not a real shop/i);
     assert.match(prompt, /recording \*\*ask\*/i);
     assert.match(prompt, /how are you keeping/i);
-    assert.match(prompt, /do not guess names like Patricia/i);
+    assert.match(prompt, /never guess/i);
     assert.doesNotMatch(prompt, /Murphy/i);
   });
 
-  it('includes chatty host personality and intent routing on demo line', () => {
+  it('uses compact persona guidance instead of the old rulebook sections', () => {
     const prompt = buildCaraCallPrompt({
       ...baseInput,
       businessName: 'Hello Cara Demo',
@@ -72,14 +72,11 @@ describe('buildCaraCallPrompt', () => {
       openingGreetingDelivered: true,
     });
 
-    assert.match(prompt, /Host personality/i);
-    assert.match(prompt, /Sound human/i);
-    assert.match(prompt, /how are you keeping/i);
-    assert.match(prompt, /Intent routing/i);
-    assert.match(prompt, /Explore.*can you hear me/i);
-    assert.match(prompt, /Human speech \(not a phone menu\)/i);
-    assert.match(prompt, /Never.*list trades/i);
-    assert.match(prompt, /Never.*say \*"demo line"\*/i);
+    assert.match(prompt, /Who you are/i);
+    assert.match(prompt, /paraphrase, never read verbatim/i);
+    assert.doesNotMatch(prompt, /Host personality/i);
+    assert.doesNotMatch(prompt, /Intent routing/i);
+    assert.doesNotMatch(prompt, /Sound human \(this is the whole job\)/i);
   });
 
   it('embeds all scenario playbooks including general non-trade path', () => {
@@ -99,7 +96,7 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /paraphrase/i);
   });
 
-  it('includes demo personality and name banter guidance', () => {
+  it('includes demo endPhoneCall guidance', () => {
     const prompt = buildCaraCallPrompt({
       ...baseInput,
       businessName: 'Hello Cara Demo',
@@ -107,7 +104,7 @@ describe('buildCaraCallPrompt', () => {
       openingGreetingDelivered: true,
     });
 
-    assert.match(prompt, /Personality \(demo host\)/i);
+    assert.match(prompt, /endPhoneCall/i);
     assert.match(prompt, /how are you keeping/i);
   });
 
@@ -164,7 +161,7 @@ describe('buildCaraCallPrompt', () => {
     });
 
     assert.match(prompt, /## Your manner on this call/i);
-    assert.match(prompt, /warm goodbye from \*\*Your manner on this call\*\*/i);
+    assert.match(prompt, /endPhoneCall/i);
     assert.ok(prompt.includes(persona.manner));
   });
 });

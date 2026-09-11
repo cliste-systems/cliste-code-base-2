@@ -7,10 +7,17 @@ export type CaraLlmProviderKind = 'gateway' | 'openai-direct' | 'openrouter';
 export type CreateCaraLlmInput = {
   inferenceLlmModel: string;
   profileLlmProvider?: string | null;
+  /** Demo/test line — use LiveKit Inference gateway even when OpenRouter is configured. */
+  forceGateway?: boolean;
+  reasoningEffort?: ChatCompletionOptions['reasoning_effort'];
   temperature?: number;
   maxCompletionTokens?: number;
   frequencyPenalty?: number;
   presencePenalty?: number;
+};
+
+type ChatCompletionOptions = {
+  reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high';
 };
 
 export type ResolvedCaraLlm = {
@@ -125,8 +132,11 @@ function openRouterClient(): OpenAI {
 }
 
 export function resolveCaraLlmProvider(input?: {
-  profileLlmProvider?: string | null;
+  profileLlmProvider?: string | null | undefined;
+  forceGateway?: boolean;
 }): CaraLlmProviderKind {
+  if (input?.forceGateway) return 'gateway';
+
   const profile = input?.profileLlmProvider?.trim().toLowerCase();
   if (profile === 'openrouter' || profile === 'gateway' || profile === 'openai-direct') {
     return profile;
@@ -152,7 +162,10 @@ export function createCaraLlm(input: CreateCaraLlmInput): ResolvedCaraLlm {
     input.frequencyPenalty ?? parseOptionalPenalty('LIVEKIT_LLM_FREQUENCY_PENALTY');
   const presencePenalty =
     input.presencePenalty ?? parseOptionalPenalty('LIVEKIT_LLM_PRESENCE_PENALTY');
-  const provider = resolveCaraLlmProvider({ profileLlmProvider: input.profileLlmProvider });
+  const provider = resolveCaraLlmProvider({
+    profileLlmProvider: input.profileLlmProvider,
+    forceGateway: input.forceGateway,
+  });
 
   if (provider === 'openrouter') {
     const model = openRouterModel(input.inferenceLlmModel);
@@ -193,6 +206,7 @@ export function createCaraLlm(input: CreateCaraLlmInput): ResolvedCaraLlm {
     maxCompletionTokens,
     frequencyPenalty,
     presencePenalty,
+    input.reasoningEffort,
   );
 }
 
@@ -202,12 +216,14 @@ function createGatewayLlm(
   maxCompletionTokens: number,
   frequencyPenalty = 0,
   presencePenalty = 0,
+  reasoningEffort?: ChatCompletionOptions['reasoning_effort'],
 ): ResolvedCaraLlm {
   const instance = new inference.LLM({
     model: inferenceLlmModel as inference.LLMModels,
     modelOptions: {
       temperature,
       max_completion_tokens: maxCompletionTokens,
+      ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       ...(frequencyPenalty !== 0 ? { frequency_penalty: frequencyPenalty } : {}),
       ...(presencePenalty !== 0 ? { presence_penalty: presencePenalty } : {}),
     },

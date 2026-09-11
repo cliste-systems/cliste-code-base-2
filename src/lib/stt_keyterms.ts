@@ -144,6 +144,10 @@ export function isU3RtProSttModel(model: string): boolean {
   return model.toLowerCase().includes('u3-rt-pro');
 }
 
+export function isUniversal35ProSttModel(model: string): boolean {
+  return model.toLowerCase().includes('universal-3-5-pro');
+}
+
 export function isAssemblyAiSttModel(model: string): boolean {
   return model.toLowerCase().includes('assemblyai');
 }

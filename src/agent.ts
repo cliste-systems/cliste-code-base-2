@@ -676,12 +676,13 @@ export default defineAgent({
     const inferenceSttModel =
       testProfile?.stt_model?.trim() ||
       process.env.LIVEKIT_INFERENCE_STT_MODEL?.trim() ||
-      'assemblyai/u3-rt-pro';
+      (testCall ? 'assemblyai/universal-3-5-pro' : 'assemblyai/u3-rt-pro');
     const inferenceSttLanguage = process.env.LIVEKIT_INFERENCE_STT_LANGUAGE?.trim() || 'en';
     const inferenceLlmModel =
       testProfile?.llm_model?.trim() ||
       process.env.LIVEKIT_INFERENCE_LLM_MODEL?.trim() ||
-      (testCall ? 'openai/gpt-4o-mini' : 'openai/gpt-4.1');
+      (testCall ? 'openai/gpt-5.6-luna' : 'openai/gpt-4.1');
+    const useBuilderDemoStack = testCall;
 
     const elevenVoiceId = activeVoiceId;
     const elevenEncoding = process.env.ELEVEN_TTS_ENCODING?.trim() || 'pcm_24000';
@@ -733,11 +734,15 @@ export default defineAgent({
     const useSttNeuralTurnDetection =
       !isU3RtProStt && process.env.LIVEKIT_STT_NEURAL_TURN?.trim() === '1';
     const latencyProfile = resolveSttLatencyProfile(
-      testCall
+      useBuilderDemoStack
         ? process.env.LIVEKIT_TEST_STT_LATENCY_PROFILE?.trim() ||
             process.env.LIVEKIT_STT_LATENCY_PROFILE ||
             'balanced'
-        : process.env.LIVEKIT_STT_LATENCY_PROFILE,
+        : testCall
+          ? process.env.LIVEKIT_TEST_STT_LATENCY_PROFILE?.trim() ||
+              process.env.LIVEKIT_STT_LATENCY_PROFILE ||
+              'balanced'
+          : process.env.LIVEKIT_STT_LATENCY_PROFILE,
     );
     const silenceDefaults = assemblyAiTurnSilenceDefaults(inferenceSttModel, latencyProfile);
     const endpointDefaults = endpointingDefaults(latencyProfile, useSttNeuralTurnDetection);
@@ -746,14 +751,18 @@ export default defineAgent({
       Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '', 10),
     )
       ? Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '', 10)
-      : endpointDefaults.minDelayMs;
+      : useBuilderDemoStack
+        ? undefined
+        : endpointDefaults.minDelayMs;
     const endpointMaxMs = Number.isFinite(
       Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '', 10),
     )
       ? Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '', 10)
-      : testCall
-        ? Number.parseInt(process.env.LIVEKIT_TEST_ENDPOINTING_MAX_MS ?? '1200', 10)
-        : endpointDefaults.maxDelayMs;
+      : useBuilderDemoStack
+        ? undefined
+        : testCall
+          ? Number.parseInt(process.env.LIVEKIT_TEST_ENDPOINTING_MAX_MS ?? '1200', 10)
+          : endpointDefaults.maxDelayMs;
     const endpointMode = (process.env.LIVEKIT_ENDPOINTING_MODE?.trim() || 'dynamic') as
       | 'fixed'
       | 'dynamic';
@@ -761,8 +770,17 @@ export default defineAgent({
       !useSttNeuralTurnDetection &&
       (process.env.LIVEKIT_USE_TURN_DETECTOR?.trim().toLowerCase() || 'on') !== 'off';
 
-    let turnDetectorInstance: InstanceType<typeof lkTurn.turnDetector.EnglishModel> | null = null;
-    if (useTurnDetector) {
+    let turnDetectorInstance:
+      | inference.TurnDetector
+      | InstanceType<typeof lkTurn.turnDetector.EnglishModel>
+      | null = null;
+    if (useBuilderDemoStack) {
+      try {
+        turnDetectorInstance = new inference.TurnDetector();
+      } catch (err) {
+        console.error('[agent] audio turn-detector init failed — STT fallback', err);
+      }
+    } else if (useTurnDetector) {
       try {
         turnDetectorInstance = new lkTurn.turnDetector.EnglishModel();
       } catch (err) {
@@ -809,13 +827,13 @@ export default defineAgent({
     )
       ? Number.parseInt(process.env.LIVEKIT_STT_MAX_TURN_SILENCE_MS ?? '', 10)
       : silenceDefaults.maxTurnSilenceMs;
-    if (testCall && isU3RtProStt && !process.env.LIVEKIT_STT_MIN_TURN_SILENCE_MS?.trim()) {
+    if (testCall && isU3RtProStt && !useBuilderDemoStack && !process.env.LIVEKIT_STT_MIN_TURN_SILENCE_MS?.trim()) {
       sttMinTurnSilenceMs = Number.parseInt(
         process.env.LIVEKIT_TEST_STT_MIN_TURN_SILENCE_MS ?? '400',
         10,
       );
     }
-    if (testCall && isU3RtProStt && !process.env.LIVEKIT_STT_MAX_TURN_SILENCE_MS?.trim()) {
+    if (testCall && isU3RtProStt && !useBuilderDemoStack && !process.env.LIVEKIT_STT_MAX_TURN_SILENCE_MS?.trim()) {
       sttMaxTurnSilenceMs = Number.parseInt(
         process.env.LIVEKIT_TEST_STT_MAX_TURN_SILENCE_MS ?? '1400',
         10,
@@ -830,12 +848,14 @@ export default defineAgent({
     // 0.7 adds phrasing variety; still reliable for tool selection on gpt-4o-mini / gpt-5-mini.
     const llmTemperature = Number.parseFloat(process.env.LIVEKIT_LLM_TEMPERATURE ?? '0.7');
     const llmMaxCompletionTokens = testCall
-      ? Number.parseInt(process.env.LIVEKIT_TEST_LLM_MAX_TOKENS ?? '150', 10)
+      ? Number.parseInt(process.env.LIVEKIT_TEST_LLM_MAX_TOKENS ?? '320', 10)
       : Number.parseInt(process.env.LIVEKIT_LLM_MAX_TOKENS ?? '320', 10);
 
     const resolvedLlm = createCaraLlm({
       inferenceLlmModel,
       profileLlmProvider: testProfile?.llm_provider ?? null,
+      forceGateway: useBuilderDemoStack,
+      reasoningEffort: useBuilderDemoStack ? 'low' : undefined,
       temperature: llmTemperature,
       maxCompletionTokens: llmMaxCompletionTokens,
     });
@@ -864,8 +884,8 @@ export default defineAgent({
       tts: ttsConfig.label,
       voiceId: activeVoiceId,
       ttsProvider: ttsConfig.provider,
-      endpointMinMs,
-      endpointMaxMs,
+      endpointMinMs: endpointMinMs ?? null,
+      endpointMaxMs: endpointMaxMs ?? null,
     };
 
     const configSnapshot = {
@@ -934,7 +954,7 @@ export default defineAgent({
         language: inferenceSttLanguage,
         modelOptions: sttModelOptions,
       }),
-      vad: ctx.proc.userData.vad as silero.VAD,
+      ...(useBuilderDemoStack ? {} : { vad: ctx.proc.userData.vad as silero.VAD }),
       llm: llmInstance,
       tts: sessionTts,
       userData: sessionUserData,
@@ -945,11 +965,13 @@ export default defineAgent({
             ? process.env.LIVEKIT_TEST_PREEMPTIVE_GENERATION?.trim() === '1'
             : process.env.LIVEKIT_PREEMPTIVE_GENERATION?.trim() === '1',
         },
-        turnDetection: turnDetectorInstance ?? 'stt',
+        turnDetection: useBuilderDemoStack
+          ? (turnDetectorInstance ?? undefined)
+          : (turnDetectorInstance ?? 'stt'),
         endpointing: {
-          mode: endpointMode,
-          minDelay: endpointMinMs,
-          maxDelay: endpointMaxMs,
+          ...(endpointMode ? { mode: endpointMode } : {}),
+          ...(endpointMinMs !== undefined ? { minDelay: endpointMinMs } : {}),
+          ...(endpointMaxMs !== undefined ? { maxDelay: endpointMaxMs } : {}),
         },
         interruption: {
           mode: interruptionMode,

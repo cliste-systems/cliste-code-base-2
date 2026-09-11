@@ -64,7 +64,7 @@ function resolveCartesiaConfig(input: {
   const cartesiaModel =
     (profileModel && isCartesiaInferenceTtsModel(profileModel) && profileModel) ||
     (isCartesiaInferenceTtsModel(input.envInferenceModel) && input.envInferenceModel) ||
-    'cartesia/sonic-3';
+    'cartesia/sonic-3.6';
 
   const voiceId =
     (profileModel && isCartesiaInferenceTtsModel(profileModel)

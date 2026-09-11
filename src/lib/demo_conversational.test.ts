@@ -22,17 +22,21 @@ const baseInput = {
 };
 
 describe('demo conversational line', () => {
-  it('prompts the LLM to own name, recording notice, and chitchat', () => {
+  it('uses a compact demo prompt with opening arc and playbooks', () => {
     const prompt = buildCaraCallPrompt({
       ...baseInput,
       demoMode: true,
       openingGreetingDelivered: true,
     });
 
-    assert.match(prompt, /Opening arc \(your job after the greeting — one turn each\)/i);
+    assert.match(prompt, /Hello Cara demo line/i);
+    assert.match(prompt, /Opening \(greeting already played\)/i);
     assert.match(prompt, /recording \*\*ask\*/i);
-    assert.match(prompt, /How are you keeping/i);
-    assert.match(prompt, /never deliver the recording notice and a \*how are you keeping/i);
+    assert.match(prompt, /how are you keeping/i);
+    assert.match(prompt, /Scenario playbooks/i);
+    assert.match(prompt, /endPhoneCall/i);
+    assert.ok(prompt.length < 12000, 'demo prompt should stay compact');
+    assert.doesNotMatch(prompt, /Sound human \(this is the whole job\)/i);
     assert.doesNotMatch(prompt, /spoken automatically/i);
   });
 
@@ -49,23 +53,11 @@ describe('demo conversational line', () => {
       openingGreetingDelivered: true,
     });
 
-    assert.match(prompt, /Scenario playbooks/i);
-    assert.match(prompt, /paraphrase/i);
-    assert.match(prompt, /endPhoneCall/i);
+    assert.match(prompt, /paraphrase, never read verbatim/i);
+    assert.match(prompt, /### Electrician/i);
   });
 
-  it('requires one idea per turn and no feature dump plus question', () => {
-    const prompt = buildCaraCallPrompt({
-      ...baseInput,
-      demoMode: true,
-      openingGreetingDelivered: true,
-    });
-
-    assert.match(prompt, /One capability or idea per turn/i);
-    assert.match(prompt, /Never rattle off features and end with a question/i);
-  });
-
-  it('winds down and endPhoneCall when caller sounds finished without waiting for bye', () => {
+  it('winds down with endPhoneCall when caller sounds finished', () => {
     const prompt = buildCaraCallPrompt({
       ...baseInput,
       demoMode: true,
@@ -73,23 +65,7 @@ describe('demo conversational line', () => {
     });
 
     assert.match(prompt, /that's all/i);
-    assert.match(prompt, /endPhoneCall in the same turn/i);
-    assert.match(prompt, /Do not wait for \*"bye"\*/i);
-  });
-
-  it('forbids parroting examples and requires conditional mirror plus reaction handoff', () => {
-    const prompt = buildCaraCallPrompt({
-      ...baseInput,
-      demoMode: true,
-      openingGreetingDelivered: true,
-    });
-
-    assert.match(prompt, /Examples in this prompt are shapes, not scripts/i);
-    assert.match(prompt, /Mirror only if they greeted/i);
-    assert.match(prompt, /skip mirror/i);
-    assert.match(prompt, /must end with a question/i);
-    assert.match(prompt, /reaction word \+ \*how are you keeping/i);
-    assert.match(prompt, /Never a bare \*"How are you keeping\?"\* with no reaction/i);
-    assert.match(prompt, /word it your own way every call/i);
+    assert.match(prompt, /endPhoneCall/i);
+    assert.match(prompt, /No real business facts/i);
   });
 });

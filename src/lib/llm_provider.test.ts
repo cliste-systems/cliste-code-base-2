@@ -34,4 +34,15 @@ describe('resolveCaraLlmProvider', () => {
       else process.env.OPENROUTER_API_KEY = prevKey;
     }
   });
+
+  it('forces gateway on demo line even when OpenRouter is configured', () => {
+    const prevKey = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = 'test-key';
+    try {
+      assert.equal(resolveCaraLlmProvider({ forceGateway: true }), 'gateway');
+    } finally {
+      if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = prevKey;
+    }
+  });
 });

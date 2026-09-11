@@ -66,6 +66,13 @@ describe('resolveTtsConfig', () => {
     const cfg = resolveTtsConfig({ testProfile: elevenProfile, orgVoiceId: null });
     assert.equal(cfg.provider, 'cartesia-inference');
     assert.equal(cfg.model, 'cartesia/sonic-3');
+  });
+
+  it('defaults to Cartesia Sonic 3.6 when no env model is set', () => {
+    delete process.env.LIVEKIT_INFERENCE_TTS_MODEL;
+    const cfg = resolveTtsConfig({ testProfile: null, orgVoiceId: null });
+    assert.equal(cfg.provider, 'cartesia-inference');
+    assert.equal(cfg.model, 'cartesia/sonic-3.6');
     assert.equal(cfg.voiceId, CARTESIA_SIOBHAN_VOICE_ID);
   });
 
