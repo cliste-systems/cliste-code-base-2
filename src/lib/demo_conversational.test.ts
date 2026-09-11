@@ -70,6 +70,8 @@ describe('demo conversational line', () => {
     assert.match(prompt, /Bye for now/i);
     assert.match(prompt, /endPhoneCall/i);
     assert.match(prompt, /Never say "grand" or "sound"/i);
+    assert.match(prompt, /one outro only/i);
+    assert.match(prompt, /no separate.*Lovely/i);
     assert.match(prompt, /Rotate openers/i);
     assert.match(prompt, /\[tool call\]/i);
     assert.match(prompt, /Never say the word "line" aloud/i);

@@ -1111,6 +1111,7 @@ export default defineAgent({
       instructions: string,
       opts?: { force?: boolean },
     ) => {
+      if (isCallEnding()) return;
       const epoch = replyTurnEpoch;
       if (generateReplyInFlight && !opts?.force) {
         const stalledFor = Date.now() - generateReplyStartedAt;
@@ -1438,11 +1439,8 @@ export default defineAgent({
 
       flags.closingCall = true;
       clearAllGuardTimers();
-      try {
-        session.interrupt();
-      } catch {
-        /* ignore */
-      }
+      bumpReplyTurn('demo_programmatic_close');
+      cancelInFlightReply();
       void (async () => {
         try {
           const callerLines = transcriptParts
