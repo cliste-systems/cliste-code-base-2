@@ -11,7 +11,6 @@ import {
   cli,
   defineAgent,
   inference,
-  stt as lkStt,
   voice,
 } from '@livekit/agents';
 import type { RemoteParticipant } from '@livekit/rtc-node';
@@ -2088,7 +2087,7 @@ export default defineAgent({
       }
       if (role === 'assistant' && assistantTextSoundsLikeGoodbye(text)) {
         if (conversationalRetailLine && !testCall && !flags.endPhoneCallUsed) {
-          scheduleRetailForceHangup('assistant_goodbye');
+          performWarmProgrammaticClose();
         } else {
           flags.closingCall = true;
           clearAllGuardTimers();
