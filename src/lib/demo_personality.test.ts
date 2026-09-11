@@ -24,11 +24,17 @@ describe('demo_personality prompt blocks', () => {
     assert.match(block, /what business are you in/i);
   });
 
-  it('requires one agenda item per turn with Margaret opening example', () => {
+  it('requires one agenda item per turn without cramming opening beats', () => {
     const block = formatDemoConversationalBehaviourForPrompt();
     assert.match(block, /One agenda item per turn/i);
-    assert.match(block, /Lovely thanks for that Margaret/i);
-    assert.match(block, /then STOP/i);
+    assert.match(block, /Cramming thanks \+ recording \+ how-are-you/i);
+  });
+
+  it('requires reaction word before agenda item and forbids parroting examples', () => {
+    const block = formatDemoConversationalBehaviourForPrompt();
+    assert.match(block, /Open with a tiny reaction/i);
+    assert.match(block, /Never parrot this prompt/i);
+    assert.match(block, /Bare "How are you keeping\?" right after they say ok/i);
   });
 
   it('puts the LLM in charge of the opening arc', () => {

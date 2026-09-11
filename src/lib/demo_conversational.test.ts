@@ -30,7 +30,7 @@ describe('demo conversational line', () => {
     });
 
     assert.match(prompt, /Opening arc \(your job after the greeting — one turn each\)/i);
-    assert.match(prompt, /ack \+ recording notice/i);
+    assert.match(prompt, /casual recording mention/i);
     assert.match(prompt, /How are you keeping/i);
     assert.match(prompt, /never deliver the recording notice and a \*how are you keeping/i);
     assert.doesNotMatch(prompt, /spoken automatically/i);
@@ -75,5 +75,19 @@ describe('demo conversational line', () => {
     assert.match(prompt, /that's all/i);
     assert.match(prompt, /endPhoneCall in the same turn/i);
     assert.match(prompt, /Do not wait for \*"bye"\*/i);
+  });
+
+  it('forbids parroting examples and requires greeting mirror plus reaction handoff', () => {
+    const prompt = buildCaraCallPrompt({
+      ...baseInput,
+      demoMode: true,
+      openingGreetingDelivered: true,
+    });
+
+    assert.match(prompt, /Examples in this prompt are shapes, not scripts/i);
+    assert.match(prompt, /Mirror their energy/i);
+    assert.match(prompt, /reaction word \+ \*how are you keeping/i);
+    assert.match(prompt, /Never a bare \*"How are you keeping\?"\* with no reaction/i);
+    assert.match(prompt, /word it your own way every call/i);
   });
 });
