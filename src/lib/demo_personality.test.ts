@@ -37,6 +37,22 @@ describe('demo_personality prompt blocks', () => {
     assert.match(block, /Bare "How are you keeping\?" right after they say ok/i);
   });
 
+  it('requires recording consent as a question and bans quality disclaimers', () => {
+    const block = formatDemoConversationalBehaviourForPrompt();
+    assert.match(block, /must end with a question/i);
+    assert.match(block, /never.*we record calls for quality/i);
+    assert.ok(DEMO_BANNED_AI_SLOP.includes('just a quick note'));
+    assert.ok(DEMO_BANNED_AI_SLOP.includes('thanks for that'));
+    assert.ok(DEMO_BANNED_AI_SLOP.includes('for quality'));
+  });
+
+  it('skips greeting mirror on plain name intro and describes Martin failure', () => {
+    const block = formatDemoConversationalBehaviourForPrompt();
+    assert.match(block, /Only mirror.*hello/i);
+    assert.match(block, /skip greeting mirror/i);
+    assert.match(block, /Forced \*hiya\*.*My name is Martin/i);
+  });
+
   it('puts the LLM in charge of the opening arc', () => {
     const block = formatDemoPersonalityForPrompt();
     assert.match(block, /You own the opening arc/i);
