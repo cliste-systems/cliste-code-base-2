@@ -29,7 +29,7 @@ export function isConversationalRetailLine(calledNumber: string | null | undefin
 }
 
 /** Silence before the Kavanaghs retail opening plays (ms). */
-export const RETAIL_LINE_OPENING_PAUSE_MS = 2200;
+export const RETAIL_LINE_OPENING_PAUSE_MS = 1600;
 
 export function buildRetailConversationalOpening(spokenBusinessName: string): string {
   const name = spokenBusinessName.trim() || 'the store';

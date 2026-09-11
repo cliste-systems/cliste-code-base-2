@@ -48,7 +48,7 @@ const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
  [/\bkeratin\b/gi, 'care-ah-tin'],
  [/\bGrafton\b/gi, 'Graft-on'],
  [/\bDublin\b/gi, 'Dub-lin'],
- [/\bDonegal\b/gi, 'Dun-ih-gall'],
+ [/\bDonegal\b/gi, 'Doneigall'],
  [/\bgarages\b/gi, 'gar-idges'],
  [/\bgarage\b/gi, 'gar-idge'],
  [/\bsalons\b/gi, 'sal-ons'],
@@ -192,8 +192,8 @@ const CARTESIA_SENTENCE_BREAK = '<break time="240ms"/>';
 const CARTESIA_OUTRO_BREAK = '<break time="400ms"/>';
 /** Greeting-only — keep the intro brisk; no comma micro-pauses. */
 const CARTESIA_GREETING_SENTENCE_BREAK = '<break time="160ms"/>';
-/** Kavanaghs-style retail opening — unhurried, clear clauses. */
-const CARTESIA_RETAIL_OPENING_BREAK = '<break time="480ms"/>';
+/** Kavanaghs-style retail opening — slightly clearer than demo, not sluggish. */
+const CARTESIA_RETAIL_OPENING_BREAK = '<break time="240ms"/>';
 /** Comma-run-on before a question clause — treat like a sentence boundary. */
 const CARTESIA_COMMA_BEFORE_QUESTION =
   /,\s*(?=(?:want to|would you|what|who|are you|is there|is that|do you|did you|can you|could you|how)\b)/gi;
@@ -230,13 +230,10 @@ export function prepareCartesiaGreetingChunk(text: string, ttsModel = activeTtsM
   return out.replace(/\s{2,}/g, ' ').trim();
 }
 
-/** Slower retail store opening — longer pauses between hello, store name, Cara intro, and name ask. */
+/** Slower retail store opening — natural pauses at sentence boundaries only. */
 export function prepareCartesiaRetailOpeningChunk(text: string, ttsModel = activeTtsModel): string {
   let out = normalizeCartesiaBase(text, ttsModel);
-  const br = CARTESIA_RETAIL_OPENING_BREAK;
-  out = out.replace(/^Hello,\s*/i, `Hello, ${br} `);
-  out = out.replace(/\s*[—–-]\s*(I'm\b)/i, `. ${br} $1`);
-  out = out.replace(/([.!?]+)\s*(?=[A-Za-z"'(])/g, `${br} `);
+  out = out.replace(/([.!?]+)\s*(?=[A-Za-z"'(])/g, `${CARTESIA_RETAIL_OPENING_BREAK} `);
   out = out.replace(/[.!]+\s*$/g, '');
   return out.replace(/\s{2,}/g, ' ').trim();
 }
