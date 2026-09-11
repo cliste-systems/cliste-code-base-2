@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 import { buildCaraCallPrompt } from './lib/cara_prompt.js';
 import { resolveAiDisclosure } from './lib/ai_disclosure.js';
-import { CaraTools, type CaraAgentUserData } from './lib/cara_tools.js';
+import { CaraTools, createRetailCallbackTicket, type CaraAgentUserData } from './lib/cara_tools.js';
 import {
   countAssistantTranscriptChars,
   estimateCallCostUsd,
@@ -77,6 +77,7 @@ import {
   isConversationalRetailLine,
   resolveConversationalRetailBusinessName,
   RETAIL_LINE_OPENING_PAUSE_MS,
+  shouldUseDemoExperienceStack,
 } from './lib/conversational_retail_line.js';
 import { getActiveCallTestProfile } from './lib/test_profile.js';
 import {
@@ -127,6 +128,14 @@ import {
   formatStructuredHoursForLivePrompt,
 } from './lib/retail_hours.js';
 import { shouldCloseRetailCallWhenCallerDone } from './lib/retail_call_close.js';
+import {
+  buildRetailAskNameOnlyLine,
+  buildRetailCallbackConfirmationLine,
+  buildRetailStockAskNameLine,
+  callerSoundsLikeStockOrPriceQuestion,
+  extractRetailCallerFirstName,
+  isTakeCallbackNameValidationError,
+} from './lib/retail_stable.js';
 import {
   getOrgForCall,
   getSendableBusinessFiles,
@@ -423,7 +432,11 @@ export default defineAgent({
       (isConversationalRetailLine(calledNumber) ||
         isConversationalRetailLine(routing.phone) ||
         isConversationalRetailLine(org.phone_number));
-    const demoExperienceStack = testCall || conversationalRetailLine;
+    const demoExperienceStack = shouldUseDemoExperienceStack({
+      testCall,
+      factoryFreshLine,
+      conversationalRetailLine,
+    });
     const testProfile =
       factoryFreshLine || !testCall ? null : await getActiveCallTestProfile();
     const demoScenarios: DemoScenario[] = testCall ? await loadDemoScenarios() : [];
@@ -709,6 +722,9 @@ export default defineAgent({
         demoCallerReadyToClose: false,
         retailOpeningComplete: conversationalRetailLine,
         retailSubstantiveExchangeComplete: false,
+        awaitingRetailCallerName: false,
+        pendingCallbackSummary: null,
+        retailCallerName: null,
       },
       disclosureConfirmed: conversationalRetailLine
         ? true
@@ -1481,11 +1497,41 @@ export default defineAgent({
           );
         }
       } else if (org.niche === 'retail' && !session.userData.sessionFlags.endPhoneCallUsed) {
+        const flags = session.userData.sessionFlags;
         const correcting = callerSoundsLikeWeekdayHoursCorrection(trimmed);
         if (
           (callerSoundsLikeOpenHoursQuestion(trimmed) || correcting) &&
           tryRetailProgrammaticHoursReply(trimmed, { correcting })
         ) {
+          handledWithProgrammaticReply = true;
+        } else if (
+          conversationalRetailLine &&
+          flags.awaitingRetailCallerName &&
+          !flags.actionTicketCreated
+        ) {
+          const name = extractRetailCallerFirstName(trimmed, { awaitingName: true });
+          if (name) {
+            flags.retailCallerName = name;
+            flags.awaitingRetailCallerName = false;
+            const summary = flags.pendingCallbackSummary?.trim() || trimmed;
+            flags.pendingCallbackSummary = null;
+            void createRetailCallbackTicket(session.userData, summary, { callerName: name }).catch(
+              (err) => {
+                console.error('[agent] retail_programmatic_callback_failed', err);
+              },
+            );
+            maybeSayRetailProgrammaticReply(buildRetailCallbackConfirmationLine(name));
+            handledWithProgrammaticReply = true;
+          }
+        } else if (
+          conversationalRetailLine &&
+          !flags.awaitingRetailCallerName &&
+          !flags.actionTicketCreated &&
+          callerSoundsLikeStockOrPriceQuestion(trimmed)
+        ) {
+          flags.awaitingRetailCallerName = true;
+          flags.pendingCallbackSummary = trimmed;
+          maybeSayRetailProgrammaticReply(buildRetailStockAskNameLine());
           handledWithProgrammaticReply = true;
         } else if (callerSoundsLikeRetailStaffQuestion(trimmed)) {
           steerReply(
@@ -2057,6 +2103,21 @@ export default defineAgent({
             out.createdAt,
             `${prefix}${truncateForTranscript(out.output, MAX_TOOL_SNIPPET_CHARS)}`,
           );
+        }
+        if (
+          conversationalRetailLine &&
+          !testCall &&
+          call.name === 'takeCallbackMessage' &&
+          out?.isError &&
+          isTakeCallbackNameValidationError(out.output)
+        ) {
+          const flags = session.userData.sessionFlags;
+          cancelInFlightReply();
+          flags.awaitingRetailCallerName = true;
+          if (!flags.pendingCallbackSummary?.trim() && lastCallerUtterance.trim()) {
+            flags.pendingCallbackSummary = lastCallerUtterance.trim();
+          }
+          maybeSayRetailProgrammaticReply(buildRetailAskNameOnlyLine());
         }
       }
     });

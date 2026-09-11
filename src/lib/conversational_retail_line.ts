@@ -18,6 +18,16 @@ function conversationalRetailNumberSet(): Set<string> {
   return set;
 }
 
+/** Demo STT/LLM/fillers — test line only; conversational retail uses production stack. */
+export function shouldUseDemoExperienceStack(input: {
+  testCall: boolean;
+  factoryFreshLine?: boolean;
+  conversationalRetailLine?: boolean;
+}): boolean {
+  if (input.factoryFreshLine) return false;
+  return input.testCall;
+}
+
 /** Kavanaghs-style retail line — demo conversational feel, production retail tools. */
 export function isConversationalRetailLine(calledNumber: string | null | undefined): boolean {
   const t = calledNumber?.trim();

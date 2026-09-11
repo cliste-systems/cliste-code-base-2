@@ -3,9 +3,9 @@ import { isElevenV3Model } from './elevenlabs-v3-http-tts.js';
 import type { CallerLineInfo } from './phone_classify.js';
 import { formatDemoScenariosForPrompt } from './demo_scenarios.js';
 import {
-  formatRetailConversationalBehaviourForPrompt,
   formatRetailConversationalOpeningForPrompt,
 } from './retail_conversational.js';
+import { formatRetailStableBehaviourForPrompt } from './retail_stable.js';
 import { formatRoutesForPrompt, type RoutingLink } from './routing_links.js';
 import { orgVerticalLabel } from './org_vertical.js';
 import type { CallPersona } from './persona.js';
@@ -75,7 +75,7 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
   const hasCallerId = input.callerLine.kind !== 'unknown' && Boolean(input.callerLine.e164);
 
   const conversationalOpeningBlock = input.conversationalRetailMode
-    ? `\n${formatRetailConversationalOpeningForPrompt()}\n${formatRetailConversationalBehaviourForPrompt()}`
+    ? `\n${formatRetailConversationalOpeningForPrompt()}\n${formatRetailStableBehaviourForPrompt()}`
     : '';
 
   const disclosurePerCallBlock = input.conversationalRetailMode

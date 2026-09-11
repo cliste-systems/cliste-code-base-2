@@ -68,6 +68,10 @@ export type CaraSessionFlags = {
   retailOpeningComplete?: boolean;
   /** Conversational retail — Cara answered at least one caller errand post-opening. */
   retailSubstantiveExchangeComplete?: boolean;
+  /** Stable retail — waiting for caller first name before callback ticket. */
+  awaitingRetailCallerName?: boolean;
+  /** Stable retail — summary captured when stock/price question asked. */
+  pendingCallbackSummary?: string | null;
 };
 
 export type CaraAgentUserData = {
@@ -262,6 +266,14 @@ function resolveSmsDestination(ud: CaraAgentUserData, mobilePhone?: string): str
   if (isE164SmsTarget(caller)) return caller;
   if (mobilePhone?.trim()) return normalizePhoneE164(mobilePhone);
   return caller;
+}
+
+export async function createRetailCallbackTicket(
+  ud: CaraAgentUserData,
+  summary: string,
+  options?: { phone?: string; callerName?: string },
+): Promise<{ ok: boolean; message: string }> {
+  return createCallbackViaWebhook(ud, summary, options);
 }
 
 async function createCallbackViaWebhook(
@@ -611,7 +623,10 @@ export class CaraTools {
         };
       }
       await maybeAcknowledgeToolStart(ctx.session as voice.AgentSession<CaraAgentUserData>);
-      const name = callerName.trim();
+      const name =
+        callerName.trim() ||
+        ud.sessionFlags.retailCallerName?.trim() ||
+        '';
       if (!name || /^(caller|unknown|n\/a|none)$/i.test(name)) {
         return {
           ok: false,

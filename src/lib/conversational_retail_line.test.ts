@@ -5,12 +5,30 @@ import {
   buildRetailConversationalOpening,
   isConversationalRetailLine,
   resolveConversationalRetailBusinessName,
+  shouldUseDemoExperienceStack,
 } from './conversational_retail_line.js';
 
 describe('conversational_retail_line', () => {
   it('detects the Kavanaghs retail demo number', () => {
     assert.equal(isConversationalRetailLine('+353749759508'), true);
     assert.equal(isConversationalRetailLine('353749759508'), true);
+  });
+
+  it('does not use demo experience stack for conversational retail alone', () => {
+    assert.equal(
+      shouldUseDemoExperienceStack({
+        testCall: false,
+        conversationalRetailLine: isConversationalRetailLine('+353749759508'),
+      }),
+      false,
+    );
+    assert.equal(
+      shouldUseDemoExperienceStack({
+        testCall: true,
+        conversationalRetailLine: true,
+      }),
+      true,
+    );
   });
 
   it('does not treat the Hello Cara demo line as conversational retail', () => {
