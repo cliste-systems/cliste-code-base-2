@@ -1,5 +1,6 @@
 import {
   formatBusinessHoursForPrompt,
+  parseBankHolidayConfig,
   parseBusinessHoursSchedule,
   weekdayKeyFromDate,
   type DaySchedule,
@@ -70,6 +71,145 @@ function spokenDayHours(row: DaySchedule): string {
   return `${fmtSpokenMinutes(row.openMin)} to ${fmtSpokenMinutes(row.closeMin)}`;
 }
 
+/** YYYY-MM-DD in org timezone — for public-holiday checks. */
+function localDateKey(d: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
+/** Irish public holidays — extend as needed for live-call date checks. */
+const IRISH_PUBLIC_HOLIDAY_KEYS = new Set<string>([
+  '2025-01-01',
+  '2025-02-03',
+  '2025-03-17',
+  '2025-04-21',
+  '2025-05-05',
+  '2025-06-02',
+  '2025-08-04',
+  '2025-10-27',
+  '2025-12-25',
+  '2025-12-26',
+  '2026-01-01',
+  '2026-02-02',
+  '2026-03-17',
+  '2026-04-06',
+  '2026-05-04',
+  '2026-06-01',
+  '2026-08-03',
+  '2026-10-26',
+  '2026-12-25',
+  '2026-12-26',
+  '2027-01-01',
+  '2027-02-01',
+  '2027-03-17',
+  '2027-03-29',
+  '2027-05-03',
+  '2027-06-07',
+  '2027-08-02',
+  '2027-10-25',
+  '2027-12-25',
+  '2027-12-26',
+]);
+
+function isIrishPublicHoliday(d: Date, timeZone: string): boolean {
+  return IRISH_PUBLIC_HOLIDAY_KEYS.has(localDateKey(d, timeZone));
+}
+
+function addDays(d: Date, days: number): Date {
+  return new Date(d.getTime() + days * 86_400_000);
+}
+
+function dateForWeekdayFromNow(
+  day: (typeof WEEKDAY_NAMES)[number],
+  timeZone: string,
+  ref = new Date(),
+): Date {
+  const targetIndex = WEEKDAY_NAMES.indexOf(day);
+  const currentKey = weekdayKeyFromDate(ref, timeZone);
+  if (!currentKey) return ref;
+  const currentIndex = WEEKDAY_NAMES.indexOf(currentKey);
+  let delta = targetIndex - currentIndex;
+  if (delta < 0) delta += 7;
+  return addDays(ref, delta);
+}
+
+/** Resolve the calendar day the caller is asking about for hours (today / tomorrow / named weekday). */
+export function hoursQuestionDate(text: string, timeZone: string, ref = new Date()): Date | null {
+  const lower = text.toLowerCase();
+  if (/\btomorrow\b/.test(lower)) return addDays(ref, 1);
+  if (/\btoday\b/.test(lower)) return ref;
+  const named = weekdayMentionedInText(text);
+  if (named) return dateForWeekdayFromNow(named, timeZone, ref);
+  return null;
+}
+
+export function callerSoundsLikeBankHolidayQuestion(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  return (
+    /\b(st patrick|saint patrick|paddy'?s day|paddys day|bank holiday|public holiday|good friday|easter monday|christmas day|st stephen|boxing day|new year'?s day)\b/.test(
+      t,
+    ) || /\bopen on (the )?(holiday|bank)\b/.test(t)
+  );
+}
+
+function buildBankHolidaySpokenReply(
+  config: NonNullable<ReturnType<typeof parseBankHolidayConfig>>,
+  text: string,
+): string {
+  const lower = text.toLowerCase();
+  const namedStPatricks = /\b(st patrick|saint patrick|paddy'?s day|paddys day)\b/.test(lower);
+  if (!config.open) {
+    if (namedStPatricks) {
+      return "We're closed on St Patrick's Day — we're closed on all bank and public holidays.";
+    }
+    return "We're closed on bank and public holidays.";
+  }
+  const open = config.startMin != null ? spokenTimeForPhone(config.startMin) : 'our usual hours';
+  const close = config.endMin != null ? spokenTimeForPhone(config.endMin) : 'closing';
+  if (namedStPatricks) {
+    return `On St Patrick's Day we're open from ${open} till ${close}.`;
+  }
+  return `On bank and public holidays we're open from ${open} till ${close}.`;
+}
+
+function bankHolidayBlocksHoursAnswer(
+  raw: unknown,
+  text: string,
+  timeZone: string,
+  ref = new Date(),
+): string | null {
+  const config = parseBankHolidayConfig(raw);
+  if (!config?.configured) return null;
+  if (callerSoundsLikeBankHolidayQuestion(text)) {
+    return buildBankHolidaySpokenReply(config, text);
+  }
+  const targetDate = hoursQuestionDate(text, timeZone, ref);
+  if (targetDate && !config.open && isIrishPublicHoliday(targetDate, timeZone)) {
+    if (/\btomorrow\b/.test(text.toLowerCase())) {
+      return "Tomorrow we're closed — it's a bank and public holiday.";
+    }
+    if (/\btoday\b/.test(text.toLowerCase())) {
+      return "Today we're closed — it's a bank and public holiday.";
+    }
+    const named = weekdayMentionedInText(text);
+    if (named) {
+      const label = named.charAt(0).toUpperCase() + named.slice(1);
+      return `On ${label} we're closed — it's a bank and public holiday.`;
+    }
+  }
+  return null;
+}
+
 /** Compact structured hours block for the live-call prompt wrapper. */
 export function formatStructuredHoursForLivePrompt(
   raw: unknown,
@@ -94,11 +234,20 @@ export function formatStructuredHoursForLivePrompt(
       ? `Today (${todayLocal}) — ${todayDay}: ${spokenDayHours(todayRow)}.`
       : `Today: ${todayLocal}.`;
 
+  const bankConfig = parseBankHolidayConfig(raw);
+  const bankLine = bankConfig?.configured
+    ? bankConfig.open
+      ? '- Bank & public holidays: special hours apply (see dashboard).'
+      : '- Bank & public holidays: closed (including St Patrick\'s Day).'
+    : null;
+
   return [
     'Structured opening hours (authoritative — use these, not bank-holiday guesses):',
     todaySpoken,
     ...lines,
-    'If they name a weekday, answer that weekday only. Bank/public holidays are separate — do not say closed on a normal weekday unless that weekday is marked closed above.',
+    ...(bankLine ? [bankLine] : []),
+    'If they name a weekday, answer that weekday only unless it falls on a bank/public holiday — then say closed.',
+    'St Patrick\'s Day and other Irish public holidays: use the bank-holiday line above, not normal weekday hours.',
   ].join('\n');
 }
 
@@ -208,8 +357,16 @@ export function buildRetailHoursSpokenReply(
   raw: unknown,
   text: string,
   timeZone: string,
-  opts?: { correcting?: boolean },
+  opts?: { correcting?: boolean; ref?: Date },
 ): string | null {
+  const bankReply = bankHolidayBlocksHoursAnswer(raw, text, timeZone, opts?.ref);
+  if (bankReply) {
+    if (opts?.correcting) {
+      return `Sorry about that — ${bankReply.charAt(0).toLowerCase()}${bankReply.slice(1)}`;
+    }
+    return bankReply;
+  }
+
   const sched = parseBusinessHoursSchedule(raw);
   if (!sched) return null;
 

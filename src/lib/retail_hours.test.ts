@@ -21,6 +21,12 @@ const hours = {
   sunday: { open: true, start: '09:00', end: '18:00' },
 };
 
+const hoursWithClosedBankHolidays = {
+  ...hours,
+  _bankHolidaysConfigured: true,
+  _bankHolidaysOpen: false,
+};
+
 describe('retail_hours', () => {
   it('formats structured hours for prompt', () => {
     const block = formatStructuredHoursForLivePrompt(hours, 'Europe/Dublin', 'Thursday 5 June 2026');
@@ -80,5 +86,26 @@ describe('retail_hours', () => {
   it('resolves tomorrow for hours questions', () => {
     const day = hoursQuestionDay('Are you open tomorrow?', 'Europe/Dublin');
     assert.ok(day);
+  });
+
+  it('answers St Patrick\'s Day consistently when bank holidays are closed', () => {
+    const line = buildRetailHoursSpokenReply(
+      hoursWithClosedBankHolidays,
+      "Are you open on St Patrick's Day?",
+      'Europe/Dublin',
+    );
+    assert.match(line ?? '', /closed on St Patrick's Day/i);
+    assert.match(line ?? '', /bank and public holidays/i);
+  });
+
+  it('answers tomorrow as closed when tomorrow is a public holiday', () => {
+    const line = buildRetailHoursSpokenReply(
+      hoursWithClosedBankHolidays,
+      'Are you open tomorrow?',
+      'Europe/Dublin',
+      { ref: new Date('2026-03-16T12:00:00Z') },
+    );
+    assert.match(line ?? '', /Tomorrow we're closed/i);
+    assert.match(line ?? '', /bank and public holiday/i);
   });
 });

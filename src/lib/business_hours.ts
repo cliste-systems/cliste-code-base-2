@@ -164,6 +164,40 @@ export function parseBusinessHoursSchedule(raw: unknown): Map<string, DaySchedul
   return out.size > 0 ? out : null;
 }
 
+export type BankHolidayConfig = {
+  configured: boolean;
+  open: boolean;
+  startMin: number | null;
+  endMin: number | null;
+};
+
+/** Parse dashboard bank-holiday flags from `organizations.business_hours` JSON. */
+export function parseBankHolidayConfig(raw: unknown): BankHolidayConfig | null {
+  if (raw == null) return null;
+  let obj: unknown = raw;
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    if (!t) return null;
+    try {
+      obj = JSON.parse(t) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof obj !== 'object' || obj === null) return null;
+  const rec = obj as Record<string, unknown>;
+  if (rec._bankHolidaysConfigured !== true) return null;
+  const open = rec._bankHolidaysOpen === true;
+  const startMin = parseHmToMinutes(rec._bankHolidaysStart);
+  const endMin = parseHmToMinutes(rec._bankHolidaysEnd);
+  return {
+    configured: true,
+    open,
+    startMin,
+    endMin,
+  };
+}
+
 /** Resolve weekday for `timeZone`, or `null` if the locale string is unexpected (skip strict hour checks). */
 export function weekdayKeyFromDate(d: Date, timeZone: string): (typeof WEEK_ORDER)[number] | null {
   const wd = d
