@@ -29,6 +29,13 @@ const V3_AUDIO_TAG = /\[(?:warm|pause|softly|laughs|\w+)\]/gi;
 /** Model control tokens (e.g. <|end|>) — strip before TTS. */
 const MODEL_CONTROL_TOKEN = /<\|[^|>]*\|>/g;
 
+/** Emoji and pictographs — never spoken on a phone call. */
+const EMOJI_PATTERN = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu;
+
+/** Leading acknowledgement directly before a name — insert comma for natural pacing. */
+const LEADING_ACK_BEFORE_NAME =
+  /^(Grand|Lovely|Perfect|Brilliant|No bother|Sound|Ah grand|Ah)\s+([A-Z][a-z]+)\b/;
+
 /** Tricky terms → TTS-friendly spellings (word-boundary replacements). */
 const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
  [/\bHello Cara\b/gi, 'Hello Kara'],
@@ -141,11 +148,18 @@ function stripV3TagsUnlessV3(text: string, ttsModel: string): string {
   return text.replace(V3_AUDIO_TAG, '');
 }
 
+function insertLeadingAckComma(text: string): string {
+  return text.replace(LEADING_ACK_BEFORE_NAME, '$1, $2');
+}
+
 function normalizeTtsChunk(text: string, ttsModel = activeTtsModel): string {
+  let normalized = text
+    .replace(MODEL_CONTROL_TOKEN, '')
+    .replace(EMOJI_PATTERN, '')
+    .replace(ALL_CAPS_WORD, (word) => (word === 'AI' ? word : word.toLowerCase()));
+  normalized = insertLeadingAckComma(normalized);
   const stripped = stripV3TagsUnlessV3(
-    text
-      .replace(MODEL_CONTROL_TOKEN, '')
-      .replace(ALL_CAPS_WORD, (word) => (word === 'AI' ? word : word.toLowerCase()))
+    normalized
       .replace(URL_PATTERN, '')
       .replace(FORBIDDEN_SPOKEN, '')
       .replace(UNWANTED_SPOKEN, 'lovely')

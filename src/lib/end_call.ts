@@ -97,6 +97,10 @@ export function assistantTextSoundsLikeDemoFarewell(text: string): boolean {
 
 function normalizeGoodbyeText(text: string): string {
   return text
+    .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
+    .replace(/[\u2013\u2014\u2212]/g, ' ')
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, ' ')
     .replace(/\*+/g, ' ')
     .replace(/`+/g, ' ')
     .replace(/[!?.,]+/g, ' ')

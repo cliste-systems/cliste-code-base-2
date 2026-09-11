@@ -1481,6 +1481,28 @@ export default defineAgent({
         goodbyeForceTimer = null;
       }
     };
+    const armDemoFarewellForceHangup = (text: string) => {
+      const flags = session.userData.sessionFlags;
+      if (
+        !testCall ||
+        flags.endPhoneCallUsed ||
+        flags.awaitingAnythingElseReply ||
+        !assistantTextSoundsLikeDemoFarewell(text)
+      ) {
+        return;
+      }
+      clearGoodbyeForceTimer();
+      diag.push('info', 'demo_farewell_force_hangup', { snippet: text.slice(0, 120) });
+      goodbyeForceTimer = setTimeout(() => {
+        goodbyeForceTimer = null;
+        if (session.userData.sessionFlags.endPhoneCallUsed) return;
+        void (async () => {
+          await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
+          if (session.userData.sessionFlags.endPhoneCallUsed) return;
+          await disconnectCallerLeg(session, session.userData, async () => {});
+        })();
+      }, 700);
+    };
     const clearDeadAirTimers = () => {
       if (deadAirTimer) {
         clearTimeout(deadAirTimer);
@@ -1712,6 +1734,9 @@ export default defineAgent({
       }
 
       if (isCallEnding()) {
+        if (role === 'assistant') {
+          armDemoFarewellForceHangup(text);
+        }
         const label = role === 'user' ? 'Caller' : 'Assistant';
         const interruptedNote =
           item.interrupted && (role === 'assistant' || role === 'user') ? ' [cut off]' : '';
@@ -1810,19 +1835,9 @@ export default defineAgent({
         testCall &&
         role === 'assistant' &&
         !flags.endPhoneCallUsed &&
-        !flags.awaitingAnythingElseReply &&
-        assistantTextSoundsLikeDemoFarewell(text)
+        !flags.awaitingAnythingElseReply
       ) {
-        clearGoodbyeForceTimer();
-        goodbyeForceTimer = setTimeout(() => {
-          goodbyeForceTimer = null;
-          if (session.userData.sessionFlags.endPhoneCallUsed) return;
-          void (async () => {
-            await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
-            if (session.userData.sessionFlags.endPhoneCallUsed) return;
-            await disconnectCallerLeg(session, session.userData, async () => {});
-          })();
-        }, 700);
+        armDemoFarewellForceHangup(text);
       }
 
       if (

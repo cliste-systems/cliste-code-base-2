@@ -43,6 +43,17 @@ describe('tts_text_sanitize', () => {
     assert.match(out, /take care/i);
   });
 
+  it('strips emoji before TTS', () => {
+    const out = prepareHardcodedSpeechForTts('Grand, Abigail — take care now. 👋');
+    assert.doesNotMatch(out, /👋/);
+    assert.match(out, /take care/i);
+  });
+
+  it('inserts comma after leading acknowledgement before a name', () => {
+    const out = prepareHardcodedSpeechForTts('No bother Abigail — take care now.');
+    assert.match(out, /^No bother, Abigail/i);
+  });
+
   it('maps is that alright to okay for TTS (avoids drawn-out alright)', () => {
     const out = prepareHardcodedSpeechForTts(
       "I can text you our booking link — is that alright?",

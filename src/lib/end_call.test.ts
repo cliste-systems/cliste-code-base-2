@@ -75,6 +75,16 @@ describe('end_call goodbye detector', () => {
     );
     assert.equal(
       assistantTextSoundsLikeDemoFarewell(
+        'Grand Abigail — I\u2019ll leave you to it. Take care now. \u{1F44B}',
+      ),
+      true,
+    );
+    assert.equal(
+      assistantTextSoundsLikeDemoFarewell('No bother, Abigail — take care now.'),
+      true,
+    );
+    assert.equal(
+      assistantTextSoundsLikeDemoFarewell(
         'Lovely — for a salon I can handle calls while you\'re busy and take care of messages.',
       ),
       false,
