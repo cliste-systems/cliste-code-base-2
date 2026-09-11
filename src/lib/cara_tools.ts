@@ -60,6 +60,12 @@ export type CaraSessionFlags = {
   demoScenarioBeat?: number;
   /** Hello Cara demo — caller sounded finished; programmatic close may run. */
   demoCallerReadyToClose?: boolean;
+  /** Conversational retail opening — caller first name once captured. */
+  retailCallerName?: string | null;
+  /** Conversational retail — recording awareness line already spoken. */
+  retailRecordingNoticePlayed?: boolean;
+  /** Conversational retail — opening arc finished; normal LLM flow. */
+  retailOpeningComplete?: boolean;
 };
 
 export type CaraAgentUserData = {

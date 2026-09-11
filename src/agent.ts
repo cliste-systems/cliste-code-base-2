@@ -78,6 +78,7 @@ import {
   resolveConversationalRetailBusinessName,
   RETAIL_LINE_OPENING_PAUSE_MS,
 } from './lib/conversational_retail_line.js';
+import { resolveRetailOpeningTurn } from './lib/retail_opening.js';
 import { getActiveCallTestProfile } from './lib/test_profile.js';
 import {
   detectDemoScenario,
@@ -700,6 +701,9 @@ export default defineAgent({
         demoScenarioSlug: null,
         demoScenarioBeat: 0,
         demoCallerReadyToClose: false,
+        retailCallerName: null,
+        retailRecordingNoticePlayed: false,
+        retailOpeningComplete: false,
       },
       disclosureConfirmed: conversationalRetailLine
         ? false
@@ -1248,6 +1252,7 @@ export default defineAgent({
     const scheduleCallerReplyNudge = () => {
       clearCallerReplyNudgeTimer();
       if (testCall || !allowBookingAutomation || isCallEnding()) return;
+      if (conversationalRetailLine && !session.userData.sessionFlags.retailOpeningComplete) return;
       const epoch = replyTurnEpoch;
       const utterance = lastCallerUtterance.trim();
       if (!utterance) return;
@@ -1275,7 +1280,7 @@ export default defineAgent({
 
     const scheduleGreetingInterruptFallback = () => {
       clearGreetingInterruptFallbackTimer();
-      if (GREETING_INTERRUPT_FALLBACK_MS <= 0 || isCallEnding()) return;
+      if (conversationalRetailLine || GREETING_INTERRUPT_FALLBACK_MS <= 0 || isCallEnding()) return;
       greetingInterruptFallbackTimer = setTimeout(() => {
         greetingInterruptFallbackTimer = null;
         if (isCallEnding()) return;
@@ -1302,7 +1307,7 @@ export default defineAgent({
         reason,
         listenGraceMs: graceMs,
       });
-      if (reason === 'greeting_interrupted') {
+      if (reason === 'greeting_interrupted' && !conversationalRetailLine) {
         scheduleGreetingInterruptFallback();
       } else if (reason === 'greeting_completed' && playbackGreetingText.trim() && !greetingTranscriptLogged) {
         greetingTranscriptLogged = true;
@@ -1384,6 +1389,38 @@ export default defineAgent({
       return true;
     };
 
+    const applyConversationalRetailOpeningTurn = (text: string): boolean => {
+      if (!conversationalRetailLine) return false;
+      const flags = session.userData.sessionFlags;
+      const turn = resolveRetailOpeningTurn(text, flags);
+
+      if (turn.kind === 'none') return false;
+
+      if (turn.kind === 'defer_to_llm') {
+        flags.retailOpeningComplete = true;
+        console.info('[agent] retail_opening_defer', { snippet: text.slice(0, 80) });
+        return false;
+      }
+
+      cancelInFlightReply();
+      clearCallerReplyNudgeTimer();
+
+      if (turn.kind === 'recording_notice') {
+        flags.retailCallerName = turn.callerName;
+        flags.retailRecordingNoticePlayed = true;
+        bumpReplyTurn('retail_recording_notice');
+        sayPrepared(session, turn.line);
+        console.info('[agent] retail_opening_recording', { callerName: turn.callerName });
+        return true;
+      }
+
+      flags.retailOpeningComplete = true;
+      bumpReplyTurn('retail_help_pivot');
+      sayPrepared(session, turn.line);
+      console.info('[agent] retail_opening_complete', { callerName: turn.callerName });
+      return true;
+    };
+
     const ingestCallerFinalText = (
       text: string,
       bumpReason: string,
@@ -1401,6 +1438,9 @@ export default defineAgent({
       if (isDuplicateCallerUtterance(key, at)) return false;
       settleGreetingPhase('caller_spoke');
       appendTranscriptLine(at, `Caller: ${text}`);
+      if (applyConversationalRetailOpeningTurn(text)) {
+        return true;
+      }
       session.userData.sessionFlags.likelySttGarble = false;
       noteCallerGarble(session.userData.sessionFlags, session.userData.organizationId, text);
       resetClosePhaseIfCallerContinues(text);

@@ -79,10 +79,9 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
     : '';
 
   const disclosurePerCallBlock = input.conversationalRetailMode
-    ? `- The fixed opening already played — **I'm Cara, the AI assistant** and **can I get your name?** — do not repeat it.
-- After their name: soft **recording** awareness (*just so you're aware, this call may be recorded, yeah?*) — awareness, not consent. AI identity was already in the opening.
-- **Next:** *Now, {name}, what can I help you with today?* — no *how are you keeping?* or other chitchat first.
-- **Never** repeat AI/recording notice later in the call unless they ask.`
+    ? `- Opening arc (name → recording → help question) is **already handled programmatically** before your first reply.
+- Do **not** repeat greeting, name ask, recording notice, or *what can I help you with today?*
+- Answer their store question from business instructions; use retail tools when needed.`
     : input.openingGreetingDelivered
       ? `- The caller already heard your AI + recording notice in the opening greeting.
 - **Never** repeat it or add a second disclosure (no extra GDPR/booking lines).
@@ -96,7 +95,7 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
     : `- Caller ID withheld — ask for a mobile or email when I need to send something or call back.`;
 
   const socialChitchatBlock = input.conversationalRetailMode
-    ? `**After opening** — do not ask social chitchat before their errand. After the recording notice, ask *Now, {name}, what can I help you with today?* If they ask how you are first, one warm line back then pivot to help.`
+    ? `**After opening** — the help question was already asked programmatically. Answer their errand; no social chitchat before they state what they need.`
     : `**Social chitchat** — if they ask how you are / how you're keeping: one warm line back then pivot to help — **then stop and listen**. Never *"I'm here to assist"* or *"What can I assist you with today"*.`;
 
   return `You are Cara, answering live phone calls for **${input.businessName}** (${businessLabel}).
