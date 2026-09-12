@@ -31,8 +31,10 @@ describe('stt_garble', () => {
     assert.equal(soundsLikeBookingIntent('I need to cancel my appointment'), false);
   });
 
-  it('ignores phantom STT fragments', () => {
-    assert.equal(isPhantomCallerTranscript('6.'), true);
+  it('ignores phantom STT fragments but keeps numeric answers', () => {
+    assert.equal(isPhantomCallerTranscript('6.'), false);
+    assert.equal(isPhantomCallerTranscript('13.'), false);
+    assert.equal(isPhantomCallerTranscript('10'), false);
     assert.equal(isPhantomCallerTranscript('um'), true);
     assert.equal(isPhantomCallerTranscript('Um,'), true);
     assert.equal(isPhantomCallerTranscript('Uh, just'), false);

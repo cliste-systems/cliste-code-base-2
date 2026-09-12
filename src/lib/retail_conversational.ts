@@ -1,11 +1,11 @@
 import { DEMO_BANNED_AI_SLOP } from './demo_personality.js';
 
-/** Retail lines — opening arc is programmatic; this block is guard rails only. */
+/** Retail lines — opening arc is programmatic; LLM handles the conversation. */
 export function formatRetailConversationalOpeningForPrompt(): string {
   return `## Opening (programmatic — do not speak)
 The fixed opening already played: store intro, **I'm Cara, the AI assistant**, recording notice, and **how can I help you today?**
-**Your first reply is only after they state their errand** — answer what they asked in one short line.
-Do **not** repeat the greeting, recording notice, or help question. Do **not** ask for their name unless they offer it. Do **not** ask *how are you keeping?* or menu-style intent questions (*opening hours, directions, or something else*).`;
+Do **not** repeat the greeting, recording notice, or help question.
+If they open with social chitchat (*how are you*, *how are you keeping*), answer warmly in one line then listen — do not re-ask *how can I help* if they already heard it in the greeting.`;
 }
 
 export function formatRetailConversationalBehaviourForPrompt(): string {

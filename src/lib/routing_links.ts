@@ -121,6 +121,21 @@ export function isLocationRoute(link: RoutingLink): boolean {
   return blob.includes('direction') || blob.includes('where are you');
 }
 
+/** Opening-hours routes must be answered in speech — not takeCallbackMessage. */
+export function isSpeechOnlyRetailRoute(link: RoutingLink): boolean {
+  if (link.id === 'retail-hours') return true;
+  if (link.presetId === 'hours-enquiry') return true;
+  const blob = `${link.intent} ${link.label} ${link.keywords ?? ''}`.toLowerCase();
+  if (/\b(hours-enquiry|opening hours|opening times)\b/.test(blob)) return true;
+  if (/\b(are you open|when are you open)\b/.test(blob)) return true;
+  return /\b(hours|opening times)\b/.test(blob) && /\b(open|closed)\b/.test(blob);
+}
+
+/** 9508 prompt — drop hours callback routes so the LLM answers in speech. */
+export function routesForConversationalRetailPrompt(links: RoutingLink[]): RoutingLink[] {
+  return activeRoutes(links).filter((r) => !isSpeechOnlyRetailRoute(r));
+}
+
 export function isBookingRoute(link: RoutingLink): boolean {
   if (link.presetId === 'booking-inquiry') return true;
   const blob = `${link.intent} ${link.label} ${link.keywords ?? ''}`.toLowerCase();

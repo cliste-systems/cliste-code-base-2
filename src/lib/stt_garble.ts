@@ -31,7 +31,6 @@ export function isPhantomCallerTranscript(text: string): boolean {
   const raw = text.trim();
   if (!raw) return true;
   if (raw.length <= 1) return true;
-  if (/^[\d.]+$/.test(raw)) return true;
   const t = raw
     .toLowerCase()
     .replace(/[^\w\s']/g, ' ')

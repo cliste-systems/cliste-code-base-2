@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 import { buildCaraCallPrompt } from './lib/cara_prompt.js';
 import { resolveAiDisclosure } from './lib/ai_disclosure.js';
-import { CaraTools, createRetailCallbackTicket, type CaraAgentUserData } from './lib/cara_tools.js';
+import { CaraTools, type CaraAgentUserData } from './lib/cara_tools.js';
 import {
   countAssistantTranscriptChars,
   estimateCallCostUsd,
@@ -103,7 +103,7 @@ import {
   shouldArmDemoCloseFromCallerText,
   shouldDropLlmTtsWhileClosing,
 } from './lib/demo_close.js';
-import { buildDemoCallClosingLine, buildWindDownPrompt, inferDemoCallerFirstName } from './lib/natural_phrasing.js';
+import { buildDemoCallClosingLine, inferDemoCallerFirstName } from './lib/natural_phrasing.js';
 import { buildDemoPersonaGreeting, DEMO_LINE_OPENING_PAUSE_MS, pickCallPersona, type CallPersona } from './lib/persona.js';
 import { resolveSpokenBusinessName } from './lib/spoken_business_name.js';
 import { orgVerticalLabel } from './lib/org_vertical.js';
@@ -123,7 +123,6 @@ import {
 } from './lib/speech_triggers.js';
 import {
   detectLikelySttGarble,
-  isPhantomCallerTranscript,
   soundsLikeBookingIntent,
   soundsLikeCancelOrChangeAppointment,
 } from './lib/stt_garble.js';
@@ -134,21 +133,6 @@ import {
   callerSoundsLikeOpenHoursQuestion,
   formatStructuredHoursForLivePrompt,
 } from './lib/retail_hours.js';
-import {
-  shouldAskRetailWindDownQuestion,
-  shouldCloseRetailCallWhenCallerDone,
-} from './lib/retail_call_close.js';
-import {
-  buildRetailAskNameOnlyLine,
-  buildRetailBakeryOrderAskNameLine,
-  buildRetailCallbackConfirmationLine,
-  buildRetailCallbackNumberConfirmLine,
-  buildRetailStockAskNameLine,
-  callerSoundsLikeBakeryCakeOrder,
-  callerSoundsLikeStockOrPriceQuestion,
-  extractRetailCallerFirstName,
-  isTakeCallbackNameValidationError,
-} from './lib/retail_stable.js';
 import {
   getOrgForCall,
   getSendableBusinessFiles,
@@ -611,7 +595,39 @@ export default defineAgent({
               }),
             )
           : greetingText;
-    const skipGreetingCache = useConversationalOpening && Boolean(playbackGreetingText);
+    const skipGreetingCache = useDemoPersonaGreeting && Boolean(playbackGreetingText);
+    let greetingCacheWarmPromise: Promise<void> | null = null;
+    if (
+      conversationalRetailLine &&
+      !useCartesiaInference &&
+      playbackGreetingText &&
+      !skipGreetingCache
+    ) {
+      const retailGreetingApiKey =
+        process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
+      if (retailGreetingApiKey) {
+        greetingCacheWarmPromise = ensureGreetingPcmCached({
+          orgId: org.id,
+          greetingText: playbackGreetingText,
+          apiKey: retailGreetingApiKey,
+          voiceId: activeVoiceId,
+          encoding: process.env.ELEVEN_TTS_ENCODING?.trim() || 'pcm_24000',
+          baseURL:
+            process.env.ELEVENLABS_BASE_URL?.trim() || 'https://api.elevenlabs.io/v1',
+          voiceSettings: resolveElevenVoiceSettings(),
+        })
+          .then((pcm) => {
+            console.info('[agent] greeting_pcm_warm', {
+              orgId: org.id,
+              bytes: pcm.byteLength,
+              early: true,
+            });
+          })
+          .catch((e) => {
+            console.error('[agent] greeting pcm early warmup failed', e);
+          });
+      }
+    }
     console.info('[agent] call_persona', {
       variant: callPersona.variant,
       demoLine: testCall,
@@ -621,7 +637,12 @@ export default defineAgent({
     });
 
     const systemPrompt = buildCaraCallPrompt({
-      businessName: spokenBusinessName,
+      businessName: conversationalRetailLine
+        ? resolveConversationalRetailBusinessName({
+            name: org.name,
+            greeting: org.greeting,
+          })
+        : spokenBusinessName,
       customPrompt: custom,
       callerLine,
       routingLinks,
@@ -804,35 +825,40 @@ export default defineAgent({
           )
         : null;
 
-    const greetingCacheWarmPromise =
-      !useCartesiaInference && playbackGreetingText && !skipGreetingCache && elevenApiKey
-        ? ensureGreetingPcmCached({
+    if (
+      !greetingCacheWarmPromise &&
+      !useCartesiaInference &&
+      playbackGreetingText &&
+      !skipGreetingCache &&
+      elevenApiKey
+    ) {
+      greetingCacheWarmPromise = ensureGreetingPcmCached({
+        orgId: org.id,
+        greetingText: playbackGreetingText,
+        apiKey: elevenApiKey,
+        voiceId: elevenVoiceId,
+        encoding: elevenEncoding,
+        baseURL: elevenBaseUrl,
+        voiceSettings: elevenVoiceSettings,
+      })
+        .then((pcm) => {
+          console.info('[agent] greeting_pcm_warm', {
             orgId: org.id,
-            greetingText: playbackGreetingText,
-            apiKey: elevenApiKey,
-            voiceId: elevenVoiceId,
-            encoding: elevenEncoding,
-            baseURL: elevenBaseUrl,
-            voiceSettings: elevenVoiceSettings,
-          })
-          .then((pcm) => {
-            console.info('[agent] greeting_pcm_warm', {
-              orgId: org.id,
-              bytes: pcm.byteLength,
-              msSinceCallStart: Date.now() - callStartedAt,
-            });
-            diag.push('info', 'greeting_pcm_warm', {
-              bytes: pcm.byteLength,
-              msSinceCallStart: Date.now() - callStartedAt,
-            });
-          })
-          .catch((e) => {
-            console.error('[agent] greeting pcm warmup failed', e);
-            diag.push('error', 'greeting_pcm_warm_failed', {
-              message: e instanceof Error ? e.message : String(e),
-            });
-          })
-      : null;
+            bytes: pcm.byteLength,
+            msSinceCallStart: Date.now() - callStartedAt,
+          });
+          diag.push('info', 'greeting_pcm_warm', {
+            bytes: pcm.byteLength,
+            msSinceCallStart: Date.now() - callStartedAt,
+          });
+        })
+        .catch((e) => {
+          console.error('[agent] greeting pcm warmup failed', e);
+          diag.push('error', 'greeting_pcm_warm_failed', {
+            message: e instanceof Error ? e.message : String(e),
+          });
+        });
+    }
 
     const isU3RtProStt = isU3RtProSttModel(inferenceSttModel);
     // u3-rt-pro: LiveKit turn detector + tuned silence — STT-owned EOT interrupts TTS mid-reply.
@@ -1107,9 +1133,11 @@ export default defineAgent({
       process.env.LIVEKIT_RESPONSE_FILLER_MAX_PER_CALL ?? '3',
       10,
     );
-    const postGreetingGraceMs = demoExperienceStack
-      ? Number.parseInt(process.env.LIVEKIT_TEST_POST_GREETING_GRACE_MS ?? '3500', 10)
-      : Number.parseInt(process.env.LIVEKIT_POST_GREETING_GRACE_MS ?? '5000', 10);
+    const postGreetingGraceMs = conversationalRetailLine
+      ? 0
+      : demoExperienceStack
+        ? Number.parseInt(process.env.LIVEKIT_TEST_POST_GREETING_GRACE_MS ?? '3500', 10)
+        : Number.parseInt(process.env.LIVEKIT_POST_GREETING_GRACE_MS ?? '5000', 10);
     const postGreetingInterruptGraceMs = Number.parseInt(
       process.env.LIVEKIT_POST_GREETING_INTERRUPT_GRACE_MS ?? '500',
       10,
@@ -1259,7 +1287,7 @@ export default defineAgent({
 
     const retryFailedReplyOnce = (source: string) => {
       if (replyRetryUsedForTurn || isCallEnding()) return;
-      if (testCall) return;
+      if (conversationalRetailLine || testCall) return;
       if (!canPlayRecoverySpeech()) return;
       if (session.userState === 'speaking') return;
       replyRetryUsedForTurn = true;
@@ -1269,7 +1297,7 @@ export default defineAgent({
 
     const playPipelineRecoverySpeech = (reason: string, stage: 'stt' | 'tts') => {
       if (sttRecoverySpeechPlayed || isCallEnding()) return;
-      if (!conversationalRetailLine || testCall) return;
+      if (conversationalRetailLine || testCall) return;
       sttRecoverySpeechPlayed = true;
       console.warn('[agent] pipeline_recovery_speech', { reason, stage });
       diag.push('warn', 'pipeline_recovery_speech', { reason, stage });
@@ -1490,40 +1518,7 @@ export default defineAgent({
       clearCallerReplyNudgeTimer();
       cancelInFlightReply();
       bumpReplyTurn('retail_programmatic');
-      const flags = session.userData.sessionFlags;
-      flags.retailSubstantiveExchangeComplete = true;
-      flags.askedAnythingElse = false;
-      flags.awaitingAnythingElseReply = false;
       sayPrepared(session, line, { allowInterruptions: true });
-    };
-
-    const sayRetailWindDownQuestion = () => {
-      clearCallerReplyNudgeTimer();
-      cancelInFlightReply();
-      bumpReplyTurn('retail_wind_down');
-      const flags = session.userData.sessionFlags;
-      flags.askedAnythingElse = true;
-      flags.awaitingAnythingElseReply = true;
-      flags.callerRespondedAfterAnythingElse = false;
-      flags.anythingElseAskCount += 1;
-      clearAllGuardTimers();
-      sayPrepared(session, buildWindDownPrompt(callSidAttr ?? ''), { allowInterruptions: true });
-    };
-
-    const scheduleRetailForceHangup = (reason: string) => {
-      if (!conversationalRetailLine || testCall) return;
-      if (session.userData.sessionFlags.endPhoneCallUsed) return;
-      clearGoodbyeForceTimer();
-      diag.push('info', 'retail_force_hangup', { reason });
-      goodbyeForceTimer = setTimeout(() => {
-        goodbyeForceTimer = null;
-        if (session.userData.sessionFlags.endPhoneCallUsed) return;
-        void (async () => {
-          await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
-          if (session.userData.sessionFlags.endPhoneCallUsed) return;
-          await disconnectCallerLeg(session, session.userData, async () => {});
-        })();
-      }, 700);
     };
 
     const tryRetailProgrammaticHoursReply = (
@@ -1551,13 +1546,6 @@ export default defineAgent({
       const trimmed = text.trim();
       const priorCallerUtterance = lastCallerUtterance;
       lastCallerUtterance = trimmed;
-      if (isPhantomCallerTranscript(text)) {
-        console.info('[agent] noise_fragment_ignored', {
-          snippet: text.slice(0, 60),
-          reason: bumpReason,
-        });
-        return false;
-      }
       const key = normalizeTranscriptKey(text);
       if (isDuplicateCallerUtterance(key, at)) return false;
       settleGreetingPhase('caller_spoke');
@@ -1589,6 +1577,7 @@ export default defineAgent({
       }
       let handledWithProgrammaticReply = false;
       if (
+        !conversationalRetailLine &&
         org.niche === 'retail' &&
         callerSoundsLikeCallerFrustration(trimmed) &&
         priorCallerUtterance &&
@@ -1601,52 +1590,16 @@ export default defineAgent({
             `The caller said: "${trimmed.slice(0, 120)}". Apologise briefly for the pause, then answer what they asked about: "${priorCallerUtterance.slice(0, 120)}" in one short sentence. Do not ask anything else first.`,
           );
         }
-      } else if (org.niche === 'retail' && !session.userData.sessionFlags.endPhoneCallUsed) {
-        const flags = session.userData.sessionFlags;
+      } else if (
+        !conversationalRetailLine &&
+        org.niche === 'retail' &&
+        !session.userData.sessionFlags.endPhoneCallUsed
+      ) {
         const correcting = callerSoundsLikeWeekdayHoursCorrection(trimmed);
         if (
           (callerSoundsLikeOpenHoursQuestion(trimmed) || correcting) &&
           tryRetailProgrammaticHoursReply(trimmed, { correcting })
         ) {
-          handledWithProgrammaticReply = true;
-        } else if (
-          conversationalRetailLine &&
-          flags.awaitingRetailCallerName &&
-          !flags.actionTicketCreated
-        ) {
-          const name = extractRetailCallerFirstName(trimmed, { awaitingName: true });
-          if (name) {
-            flags.retailCallerName = name;
-            flags.awaitingRetailCallerName = false;
-            const summary = flags.pendingCallbackSummary?.trim() || trimmed;
-            flags.pendingCallbackSummary = null;
-            void createRetailCallbackTicket(session.userData, summary, { callerName: name }).catch(
-              (err) => {
-                console.error('[agent] retail_programmatic_callback_failed', err);
-              },
-            );
-            maybeSayRetailProgrammaticReply(buildRetailCallbackConfirmationLine(name));
-            handledWithProgrammaticReply = true;
-          }
-        } else if (
-          conversationalRetailLine &&
-          !flags.awaitingRetailCallerName &&
-          !flags.actionTicketCreated &&
-          callerSoundsLikeBakeryCakeOrder(trimmed)
-        ) {
-          flags.awaitingRetailCallerName = true;
-          flags.pendingCallbackSummary = trimmed;
-          maybeSayRetailProgrammaticReply(buildRetailBakeryOrderAskNameLine());
-          handledWithProgrammaticReply = true;
-        } else if (
-          conversationalRetailLine &&
-          !flags.awaitingRetailCallerName &&
-          !flags.actionTicketCreated &&
-          callerSoundsLikeStockOrPriceQuestion(trimmed)
-        ) {
-          flags.awaitingRetailCallerName = true;
-          flags.pendingCallbackSummary = trimmed;
-          maybeSayRetailProgrammaticReply(buildRetailStockAskNameLine());
           handledWithProgrammaticReply = true;
         } else if (callerSoundsLikeRetailStaffQuestion(trimmed)) {
           steerReply(
@@ -1666,24 +1619,17 @@ export default defineAgent({
       if (callerPivotedFromSmsConsent(text, { awaitingSmsConsent: session.userData.sessionFlags.bookingLinkSendInFlight })) {
         session.userData.sessionFlags.bookingRouteId = null;
         diag.push('warn', 'booking_consent_pivot', { snippet: text.slice(0, 120) });
-        steerReply(
-          'The caller pivoted away from SMS consent — stop treating their last line as yes/no to texting. Answer their new question or offer a callback.',
-        );
+        if (!conversationalRetailLine) {
+          steerReply(
+            'The caller pivoted away from SMS consent — stop treating their last line as yes/no to texting. Answer their new question or offer a callback.',
+          );
+        }
       }
-      if (!testCall) {
-        if (
-          conversationalRetailLine &&
-          shouldAskRetailWindDownQuestion(trimmed, session.userData.sessionFlags)
-        ) {
-          sayRetailWindDownQuestion();
-          handledWithProgrammaticReply = true;
-        } else {
-          maybeCloseRetailCallWhenCallerDone(text);
-          maybeCloseAfterAnythingElse(text);
-        }
-        if (!handledWithProgrammaticReply) {
-          scheduleCallerReplyNudge();
-        }
+      if (!testCall && !conversationalRetailLine) {
+        maybeCloseAfterAnythingElse(text);
+      }
+      if (!testCall && !conversationalRetailLine && !handledWithProgrammaticReply) {
+        scheduleCallerReplyNudge();
       }
       return true;
     };
@@ -1723,7 +1669,6 @@ export default defineAgent({
     };
 
     let warmCloseStarted = false;
-    let retailNumberConfirmSpoken = false;
 
     const performWarmProgrammaticClose = () => {
       const flags = session.userData.sessionFlags;
@@ -1757,17 +1702,9 @@ export default defineAgent({
       })();
     };
 
-    const maybeCloseRetailCallWhenCallerDone = (text: string) => {
-      if (testCall || !conversationalRetailLine) return;
-      const flags = session.userData.sessionFlags;
-      if (!shouldCloseRetailCallWhenCallerDone(text, flags)) return;
-      flags.callerRespondedAfterAnythingElse = true;
-      performWarmProgrammaticClose();
-    };
-
     const maybeCloseAfterAnythingElse = (text: string) => {
       const flags = session.userData.sessionFlags;
-      if (testCall || !flags.askedAnythingElse || !callerWindingDownCall(text)) return;
+      if (testCall || conversationalRetailLine || !flags.askedAnythingElse || !callerWindingDownCall(text)) return;
       if (flags.bookingLinkSendInFlight) return;
       if (flags.endPhoneCallUsed) return;
 
@@ -1866,6 +1803,7 @@ export default defineAgent({
 
     const resetDeadAirTimer = () => {
       clearDeadAirTimers();
+      if (conversationalRetailLine) return;
       if (isCallEnding()) return;
       const f = session.userData.sessionFlags;
       if (f.askedAnythingElse && f.callerRespondedAfterAnythingElse) return;
@@ -1924,7 +1862,7 @@ export default defineAgent({
         if (ev.oldState !== 'speaking' && allowBookingAutomation) {
           if (session.agentState === 'thinking' || session.agentState === 'speaking') {
             bumpReplyTurn('caller_barge_in');
-          } else if (session.agentState === 'listening') {
+          } else if (session.agentState === 'listening' && !conversationalRetailLine) {
             // New caller turn — bump at utterance start so preemptive + auto-reply share the same epoch.
             bumpReplyTurn('caller_new_turn');
           }
@@ -2086,12 +2024,8 @@ export default defineAgent({
         clearAllGuardTimers();
       }
       if (role === 'assistant' && assistantTextSoundsLikeGoodbye(text)) {
-        if (conversationalRetailLine && !testCall && !flags.endPhoneCallUsed) {
-          performWarmProgrammaticClose();
-        } else {
-          flags.closingCall = true;
-          clearAllGuardTimers();
-        }
+        flags.closingCall = true;
+        clearAllGuardTimers();
       }
       if (
         role === 'assistant' &&
@@ -2099,15 +2033,7 @@ export default defineAgent({
         assistantAskedForPhoneNumber(text) &&
         !flags.endPhoneCallUsed
       ) {
-        if (conversationalRetailLine && !testCall && !retailNumberConfirmSpoken) {
-          retailNumberConfirmSpoken = true;
-          console.info('[agent] retail_number_confirm', { display: callerLine.display });
-          cancelInFlightReply();
-          bumpReplyTurn('retail_number_confirm');
-          sayPrepared(session, buildRetailCallbackNumberConfirmLine(callerLine.display), {
-            allowInterruptions: true,
-          });
-        } else if (!conversationalRetailLine) {
+        if (!conversationalRetailLine) {
           console.warn('[agent] blocked phone-number ask — caller ID on file', {
             display: callerLine.display,
           });
@@ -2122,6 +2048,7 @@ export default defineAgent({
         hasCallerIdOnFile &&
         assistantAskedForCallerIdentity(text) &&
         !testCall &&
+        !conversationalRetailLine &&
         !flags.endPhoneCallUsed &&
         !flags.callbackRequested &&
         !flags.actionTicketCreated
@@ -2148,6 +2075,7 @@ export default defineAgent({
 
       if (
         !testCall &&
+        !conversationalRetailLine &&
         role === 'assistant' &&
         assistantSoundsLikeCorporateAssist(text) &&
         !flags.endPhoneCallUsed &&
@@ -2181,31 +2109,26 @@ export default defineAgent({
 
       if (
         !testCall &&
+        !conversationalRetailLine &&
         role === 'assistant' &&
         !flags.endPhoneCallUsed &&
-        (conversationalRetailLine ||
-          !flags.awaitingAnythingElseReply ||
-          flags.callerRespondedAfterAnythingElse) &&
+        (!flags.awaitingAnythingElseReply || flags.callerRespondedAfterAnythingElse) &&
         assistantTextSoundsLikeTerminalHangup(text) &&
         /\bthanks for (ringing|calling|trying)\b/i.test(text)
       ) {
-        if (conversationalRetailLine) {
-          scheduleRetailForceHangup('terminal_hangup');
-        } else {
-          clearGoodbyeForceTimer();
-          goodbyeForceTimer = setTimeout(() => {
-            goodbyeForceTimer = null;
+        clearGoodbyeForceTimer();
+        goodbyeForceTimer = setTimeout(() => {
+          goodbyeForceTimer = null;
+          if (session.userData.sessionFlags.endPhoneCallUsed) return;
+          void (async () => {
+            await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
             if (session.userData.sessionFlags.endPhoneCallUsed) return;
-            void (async () => {
-              await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
-              if (session.userData.sessionFlags.endPhoneCallUsed) return;
-              await disconnectCallerLeg(session, session.userData, async () => {});
-            })();
-          }, 700);
-        }
+            await disconnectCallerLeg(session, session.userData, async () => {});
+          })();
+        }, 700);
       }
 
-      if (!testCall && role === 'assistant' && assistantTextSoundsLikeFakeHangup(text)) {
+      if (!testCall && !conversationalRetailLine && role === 'assistant' && assistantTextSoundsLikeFakeHangup(text)) {
         clearFakeHangupGuardTimer();
         fakeHangupGuardTimer = setTimeout(() => {
           fakeHangupGuardTimer = null;
@@ -2251,29 +2174,6 @@ export default defineAgent({
             out.createdAt,
             `${prefix}${truncateForTranscript(out.output, MAX_TOOL_SNIPPET_CHARS)}`,
           );
-        }
-        if (
-          conversationalRetailLine &&
-          !testCall &&
-          call.name === 'endPhoneCall' &&
-          out?.isError
-        ) {
-          scheduleRetailForceHangup('endPhoneCall_error');
-        }
-        if (
-          conversationalRetailLine &&
-          !testCall &&
-          call.name === 'takeCallbackMessage' &&
-          out?.isError &&
-          isTakeCallbackNameValidationError(out.output)
-        ) {
-          const flags = session.userData.sessionFlags;
-          cancelInFlightReply();
-          flags.awaitingRetailCallerName = true;
-          if (!flags.pendingCallbackSummary?.trim() && lastCallerUtterance.trim()) {
-            flags.pendingCallbackSummary = lastCallerUtterance.trim();
-          }
-          maybeSayRetailProgrammaticReply(buildRetailAskNameOnlyLine());
         }
       }
     });
@@ -2646,8 +2546,23 @@ export default defineAgent({
 
     const agent = new CaraVoiceAgent({
       instructions: systemPrompt,
-      tools: caraTools.toolContext({ vertical: orgVertical, demoLine: testCall }),
+      tools: caraTools.toolContext({
+        vertical: orgVertical,
+        demoLine: testCall,
+        conversationalRetailLine,
+      }),
     });
+
+    if (conversationalRetailLine && greetingCacheWarmPromise) {
+      try {
+        await Promise.race([
+          greetingCacheWarmPromise,
+          new Promise<void>((resolve) => setTimeout(resolve, 2500)),
+        ]);
+      } catch {
+        /* greeting warm is best-effort */
+      }
+    }
 
     await session.start({ agent, room: ctx.room });
     resetDeadAirTimer();
@@ -2692,7 +2607,11 @@ export default defineAgent({
       const greetingTtsModel =
         process.env.GREETING_TTS_MODEL?.trim() || activeTtsModel;
       const greetingUsesV3 = isElevenV3Model(greetingTtsModel);
-      const GREETING_CACHE_WAIT_MS = greetingUsesV3 ? 500 : 450;
+      const GREETING_CACHE_WAIT_MS = conversationalRetailLine
+        ? 2000
+        : greetingUsesV3
+          ? 500
+          : 450;
       void greetingCacheWarmPromise?.catch(() => undefined);
 
       const resolveGreetingPcm = async (): Promise<Buffer | null> => {

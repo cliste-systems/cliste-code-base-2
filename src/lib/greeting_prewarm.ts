@@ -1,3 +1,8 @@
+import {
+  buildRetailConversationalOpening,
+  isConversationalRetailLine,
+  resolveConversationalRetailBusinessName,
+} from './conversational_retail_line.js';
 import { ensureGreetingPcmCached } from './greeting_audio_cache.js';
 import { resolveElevenVoiceSettings } from './call_participant.js';
 import { getOrgForCall, resolveOrgVoiceId } from './supabase.js';
@@ -8,6 +13,21 @@ const DEFAULT_PREWARM_TARGETS = [
   { phone: '+353749759508' },
 ] as const;
 
+function resolvePrewarmGreetingText(input: {
+  phone: string;
+  org: NonNullable<Awaited<ReturnType<typeof getOrgForCall>>>;
+}): string | null {
+  if (isConversationalRetailLine(input.phone)) {
+    return buildRetailConversationalOpening(
+      resolveConversationalRetailBusinessName({
+        name: input.org.name,
+        greeting: input.org.greeting,
+      }),
+    );
+  }
+  return input.org.greeting?.trim() || null;
+}
+
 async function prewarmGreetingForTarget(input: {
   slug?: string;
   phone: string;
@@ -17,8 +37,9 @@ async function prewarmGreetingForTarget(input: {
     ...(input.slug ? { slug: input.slug } : {}),
     phone: input.phone,
   });
-  const greetingText = org?.greeting?.trim();
-  if (!org || !greetingText) return;
+  if (!org) return;
+  const greetingText = resolvePrewarmGreetingText({ phone: input.phone, org });
+  if (!greetingText) return;
 
   const tts = resolveTtsConfig({
     testProfile: null,

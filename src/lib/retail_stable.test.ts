@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   buildRetailAskNameOnlyLine,
+  buildRetailAudioCheckReply,
   buildRetailBakeryOrderAskNameLine,
   buildRetailCallbackConfirmationLine,
   buildRetailCallbackNumberConfirmLine,
@@ -26,13 +27,23 @@ describe('retail_stable', () => {
     assert.equal(callerSoundsLikeBakeryCakeOrder('Are ye open tomorrow?'), false);
   });
 
-  it('asks for first name only on cake orders — no redundant bakery preamble', () => {
-    assert.equal(buildRetailBakeryOrderAskNameLine(), "What's your first name?");
-    assert.doesNotMatch(buildRetailBakeryOrderAskNameLine(), /bakery/i);
+  it('asks for first name with bakery preamble on cake orders', () => {
+    assert.equal(
+      buildRetailBakeryOrderAskNameLine(),
+      "The bakery team handle cake orders — what's your first name?",
+    );
+    assert.match(buildRetailBakeryOrderAskNameLine(), /bakery/i);
+  });
+
+  it('builds retail audio check reply without demo chitchat', () => {
+    assert.match(buildRetailAudioCheckReply(), /hear you fine/i);
+    assert.doesNotMatch(buildRetailAudioCheckReply(), /how are you keeping/i);
   });
 
   it('extracts caller first names', () => {
     assert.equal(extractRetailCallerFirstName('My name is Brandon'), 'Brandon');
+    assert.equal(extractRetailCallerFirstName('My first name is Brendan'), 'Brendan');
+    assert.equal(extractRetailCallerFirstName('Brandon.', { awaitingName: true }), 'Brandon');
     assert.equal(extractRetailCallerFirstName("It's Brendan"), 'Brendan');
     assert.equal(extractRetailCallerFirstName('Brandon', { awaitingName: true }), 'Brandon');
     assert.equal(extractRetailCallerFirstName('thanks', { awaitingName: true }), null);

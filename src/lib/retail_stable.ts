@@ -78,10 +78,11 @@ export function extractRetailCallerFirstName(
   text: string,
   opts?: { awaitingName?: boolean },
 ): string | null {
-  const trimmed = text.trim();
+  const trimmed = text.trim().replace(/[.!?,;:]+$/g, '').trim();
   if (!trimmed) return null;
 
   const explicitPatterns = [
+    /\b(?:my )?first name is\s+([a-z][a-z'-]{1,30})\b/i,
     /\b(?:my name is|i am|i'?m|it'?s|this is|call me|name'?s)\s+([a-z][a-z'-]{1,30})\b/i,
     /\b(?:i'?m|it'?s)\s+([a-z][a-z'-]{1,30})\b/i,
   ];
@@ -109,7 +110,12 @@ export function buildRetailStockAskNameLine(): string {
 }
 
 export function buildRetailBakeryOrderAskNameLine(): string {
-  return buildRetailAskNameOnlyLine();
+  return "The bakery team handle cake orders — what's your first name?";
+}
+
+/** Warm reply to "can you hear me?" — retail line, no demo chitchat. */
+export function buildRetailAudioCheckReply(): string {
+  return 'Yeah, I can hear you fine — go ahead.';
 }
 
 export function buildRetailAskNameOnlyLine(): string {
@@ -148,5 +154,5 @@ export function formatRetailStableBehaviourForPrompt(): string {
 - Bakery / cake orders: capture name, cake details, date needed, message on cake — then takeCallbackMessage. Do not ask "what type of order" when they said cake.
 - Stock, prices, and availability: you cannot confirm on the phone — the team can ring them back; ask for their first name.
 - When caller ID is on file: confirm *Is [their number] the best number to contact you on?* — **never** ask them to read out their mobile number.
-- When they say they are finished: the system asks *anything else?* once — do not skip straight to goodbye or endPhoneCall.`;
+- After a callback/order is logged and they thank you or say they're sorted — **one warm confirm line, then close**. Do **not** ask *anything else?* if they already said they're finished.`;
 }

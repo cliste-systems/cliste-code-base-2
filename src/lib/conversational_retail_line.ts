@@ -38,8 +38,8 @@ export function isConversationalRetailLine(calledNumber: string | null | undefin
   return normalized ? set.has(normalized) : false;
 }
 
-/** Brief pause before retail greeting — keep ring time minimal (demo line uses its own pause). */
-export const RETAIL_LINE_OPENING_PAUSE_MS = 400;
+/** No artificial pause — cached PCM greeting plays immediately after agent join. */
+export const RETAIL_LINE_OPENING_PAUSE_MS = 0;
 
 export function buildRetailConversationalOpening(spokenBusinessName: string): string {
   const name = spokenBusinessName.trim() || 'the store';

@@ -26,6 +26,10 @@ import {
 } from './supabase.js';
 import { insertActionTicket } from './action_tickets.js';
 import { playTypingSound } from './callback_audio.js';
+import {
+  isPlaceholderCallerName,
+  staffSummaryLooksLikeSpeechOnlyQuestion,
+} from './conversational_retail_policy.js';
 import { disconnectCallerLeg, type EndCallUserData } from './end_call.js';
 import { normalizePhoneE164 } from './phone_normalize.js';
 import { sendTwilioSms, twilioSmsConfigured, caraSmsDryRunEnabled } from './twilio_sms.js';
@@ -304,7 +308,7 @@ async function createCallbackViaWebhook(
   return {
     ok: true,
     message:
-      'Message logged for the team. Tell the caller someone will follow up in your own words — confirm what you captured in one warm line. Do not promise an exact callback time unless your instructions say so.',
+      'Message logged for the team. Confirm what you captured in one warm spoken line, then continue the call naturally.',
   };
 }
 
@@ -608,7 +612,7 @@ export class CaraTools {
         .describe('Caller first name (or full name) they gave on this call.'),
       staffSummary: z
         .string()
-        .min(40)
+        .min(1)
         .describe('2–5 sentences: what the caller wanted, details captured, callback preference.'),
       callbackPhone: z
         .string()
@@ -624,20 +628,31 @@ export class CaraTools {
             'Demo line — do not take messages or invent caller names. Answer their question in speech only.',
         };
       }
+      if (ud.conversationalRetailLine && staffSummaryLooksLikeSpeechOnlyQuestion(staffSummary)) {
+        return {
+          ok: false,
+          message:
+            'Opening hours and directions are answered in speech from Structured hours — do not use takeCallbackMessage. Reply with today\'s hours in one sentence.',
+        };
+      }
       await maybeAcknowledgeToolStart(ctx.session as voice.AgentSession<CaraAgentUserData>);
       const name =
         callerName.trim() ||
         ud.sessionFlags.retailCallerName?.trim() ||
         '';
-      if (!name || /^(caller|unknown|n\/a|none)$/i.test(name)) {
+      if (!name || isPlaceholderCallerName(name)) {
         return {
           ok: false,
           message: 'Ask for their name first and wait for their answer, then call takeCallbackMessage.',
         };
       }
       const text = staffSummary.trim();
-      if (!text) {
-        return { ok: false, message: 'Provide a fuller staffSummary.' };
+      if (text.length < 20) {
+        return {
+          ok: false,
+          message:
+            'Provide a fuller staffSummary (at least a short sentence with what they need and any details).',
+        };
       }
       playTypingSound(ctx.session as voice.AgentSession<CaraAgentUserData>);
       return createCallbackViaWebhook(ud, text, {
@@ -827,7 +842,7 @@ export class CaraTools {
 
   readonly endPhoneCall = llm.tool({
     description:
-      'End the call after a warm Irish goodbye (e.g. "Lovely — thanks for calling Murphy\'s SuperValu. Take care."). Invoke in the same turn as your farewell — never abrupt "ok bye", bare "bye", or "grand". On the Hello Cara demo line: after "is that everything?" and they confirm, give the outro ("Lovely, {name} — thanks for calling Hello Cara today. Have a good day/evening. Bye for now.") then call this tool in that same turn; never say "grand" or "sound"; do not ask another question after they wind down.',
+      'End the call after a warm Irish goodbye (e.g. "Lovely — thanks for calling Kavanaghs SuperValu Donegal Town. Take care." or "Lovely — thanks for calling Murphy\'s SuperValu. Take care."). Invoke in the same turn as your farewell — never abrupt "ok bye", bare "bye", or "grand". On the Hello Cara demo line: after "is that everything?" and they confirm, give the outro ("Lovely, {name} — thanks for calling Hello Cara today. Have a good day/evening. Bye for now.") then call this tool in that same turn; never say "grand" or "sound"; do not ask another question after they wind down.',
     parameters: z.object({}),
     execute: async (_args, { ctx }) => {
       const ud = readCaraUserData(ctx);
@@ -845,26 +860,17 @@ export class CaraTools {
         );
       }
       if (ud.conversationalRetailLine) {
-        if (
-          !ud.sessionFlags.askedAnythingElse &&
-          !ud.sessionFlags.callerRespondedAfterAnythingElse
-        ) {
-          return {
-            ok: false,
-            message:
-              'Ask if there is anything else you can help with first. Wait for their answer, then give one warm thanks-for-calling line and call endPhoneCall.',
-          };
-        }
-        if (
-          ud.sessionFlags.awaitingAnythingElseReply &&
-          !ud.sessionFlags.callerRespondedAfterAnythingElse
-        ) {
-          return {
-            ok: false,
-            message:
-              'Wait for the caller to answer your anything-else question before invoking endPhoneCall.',
-          };
-        }
+        return disconnectCallerLeg(
+          ctx.session as voice.AgentSession<EndCallUserData>,
+          ud,
+          async () => {
+            try {
+              await ctx.waitForPlayout();
+            } catch {
+              /* ignore */
+            }
+          },
+        );
       }
       if (
         (ud.sessionFlags.askedAnythingElse || ud.sessionFlags.awaitingAnythingElseReply) &&
@@ -890,9 +896,20 @@ export class CaraTools {
     },
   });
 
-  toolContext(options?: { vertical?: OrgVertical; demoLine?: boolean }) {
+  toolContext(options?: {
+    vertical?: OrgVertical;
+    demoLine?: boolean;
+    conversationalRetailLine?: boolean;
+  }) {
     if (options?.demoLine) {
       return {
+        endPhoneCall: this.endPhoneCall,
+      };
+    }
+    if (options?.conversationalRetailLine) {
+      return {
+        takeCallbackMessage: this.takeCallbackMessage,
+        transferToTeam: this.transferToTeam,
         endPhoneCall: this.endPhoneCall,
       };
     }

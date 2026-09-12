@@ -43,8 +43,8 @@ describe('conversational_retail_line', () => {
     );
   });
 
-  it('uses a short opening pause so Cara speaks quickly after connect', () => {
-    assert.equal(RETAIL_LINE_OPENING_PAUSE_MS, 400);
+  it('uses no artificial opening pause — cached PCM plays immediately', () => {
+    assert.equal(RETAIL_LINE_OPENING_PAUSE_MS, 0);
   });
 
   it('keeps Donegal Town on conversational retail name resolution', () => {

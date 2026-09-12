@@ -121,9 +121,10 @@ describe('buildCaraCallPrompt', () => {
     assert.doesNotMatch(prompt, /### Electrician/);
   });
 
-  it('uses slim conversational retail prompt without demo persona blocks', () => {
+  it('uses LLM-first conversational retail prompt with call flow and manner blocks', () => {
     const prompt = buildCaraCallPrompt({
       ...baseInput,
+      businessName: 'Kavanaghs SuperValu Donegal Town',
       niche: 'retail',
       businessType: 'Retail & Grocery',
       conversationalRetailMode: true,
@@ -132,15 +133,50 @@ describe('buildCaraCallPrompt', () => {
 
     assert.match(prompt, /programmatic/i);
     assert.match(prompt, /how can I help you today/i);
-    assert.match(prompt, /recording notice/i);
-    assert.match(prompt, /Retail phone — stable mode/i);
+    assert.match(prompt, /CALL FLOW/i);
+    assert.match(prompt, /## Sound human/i);
     assert.match(prompt, /takeCallbackMessage/i);
-    assert.doesNotMatch(prompt, /can I get your name please/i);
-    assert.doesNotMatch(prompt, /who am I speaking to/i);
+    assert.match(prompt, /endPhoneCall/i);
+    assert.match(prompt, /Kavanaghs SuperValu Donegal Town/);
+    assert.match(prompt, /Never.*takeCallbackMessage for opening hours/i);
+    assert.match(prompt, /You are the only voice on this line/i);
+    assert.match(prompt, /Are you open\?/i);
     assert.doesNotMatch(prompt, /Hello Cara demo line/i);
-    assert.doesNotMatch(prompt, /## How you talk/i);
-    assert.doesNotMatch(prompt, /## Sound human/i);
     assert.doesNotMatch(prompt, /## Your manner on this call/i);
+  });
+
+  it('excludes retail-hours callback route from conversational retail prompt', () => {
+    const prompt = buildCaraCallPrompt({
+      ...baseInput,
+      businessName: 'Kavanaghs SuperValu Donegal Town',
+      niche: 'retail',
+      conversationalRetailMode: true,
+      openingGreetingDelivered: true,
+      routingLinks: [
+        {
+          id: 'retail-hours',
+          presetId: 'hours-enquiry',
+          label: 'Opening hours',
+          intent: 'opening hours',
+          targetType: 'callback',
+          url: 'Name, phone',
+          active: true,
+        },
+        {
+          id: 'retail-bakery-cake',
+          presetId: 'quote',
+          label: 'Birthday cake',
+          intent: 'birthday cake',
+          targetType: 'callback',
+          url: 'Name, phone, cake',
+          active: true,
+        },
+      ],
+    });
+
+    assert.doesNotMatch(prompt, /retail-hours/);
+    assert.match(prompt, /retail-bakery-cake.*takeCallbackMessage/);
+    assert.match(prompt, /Opening hours \(speech only/i);
   });
 
   it('includes conversational sections and persona block last on production calls', () => {
