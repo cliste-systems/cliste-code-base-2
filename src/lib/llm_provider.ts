@@ -26,7 +26,7 @@ export type ResolvedCaraLlm = {
   instance: llm.LLM;
 };
 
-const DEFAULT_OPENROUTER_MODEL = 'google/gemma-4-31b-it';
+const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5-mini';
 const DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 /** gpt-5-mini burns completion budget on reasoning — 120 tokens often yields empty speech. */
 const DEFAULT_VOICE_MAX_COMPLETION_TOKENS = 320;

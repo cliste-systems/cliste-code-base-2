@@ -1039,7 +1039,8 @@ export default defineAgent({
     const resolvedLlm = createCaraLlm({
       inferenceLlmModel,
       profileLlmProvider: testProfile?.llm_provider ?? null,
-      forceGateway: useBuilderDemoStack,
+      // LiveKit Inference models (Gemma 4, gpt-5.6-luna, etc.) must not route via OpenRouter.
+      forceGateway: useBuilderDemoStack || bareLiveKitRetailLane,
       reasoningEffort: useBuilderDemoStack ? 'low' : undefined,
       temperature: llmTemperature,
       maxCompletionTokens: llmMaxCompletionTokens,
