@@ -39,7 +39,6 @@ import { createCallDiagnosticSession } from './lib/call_diagnostic_bundle.js';
 import {
   assistantTextSoundsLikeDemoFarewell,
   assistantTextSoundsLikeFakeHangup,
-  assistantTextSoundsLikeGoodbye,
   assistantTextSoundsLikeTerminalHangup,
   buildWarmCallClosingLine,
   disconnectCallerLeg,
@@ -1293,7 +1292,6 @@ export default defineAgent({
     const retryFailedReplyOnce = (source: string) => {
       if (replyRetryUsedForTurn || isCallEnding()) return;
       if (testCall) return;
-      if (conversationalRetailLine && source !== 'empty_speech_handle') return;
       if (!canPlayRecoverySpeech()) return;
       if (session.userState === 'speaking') return;
       replyRetryUsedForTurn = true;
@@ -1411,7 +1409,7 @@ export default defineAgent({
 
     const scheduleGreetingInterruptFallback = () => {
       clearGreetingInterruptFallbackTimer();
-      if (conversationalRetailLine || GREETING_INTERRUPT_FALLBACK_MS <= 0 || isCallEnding()) return;
+      if (GREETING_INTERRUPT_FALLBACK_MS <= 0 || isCallEnding()) return;
       greetingInterruptFallbackTimer = setTimeout(() => {
         greetingInterruptFallbackTimer = null;
         if (isCallEnding()) return;
@@ -1634,7 +1632,7 @@ export default defineAgent({
       if (!testCall && !conversationalRetailLine) {
         maybeCloseAfterAnythingElse(text);
       }
-      if (!testCall && !conversationalRetailLine && !handledWithProgrammaticReply) {
+      if (!testCall && !handledWithProgrammaticReply) {
         scheduleCallerReplyNudge();
       }
       return true;
@@ -1756,29 +1754,6 @@ export default defineAgent({
         })();
       }, 700);
     };
-    const armRetailFarewellForceHangup = (text: string) => {
-      const flags = session.userData.sessionFlags;
-      if (
-        !conversationalRetailLine ||
-        testCall ||
-        flags.endPhoneCallUsed ||
-        (flags.awaitingAnythingElseReply && !flags.callerRespondedAfterAnythingElse) ||
-        !assistantTextSoundsLikeGoodbye(text)
-      ) {
-        return;
-      }
-      clearGoodbyeForceTimer();
-      diag.push('info', 'retail_farewell_force_hangup', { snippet: text.slice(0, 120) });
-      goodbyeForceTimer = setTimeout(() => {
-        goodbyeForceTimer = null;
-        if (session.userData.sessionFlags.endPhoneCallUsed) return;
-        void (async () => {
-          await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
-          if (session.userData.sessionFlags.endPhoneCallUsed) return;
-          await disconnectCallerLeg(session, session.userData, async () => {});
-        })();
-      }, 700);
-    };
     const clearDeadAirTimers = () => {
       if (deadAirTimer) {
         clearTimeout(deadAirTimer);
@@ -1832,7 +1807,6 @@ export default defineAgent({
 
     const resetDeadAirTimer = () => {
       clearDeadAirTimers();
-      if (conversationalRetailLine) return;
       if (isCallEnding()) return;
       const f = session.userData.sessionFlags;
       if (f.askedAnythingElse && f.callerRespondedAfterAnythingElse) return;
@@ -1891,7 +1865,7 @@ export default defineAgent({
         if (ev.oldState !== 'speaking' && allowBookingAutomation) {
           if (session.agentState === 'thinking' || session.agentState === 'speaking') {
             bumpReplyTurn('caller_barge_in');
-          } else if (session.agentState === 'listening' && !conversationalRetailLine) {
+          } else if (session.agentState === 'listening') {
             // New caller turn — bump at utterance start so preemptive + auto-reply share the same epoch.
             bumpReplyTurn('caller_new_turn');
           }
@@ -1980,6 +1954,7 @@ export default defineAgent({
           }
           // SpeechHandle text/source can be empty even when TTS played; chat ctx has the line.
           if (lastAssistantChatText.trim()) {
+            appendTranscriptLine(Date.now(), `Assistant: ${lastAssistantChatText.trim()}`);
             lastAssistantChatText = '';
             return;
           }
@@ -2022,7 +1997,6 @@ export default defineAgent({
       if (isCallEnding()) {
         if (role === 'assistant') {
           armDemoFarewellForceHangup(text);
-          armRetailFarewellForceHangup(text);
         }
         const label = role === 'user' ? 'Caller' : 'Assistant';
         const interruptedNote =
@@ -2051,10 +2025,6 @@ export default defineAgent({
         flags.awaitingAnythingElseReply = true;
         flags.anythingElseAskCount += 1;
         flags.callerRespondedAfterAnythingElse = false;
-        clearAllGuardTimers();
-      }
-      if (role === 'assistant' && assistantTextSoundsLikeGoodbye(text)) {
-        flags.closingCall = true;
         clearAllGuardTimers();
       }
       if (
@@ -2135,15 +2105,6 @@ export default defineAgent({
         !flags.awaitingAnythingElseReply
       ) {
         armDemoFarewellForceHangup(text);
-      }
-
-      if (
-        conversationalRetailLine &&
-        !testCall &&
-        role === 'assistant' &&
-        !flags.endPhoneCallUsed
-      ) {
-        armRetailFarewellForceHangup(text);
       }
 
       if (

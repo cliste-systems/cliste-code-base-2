@@ -8,6 +8,7 @@ import {
   shouldArmDemoCloseFromCallerText,
   shouldDropLlmTtsWhileClosing,
 } from './demo_close.js';
+import { assistantTextSoundsLikeGoodbye } from './end_call.js';
 
 describe('demo_close', () => {
   it('detects imminent close on interim wind-down phrases', () => {
@@ -62,6 +63,18 @@ describe('demo_close', () => {
       }),
       false,
     );
+    assert.equal(
+      shouldDropLlmTtsWhileClosing({
+        closingCall: false,
+        preparedSpeechSingleUtteranceNext: false,
+        singleUtteranceTtsNext: false,
+      }),
+      false,
+    );
+  });
+
+  it('allows LLM TTS after goodbye-shaped text when closingCall is not set prematurely', () => {
+    assert.equal(assistantTextSoundsLikeGoodbye('Thank you! Have a great day!'), true);
     assert.equal(
       shouldDropLlmTtsWhileClosing({
         closingCall: false,

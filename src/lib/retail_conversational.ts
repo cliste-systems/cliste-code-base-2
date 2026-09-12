@@ -27,7 +27,7 @@ ${DEMO_BANNED_AI_SLOP.map((p) => `- *"${p}"*`).join('\n')}
 - Stacked questions, feature lists, call-centre filler
 
 ### When they are done
-Use the **Ending calls** two-beat flow: one yes/no check-in after you've helped, then read their answer **by meaning** — if they're done, thanks-for-calling + **endPhoneCall**; if not, keep helping. Do **not** go silent. Do **not** ask a second check-in after they already signalled they're finished.
+See **Ending calls** below — one yes/no check-in, then read their answer by meaning.
 
 ### After simple answers (hours, directions)
 Do **not** immediately ask *are you all sorted?* — wait for them to say they are done or ask a follow-up. If they ask another hours question, answer it straight away.`;

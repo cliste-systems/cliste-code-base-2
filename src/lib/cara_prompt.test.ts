@@ -162,8 +162,8 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /endPhoneCall.*same turn/i);
     assert.match(prompt, /Never.*dangling goodbye/i);
     assert.match(prompt, /Ignore any business instruction to use takeCallbackMessage/i);
-    assert.match(prompt, /Wind-down.*Ending calls beat 1/i);
-    assert.match(prompt, /Close.*Ending calls beat 2/i);
+    assert.match(prompt, /Finish.*Ending calls/i);
+    assert.doesNotMatch(prompt, /Wind-down.*Ending calls beat 1/i);
   });
 
   it('excludes retail-hours callback route from conversational retail prompt', () => {
