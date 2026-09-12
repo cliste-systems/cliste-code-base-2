@@ -1,16 +1,14 @@
 /**
  * 9508 Pure LLM Lane — policy freeze.
  *
- * After the PCM greeting, ONLY the LLM speaks. Allowed code on conversational retail:
+ * After the PCM greeting, ONLY the LLM speaks live. Allowed code on conversational retail:
  * - Cached PCM greeting playback
- * - Tool execute() handlers (return JSON — never speak)
  * - endPhoneCall disconnect
  *
- * Do NOT add: caller-text regex handlers, steerReply, safeGenerateReply mid-call,
- * sayPrepared mid-call, dead-air prompts, or programmatic close on 9508.
+ * Side effects (action tickets, dashboard updates) run **post-call** via postCallActions JSON.
  *
- * Exception: after takeCallbackMessage succeeds, a one-shot confirmation nudge is
- * allowed if the LLM would otherwise stay silent (tool-only turn).
+ * Do NOT add: caller-text regex handlers, steerReply, safeGenerateReply mid-call,
+ * sayPrepared mid-call, dead-air prompts, programmatic close, or live takeCallbackMessage on 9508.
  */
 
 const PLACEHOLDER_CALLER_NAMES = /^(caller|unknown|n\/a|none|customer|guest)$/i;
@@ -42,7 +40,6 @@ export function staffSummaryLooksLikeSpeechOnlyQuestion(text: string): boolean {
 }
 
 export function formatSpeechOnlyHoursPromptBlock(): string {
-  return `## Opening hours (speech only — no tool)
-When callers ask if you are open, opening times, or hours for today/tomorrow/a weekday: answer in **one spoken sentence** from **Structured hours** below.
-**Never** call takeCallbackMessage for opening hours.`;
+  return `## Opening hours (speech only)
+When callers ask if you are open, opening times, or hours for today/tomorrow/a weekday: answer in **one spoken sentence** from **Structured hours** below.`;
 }

@@ -135,13 +135,13 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /how can I help you today/i);
     assert.match(prompt, /CALL FLOW/i);
     assert.match(prompt, /## Sound human/i);
-    assert.match(prompt, /takeCallbackMessage/i);
     assert.match(prompt, /endPhoneCall/i);
     assert.match(prompt, /Kavanaghs SuperValu Donegal Town/);
-    assert.match(prompt, /Never.*takeCallbackMessage for opening hours/i);
+    assert.match(prompt, /after hang-up/i);
     assert.match(prompt, /Every turn must include spoken words/i);
     assert.match(prompt, /Never.*would you like to place an order/i);
-    assert.match(prompt, /You are the only voice on this line/i);
+    assert.match(prompt, /endPhoneCall.*only/i);
+    assert.doesNotMatch(prompt, /takeCallbackMessage/i);
     assert.doesNotMatch(prompt, /Hello Cara demo line/i);
     assert.doesNotMatch(prompt, /## Your manner on this call/i);
   });

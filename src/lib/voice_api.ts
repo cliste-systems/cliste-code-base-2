@@ -37,6 +37,13 @@ export type CallCompletePayload = {
     cara_question?: string;
     suggested_section?: string;
   }>;
+  post_call_actions?: Array<{
+    type: string;
+    callerName?: string;
+    summary?: string;
+    reason?: string;
+    routeId?: string;
+  }>;
 };
 
 export type ActionTicketPayload = {

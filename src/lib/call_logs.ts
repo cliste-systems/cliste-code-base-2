@@ -95,3 +95,21 @@ export async function updateCallLogEnrichment(
   }
   return true;
 }
+
+export async function updateCallLogOutcome(callLogId: string, outcome: string): Promise<boolean> {
+  if (isOfflinePlayground()) return false;
+  if (!directDbFallbackAllowed()) {
+    console.error('[call_logs] CRITICAL: outcome update blocked — no service role');
+    return false;
+  }
+  const id = callLogId.trim();
+  if (!id || !outcome.trim()) return false;
+
+  const supabase = getSupabaseClient();
+  const { error } = await supabase.from('call_logs').update({ outcome: outcome.trim() }).eq('id', id);
+  if (error) {
+    console.error('updateCallLogOutcome failed', error);
+    return false;
+  }
+  return true;
+}

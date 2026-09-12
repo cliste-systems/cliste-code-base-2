@@ -6,6 +6,7 @@ import {
   normalizePostprocessKnowledgeGaps,
   parsePostprocessJsonPayload,
 } from './call_postprocess.js';
+import { normalizePostCallActions } from './post_call_actions.js';
 
 describe('normalizePostprocessKnowledgeGaps', () => {
   it('parses valid gaps and drops invalid entries', () => {
@@ -79,5 +80,26 @@ describe('parsePostprocessJsonPayload', () => {
     assert.equal(parsed?.summary, 'Caller asked about balayage.');
     const gaps = normalizePostprocessKnowledgeGaps(parsed?.knowledgeGaps);
     assert.equal(gaps[0]?.topic, 'Balayage');
+  });
+
+  it('extracts postCallActions from fenced JSON', () => {
+    const parsed = parsePostprocessJsonPayload<{
+      postCallActions?: unknown;
+    }>(`\`\`\`json
+{
+  "transcriptReview": "Caller: cake order",
+  "summary": "Cake order logged.",
+  "knowledgeGaps": [],
+  "postCallActions": [{
+    "type": "action_ticket",
+    "callerName": "Timmy",
+    "summary": "Birthday cake for Mary on the 12th of next month for 7 people.",
+    "routeId": "retail-bakery-cake"
+  }]
+}
+\`\`\``);
+    const actions = normalizePostCallActions(parsed?.postCallActions);
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0]?.callerName, 'Timmy');
   });
 });

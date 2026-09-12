@@ -910,8 +910,6 @@ export class CaraTools {
     }
     if (options?.conversationalRetailLine) {
       return {
-        takeCallbackMessage: this.takeCallbackMessage,
-        transferToTeam: this.transferToTeam,
         endPhoneCall: this.endPhoneCall,
       };
     }

@@ -6,6 +6,11 @@ import {
   callerSoundsLikeBankHolidayQuestion,
   callerSoundsLikeOpenHoursQuestion,
 } from './retail_hours.js';
+import {
+  fallbackExtractPostCallActions,
+  normalizePostCallActions,
+  type PostCallAction,
+} from './post_call_actions.js';
 
 /** Avoid overwhelming inference context on very long calls. */
 const MAX_VERBATIM_FOR_LLM = 48_000;
@@ -26,6 +31,7 @@ export type CallPostprocessResult = {
   transcriptReview: string;
   aiSummary: string;
   knowledgeGaps: PostprocessKnowledgeGap[];
+  postCallActions: PostCallAction[];
 };
 
 function countTranscriptLines(text: string): number {
@@ -156,6 +162,8 @@ async function runPostprocessLlm(input: {
   businessName: string;
   outcome: string;
   inferenceLlmModel: string;
+  conversationalRetailLine?: boolean;
+  routesCatalog?: string;
 }): Promise<CallPostprocessResult | null> {
   const { instance: postprocessLlm } = createCaraLlm({
     inferenceLlmModel: input.inferenceLlmModel,
@@ -163,16 +171,33 @@ async function runPostprocessLlm(input: {
     maxCompletionTokens: 2200,
   });
 
+  const postCallActionsBlock = input.conversationalRetailLine
+    ? `
+- postCallActions: Array (may be empty). Extract follow-up work Cara **completed verbally on the call** — nothing is logged live on 9508.
+  Only include actions when intake clearly finished (caller gave name + details, or Cara verbally confirmed she logged it).
+  **Do NOT** emit actions for opening-hours-only calls.
+  Types:
+  - {"type":"action_ticket","callerName":"first name they gave","summary":"2-4 sentences: cake order, stock check, complaint, etc.","routeId":"optional route id e.g. retail-bakery-cake"}
+  - {"type":"manager_callback","callerName":"first name","reason":"why they want the manager"}
+  Use caller names from the transcript only — never invent "caller" or placeholders.
+  Example cake order: {"type":"action_ticket","callerName":"Timmy","summary":"Birthday cake for Mary on the 12th of next month, 7 servings, message Happy Birthday Mary.","routeId":"retail-bakery-cake"}
+${input.routesCatalog?.trim() ? `\nActive routes catalog:\n${input.routesCatalog.trim()}` : ''}`
+    : '';
+
+  const jsonKeys = input.conversationalRetailLine
+    ? '"transcriptReview", "summary", "knowledgeGaps", and "postCallActions"'
+    : '"transcriptReview", "summary", and "knowledgeGaps"';
+
   const userPrompt = `Business name: ${input.businessName}
 Call outcome code: ${input.outcome}
 
 VERBATIM TRANSCRIPT:
 ${input.verbatimForLlm}
 
-Return ONLY valid JSON with keys "transcriptReview", "summary", and "knowledgeGaps" (no markdown outside JSON).
+Return ONLY valid JSON with keys ${jsonKeys} (no markdown outside JSON).
 - transcriptReview: Full conversation with the same line prefixes (Caller:, Assistant:, [Tool], etc.). Fix obvious speech-to-text mistakes. Include every turn and tool step — do not drop filler lines or omit lines. Do not invent facts.
 - summary: 2–4 short sentences in Irish/British English for the business owner: what the caller wanted, what happened, and the result.
-- knowledgeGaps: Array (may be empty). Include an item when the caller asked about a service or topic Cara could not answer from the business menu/instructions, or Cara took a message because something was unlisted or unknown. Each item: {"topic":"short label","caller_context":"optional staff excerpt","cara_question":"optional owner question","suggested_section":"faq|services|services_not_offered|business_rules"}. Omit payment/health/ID details. Do not emit gaps for opening hours, bank holidays, or St Patrick's Day when structured hours exist — those are handled programmatically. Do not duplicate routine Action Inbox handoffs already covered by the outcome. Max 3 items.`;
+- knowledgeGaps: Array (may be empty). Include an item when the caller asked about a service or topic Cara could not answer from the business menu/instructions, or Cara took a message because something was unlisted or unknown. Each item: {"topic":"short label","caller_context":"optional staff excerpt","cara_question":"optional owner question","suggested_section":"faq|services|services_not_offered|business_rules"}. Omit payment/health/ID details. Do not emit gaps for opening hours, bank holidays, or St Patrick's Day when structured hours exist — those are handled programmatically. Do not duplicate routine Action Inbox handoffs already covered by the outcome. Max 3 items.${postCallActionsBlock}`;
 
   const chatCtx = llm.ChatContext.empty();
   chatCtx.addMessage({
@@ -186,12 +211,20 @@ Return ONLY valid JSON with keys "transcriptReview", "summary", and "knowledgeGa
     transcriptReview?: string;
     summary?: string;
     knowledgeGaps?: unknown;
+    postCallActions?: unknown;
   }>(raw);
   if (parsed?.transcriptReview?.trim() && parsed?.summary?.trim()) {
+    let postCallActions = input.conversationalRetailLine
+      ? normalizePostCallActions(parsed.postCallActions)
+      : [];
+    if (input.conversationalRetailLine && postCallActions.length === 0) {
+      postCallActions = fallbackExtractPostCallActions(input.verbatimForLlm);
+    }
     return {
       transcriptReview: parsed.transcriptReview.trim(),
       aiSummary: parsed.summary.trim(),
       knowledgeGaps: normalizePostprocessKnowledgeGaps(parsed.knowledgeGaps),
+      postCallActions,
     };
   }
   return null;
@@ -207,9 +240,12 @@ export async function postprocessCallTranscript(input: {
   inferenceLlmModel: string;
   actionTicketCreated?: boolean;
   businessHours?: unknown;
+  conversationalRetailLine?: boolean;
+  routesCatalog?: string;
 }): Promise<CallPostprocessResult> {
   const verbatim = input.verbatim?.trim() ?? '';
   const emptyGaps: PostprocessKnowledgeGap[] = [];
+  const emptyActions: PostCallAction[] = [];
 
   const verbatimForLlm =
     verbatim.length > MAX_VERBATIM_FOR_LLM
@@ -221,6 +257,7 @@ export async function postprocessCallTranscript(input: {
       transcriptReview: '',
       aiSummary: '',
       knowledgeGaps: emptyGaps,
+      postCallActions: emptyActions,
     };
   }
 
@@ -235,6 +272,8 @@ export async function postprocessCallTranscript(input: {
         businessName: input.businessName,
         outcome: input.outcome,
         inferenceLlmModel: input.inferenceLlmModel,
+        conversationalRetailLine: input.conversationalRetailLine,
+        routesCatalog: input.routesCatalog,
       }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
     ]);
@@ -248,10 +287,15 @@ export async function postprocessCallTranscript(input: {
         input.businessHours,
       );
       if (verbatimLines > 0 && reviewLines < Math.ceil(verbatimLines * 0.7)) {
+        const postCallActions =
+          input.conversationalRetailLine && result.postCallActions.length === 0
+            ? fallbackExtractPostCallActions(verbatim)
+            : result.postCallActions;
         return {
           transcriptReview: verbatim,
           aiSummary: result.aiSummary,
           knowledgeGaps,
+          postCallActions,
         };
       }
       return { ...result, knowledgeGaps };
@@ -260,9 +304,14 @@ export async function postprocessCallTranscript(input: {
     console.error('postprocessCallTranscript LLM failed', e);
   }
 
+  const fallbackActions = input.conversationalRetailLine
+    ? fallbackExtractPostCallActions(verbatim)
+    : emptyActions;
+
   return {
     transcriptReview: verbatim,
     aiSummary: fallbackSummary(input.outcome),
     knowledgeGaps: emptyGaps,
+    postCallActions: fallbackActions,
   };
 }

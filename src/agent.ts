@@ -25,7 +25,12 @@ import {
   estimateCallCostUsd,
 } from './lib/call_cost_estimate.js';
 import { postprocessCallTranscript } from './lib/call_postprocess.js';
-import { insertCallLog, updateCallLogEnrichment } from './lib/call_logs.js';
+import { insertCallLog, updateCallLogEnrichment, updateCallLogOutcome } from './lib/call_logs.js';
+import { executePostCallActions, type PostCallAction } from './lib/post_call_actions.js';
+import {
+  formatRoutesForPrompt,
+  routesForConversationalRetailPrompt,
+} from './lib/routing_links.js';
 import {
   buildCloseDiagnosticsPayload,
   createCallLatencyTracker,
@@ -1792,34 +1797,6 @@ export default defineAgent({
       }, responseFillerMs);
     };
 
-    let retailCallbackConfirmTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const clearRetailCallbackConfirmTimer = () => {
-      if (retailCallbackConfirmTimer) {
-        clearTimeout(retailCallbackConfirmTimer);
-        retailCallbackConfirmTimer = null;
-      }
-    };
-
-    const scheduleRetailCallbackConfirmation = () => {
-      clearRetailCallbackConfirmTimer();
-      if (!conversationalRetailLine || isCallEnding()) return;
-      const epoch = replyTurnEpoch;
-      retailCallbackConfirmTimer = setTimeout(() => {
-        retailCallbackConfirmTimer = null;
-        if (epoch !== replyTurnEpoch || isCallEnding()) return;
-        if (session.userData.sessionFlags.endPhoneCallUsed) return;
-        if (generateReplyInFlight) return;
-        if (session.agentState === 'speaking' || session.agentState === 'thinking') return;
-        if (session.userState === 'speaking') return;
-        console.warn('[agent] retail_callback_confirm_nudge');
-        safeGenerateReply(
-          'You just logged their message with takeCallbackMessage. Speak ONE warm confirmation line now — summarise the cake order or callback you logged. No tools this turn.',
-          { force: true },
-        );
-      }, 1200);
-    };
-
     const clearAllGuardTimers = () => {
       clearFakeHangupGuardTimer();
       clearGoodbyeForceTimer();
@@ -1827,7 +1804,6 @@ export default defineAgent({
       clearResponseFillerTimer();
       clearGreetingInterruptFallbackTimer();
       clearCallerReplyNudgeTimer();
-      clearRetailCallbackConfirmTimer();
     };
 
     const resetDeadAirTimer = () => {
@@ -2037,7 +2013,6 @@ export default defineAgent({
           !lineMatchesGreeting(text, playbackGreetingText)
         ) {
           flags.retailSubstantiveExchangeComplete = true;
-          clearRetailCallbackConfirmTimer();
         }
         if (assistantAwaitingCallerReply(text)) {
           callerAwaitingReply = true;
@@ -2204,14 +2179,6 @@ export default defineAgent({
             out.createdAt,
             `${prefix}${truncateForTranscript(out.output, MAX_TOOL_SNIPPET_CHARS)}`,
           );
-          if (
-            conversationalRetailLine &&
-            call.name === 'takeCallbackMessage' &&
-            !out.isError &&
-            /"ok"\s*:\s*true/.test(out.output)
-          ) {
-            scheduleRetailCallbackConfirmation();
-          }
         }
       }
     });
@@ -2396,6 +2363,7 @@ export default defineAgent({
 
         let transcriptReview: string | null = null;
         let didPostprocess = false;
+        let postCallActions: PostCallAction[] = [];
         let knowledgeGaps: Array<{
           topic: string;
           caller_context?: string;
@@ -2403,6 +2371,9 @@ export default defineAgent({
           suggested_section?: string;
         }> = [];
         const presetAiSummary = aiSummary;
+        const retailRoutesCatalog = conversationalRetailLine
+          ? formatRoutesForPrompt(routesForConversationalRetailPrompt(routingLinks))
+          : undefined;
         if (verbatim) {
           const pp = await postprocessCallTranscript({
             verbatim,
@@ -2411,11 +2382,48 @@ export default defineAgent({
             inferenceLlmModel,
             actionTicketCreated: ud.sessionFlags.actionTicketCreated,
             businessHours: org.business_hours,
+            conversationalRetailLine,
+            routesCatalog: retailRoutesCatalog,
           });
           transcriptReview = pp.transcriptReview ? redactPii(pp.transcriptReview) : null;
           aiSummary = pp.aiSummary ? redactPii(pp.aiSummary) : presetAiSummary;
           knowledgeGaps = pp.knowledgeGaps;
+          postCallActions = pp.postCallActions;
           didPostprocess = true;
+        }
+
+        if (
+          conversationalRetailLine &&
+          postCallActions.length > 0 &&
+          persistCalledNumber
+        ) {
+          const exec = await executePostCallActions({
+            organizationId: ud.organizationId,
+            calledNumber: persistCalledNumber,
+            callerNumber: callerNumberRaw,
+            actions: postCallActions,
+          });
+          if (exec.actionTicketCreated) {
+            ud.sessionFlags.actionTicketCreated = true;
+            outcome = 'action_created';
+            knowledgeGaps = [];
+            if (callLogId) {
+              const patched = await updateCallLogOutcome(callLogId, outcome);
+              if (!patched) {
+                console.error('[agent] call log outcome patch failed', callLogId);
+              }
+            }
+            console.info('[agent] post_call_actions_executed', {
+              callLogId,
+              executed: exec.executed.length,
+              errors: exec.errors.length,
+            });
+          } else if (exec.errors.length > 0) {
+            console.error('[agent] post_call_actions_failed', {
+              callLogId,
+              errors: exec.errors,
+            });
+          }
         }
 
         const costEstimate = estimateCallCostUsd({
@@ -2503,6 +2511,46 @@ export default defineAgent({
             console.warn('[agent] knowledge_gaps webhook failed', {
               error: gapResult.error,
               gapCount: knowledgeGaps.length,
+            });
+          }
+        }
+
+        if (
+          conversationalRetailLine &&
+          callLogId &&
+          voiceWebhooksConfigured() &&
+          persistCalledNumber &&
+          (postCallActions.length > 0 || transcriptReview || aiSummary)
+        ) {
+          const enrichResult = await postCallComplete({
+            called_number: persistCalledNumber,
+            call_sid: callSidAttr,
+            room_name: roomName || null,
+            caller_number: callerNumberRaw,
+            duration_seconds: durationSeconds,
+            outcome,
+            transcript: verbatim,
+            transcript_review: transcriptReview,
+            ai_summary: aiSummary,
+            post_call_actions: postCallActions.map((action) =>
+              action.type === 'action_ticket'
+                ? {
+                    type: action.type,
+                    callerName: action.callerName,
+                    summary: action.summary,
+                    routeId: action.routeId,
+                  }
+                : {
+                    type: action.type,
+                    callerName: action.callerName,
+                    reason: action.reason,
+                  },
+            ),
+          });
+          if (!enrichResult.ok) {
+            console.warn('[agent] post_call_actions enrichment webhook failed', {
+              error: enrichResult.error,
+              callLogId,
             });
           }
         }
