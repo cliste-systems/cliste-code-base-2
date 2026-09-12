@@ -232,7 +232,7 @@ function buildCaraConversationalRetailPrompt(input: BuildCaraCallPromptInput): s
 
   const callerIdPerCallBlock = hasCallerId
     ? `- Number on file: **${input.callerLine.display}** (${input.callerLine.e164})${input.callerLine.canReceiveSms ? ' — SMS-capable' : ''}.
-- For callbacks and orders: confirm *Is ${input.callerLine.display} the best number to contact you on?* — **never** ask them to read out their mobile number.`
+- You **already have** their number from caller ID — **never** ask them to confirm, read out, or give their phone number on this call. Post-call processing uses caller ID automatically.`
     : `- Caller ID withheld — ask for a mobile when taking a callback or order.`;
 
   return `You are Cara on the phone for **${input.businessName}** (retail store).
@@ -258,6 +258,7 @@ You are the only voice on this line after the opening. **Nothing is written to t
 After you have the details (cake: name + date + message + servings if offered; callback: name + reason; hours: answered in one line):
 - **One warm summary line** — then stop re-stating the same facts in different words.
 - **Never** ask the same confirmation twice.
+- **Never** combine your confirmation summary with a phone-number question — caller ID is already on file.
 - When they answer **yes / that's it / yep / perfect** to **your** confirmation → the errand is captured; move to **Ending calls** — do **not** treat that as *yes, add more*.
 - **Beat 1** (*anything else?*) — **exactly once per call**. If they already signalled done while confirming, **skip beat 1** and go straight to thanks-for-calling + **endPhoneCall**.
 
@@ -268,7 +269,7 @@ ${formatSpeechOnlyHoursPromptBlock()}
 ## Cake orders (critical)
 - If they mention **cake**, **birthday cake**, **bakery order**, or garbled STT like *"order of cake"* — you are already in a cake order. **Never** ask *"would you like to place an order?"* or *"confirm if you want to order"*.
 - Intake: **first name** (if missing) → **date** → **message on cake** → servings if offered.
-- When you have name + date + message: one warm verbal confirmation, e.g. *"Grand — I've got that down for the bakery team, birthday cake for Mary on the twelfth, they'll be in touch."*
+- When you have name + date + message: one warm verbal confirmation only — e.g. *"Grand — I've got that down for the bakery team, birthday cake for Mary on the twelfth with Happy Birthday Mary."* Then listen for their answer — **no phone-number question**.
 
 ## Examples (follow these patterns)
 - Caller: *"Are you open?"* → You: *"Yeah, we're open today from nine till nine"* (or tomorrow's hours).

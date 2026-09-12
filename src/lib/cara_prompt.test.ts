@@ -169,6 +169,8 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /Beat 1.*exactly once per call/i);
     assert.match(prompt, /Cake close:/i);
     assert.match(prompt, /banned slop phrase.*failure/i);
+    assert.match(prompt, /never.*ask them to confirm.*phone number/i);
+    assert.doesNotMatch(prompt, /best number to contact you on/i);
     assert.doesNotMatch(prompt, /Wind-down.*Ending calls beat 1/i);
   });
 
