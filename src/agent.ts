@@ -1792,6 +1792,34 @@ export default defineAgent({
       }, responseFillerMs);
     };
 
+    let retailCallbackConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearRetailCallbackConfirmTimer = () => {
+      if (retailCallbackConfirmTimer) {
+        clearTimeout(retailCallbackConfirmTimer);
+        retailCallbackConfirmTimer = null;
+      }
+    };
+
+    const scheduleRetailCallbackConfirmation = () => {
+      clearRetailCallbackConfirmTimer();
+      if (!conversationalRetailLine || isCallEnding()) return;
+      const epoch = replyTurnEpoch;
+      retailCallbackConfirmTimer = setTimeout(() => {
+        retailCallbackConfirmTimer = null;
+        if (epoch !== replyTurnEpoch || isCallEnding()) return;
+        if (session.userData.sessionFlags.endPhoneCallUsed) return;
+        if (generateReplyInFlight) return;
+        if (session.agentState === 'speaking' || session.agentState === 'thinking') return;
+        if (session.userState === 'speaking') return;
+        console.warn('[agent] retail_callback_confirm_nudge');
+        safeGenerateReply(
+          'You just logged their message with takeCallbackMessage. Speak ONE warm confirmation line now — summarise the cake order or callback you logged. No tools this turn.',
+          { force: true },
+        );
+      }, 1200);
+    };
+
     const clearAllGuardTimers = () => {
       clearFakeHangupGuardTimer();
       clearGoodbyeForceTimer();
@@ -1799,6 +1827,7 @@ export default defineAgent({
       clearResponseFillerTimer();
       clearGreetingInterruptFallbackTimer();
       clearCallerReplyNudgeTimer();
+      clearRetailCallbackConfirmTimer();
     };
 
     const resetDeadAirTimer = () => {
@@ -2008,6 +2037,7 @@ export default defineAgent({
           !lineMatchesGreeting(text, playbackGreetingText)
         ) {
           flags.retailSubstantiveExchangeComplete = true;
+          clearRetailCallbackConfirmTimer();
         }
         if (assistantAwaitingCallerReply(text)) {
           callerAwaitingReply = true;
@@ -2174,6 +2204,14 @@ export default defineAgent({
             out.createdAt,
             `${prefix}${truncateForTranscript(out.output, MAX_TOOL_SNIPPET_CHARS)}`,
           );
+          if (
+            conversationalRetailLine &&
+            call.name === 'takeCallbackMessage' &&
+            !out.isError &&
+            /"ok"\s*:\s*true/.test(out.output)
+          ) {
+            scheduleRetailCallbackConfirmation();
+          }
         }
       }
     });

@@ -305,10 +305,12 @@ async function createCallbackViaWebhook(
   });
 
   ud.sessionFlags.actionTicketCreated = true;
+  const confirmHint = ud.conversationalRetailLine
+    ? 'Speak NOW in one warm line — confirm what you logged (name, date, cake message). Do not stay silent. No tools this turn.'
+    : 'Confirm what you captured in one warm spoken line, then continue the call naturally.';
   return {
     ok: true,
-    message:
-      'Message logged for the team. Confirm what you captured in one warm spoken line, then continue the call naturally.',
+    message: `Message logged for the team. ${confirmHint}`,
   };
 }
 
@@ -604,7 +606,7 @@ export class CaraTools {
 
   readonly takeCallbackMessage = llm.tool({
     description:
-      'Take a message for the team (Anything else fallback or when you cannot complete the request). Creates an Action Inbox ticket. Requires the caller name — ask first, wait for their answer, then call this tool. When caller ID is on file, do NOT ask for their phone number — omit callbackPhone.',
+      'Log a cake order, stock check, complaint, or manager callback for the team. Requires the caller first name. When caller ID is on file, omit callbackPhone. Always speak to the caller in the same turn or immediately after — never a silent tool-only turn.',
     parameters: z.object({
       callerName: z
         .string()

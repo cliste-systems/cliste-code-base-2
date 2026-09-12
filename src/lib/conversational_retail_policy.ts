@@ -8,6 +8,9 @@
  *
  * Do NOT add: caller-text regex handlers, steerReply, safeGenerateReply mid-call,
  * sayPrepared mid-call, dead-air prompts, or programmatic close on 9508.
+ *
+ * Exception: after takeCallbackMessage succeeds, a one-shot confirmation nudge is
+ * allowed if the LLM would otherwise stay silent (tool-only turn).
  */
 
 const PLACEHOLDER_CALLER_NAMES = /^(caller|unknown|n\/a|none|customer|guest)$/i;
