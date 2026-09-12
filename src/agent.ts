@@ -587,19 +587,6 @@ export default defineAgent({
           label: `factory-fresh:${process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3'}:siobhan`,
         };
       }
-      if (conversationalRetailLine) {
-        const voiceId =
-          resolveOrgVoiceId(org) ||
-          process.env.ELEVEN_VOICE_ID?.trim() ||
-          'odyUrTN5HMVKujvVAgWW';
-        const model = process.env.ELEVEN_TTS_MODEL?.trim() || DEFAULT_ELEVEN_TTS_MODEL;
-        return {
-          provider: 'elevenlabs' as const,
-          model,
-          voiceId,
-          label: `elevenlabs:retail:${model}:${voiceId}`,
-        };
-      }
       return resolveTtsConfig({
         testProfile,
         orgVoiceId: resolveOrgVoiceId(org),
