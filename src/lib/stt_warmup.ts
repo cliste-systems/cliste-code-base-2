@@ -1,6 +1,6 @@
 import { inference } from '@livekit/agents';
 
-const DEFAULT_WARMUP_MODEL = 'assemblyai/u3-rt-pro';
+const DEFAULT_WARMUP_MODEL = 'assemblyai/universal-3-5-pro';
 
 let warmupDone = false;
 let warmupInFlight: Promise<void> | null = null;

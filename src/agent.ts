@@ -511,7 +511,7 @@ export default defineAgent({
     if (factoryFreshLine) {
       console.info('[agent] factory_fresh_line', {
         calledNumber: maskPhone(calledNumber),
-        tts: 'cartesia/sonic-3:siobhan',
+        tts: 'cartesia/sonic-3.6:siobhan',
       });
     } else if (testCall) {
       console.info('[agent] test_call', {
@@ -581,10 +581,10 @@ export default defineAgent({
       if (factoryFreshLine) {
         return {
           provider: 'cartesia-inference' as const,
-          model: process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3',
+          model: process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3.6',
           voiceId: process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() || CARTESIA_SIOBHAN_VOICE_ID,
           language: process.env.LIVEKIT_INFERENCE_TTS_LANGUAGE?.trim() || 'en',
-          label: `factory-fresh:${process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3'}:siobhan`,
+          label: `factory-fresh:${process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3.6'}:siobhan`,
         };
       }
       return resolveTtsConfig({
@@ -856,12 +856,12 @@ export default defineAgent({
     const inferenceSttModel =
       testProfile?.stt_model?.trim() ||
       process.env.LIVEKIT_INFERENCE_STT_MODEL?.trim() ||
-      (demoExperienceStack ? 'assemblyai/universal-3-5-pro' : 'assemblyai/u3-rt-pro');
+      'assemblyai/universal-3-5-pro';
     const inferenceSttLanguage = process.env.LIVEKIT_INFERENCE_STT_LANGUAGE?.trim() || 'en';
     const inferenceLlmModel =
       testProfile?.llm_model?.trim() ||
       process.env.LIVEKIT_INFERENCE_LLM_MODEL?.trim() ||
-      (demoExperienceStack ? 'openai/gpt-5.6-luna' : 'openai/gpt-4.1');
+      (demoExperienceStack ? 'openai/gpt-5.6-luna' : 'google/gemma-4-31b-it');
     const useBuilderDemoStack = demoExperienceStack;
 
     const elevenVoiceId = activeVoiceId;
