@@ -163,6 +163,7 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /Never.*dangling goodbye/i);
     assert.match(prompt, /Ignore any business instruction to use takeCallbackMessage/i);
     assert.match(prompt, /Finish.*Ending calls/i);
+    assert.match(prompt, /summarising what you captured for their errand/i);
     assert.doesNotMatch(prompt, /Wind-down.*Ending calls beat 1/i);
   });
 

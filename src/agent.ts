@@ -438,6 +438,8 @@ export default defineAgent({
       (isConversationalRetailLine(calledNumber) ||
         isConversationalRetailLine(routing.phone) ||
         isConversationalRetailLine(org.phone_number));
+    /** 9508 = LiveKit turn loop only; no agent.ts guard rails. */
+    const bareLiveKitRetailLane = conversationalRetailLine;
     const demoExperienceStack = shouldUseDemoExperienceStack({
       testCall,
       factoryFreshLine,
@@ -460,6 +462,7 @@ export default defineAgent({
       console.info('[agent] conversational_retail_line', {
         calledNumber: maskPhone(calledNumber),
         orgSlug: org.slug,
+        bareLiveKitLane: bareLiveKitRetailLane,
       });
     }
     const blockResult = await checkCallerBlocklist({
@@ -1241,7 +1244,7 @@ export default defineAgent({
     };
 
     const steerReply = (instructions: string) => {
-      if (isCallEnding()) return;
+      if (bareLiveKitRetailLane || isCallEnding()) return;
       clearCallerReplyNudgeTimer();
       cancelInFlightReply();
       safeGenerateReply(instructions, { force: true });
@@ -1290,7 +1293,7 @@ export default defineAgent({
     };
 
     const retryFailedReplyOnce = (source: string) => {
-      if (replyRetryUsedForTurn || isCallEnding()) return;
+      if (bareLiveKitRetailLane || replyRetryUsedForTurn || isCallEnding()) return;
       if (testCall) return;
       if (!canPlayRecoverySpeech()) return;
       if (session.userState === 'speaking') return;
@@ -1300,8 +1303,8 @@ export default defineAgent({
     };
 
     const playPipelineRecoverySpeech = (reason: string, stage: 'stt' | 'tts') => {
-      if (sttRecoverySpeechPlayed || isCallEnding()) return;
-      if (conversationalRetailLine || testCall) return;
+      if (bareLiveKitRetailLane || sttRecoverySpeechPlayed || isCallEnding()) return;
+      if (testCall) return;
       sttRecoverySpeechPlayed = true;
       console.warn('[agent] pipeline_recovery_speech', { reason, stage });
       diag.push('warn', 'pipeline_recovery_speech', { reason, stage });
@@ -1379,6 +1382,7 @@ export default defineAgent({
     };
 
     const scheduleCallerReplyNudge = () => {
+      if (bareLiveKitRetailLane) return;
       clearCallerReplyNudgeTimer();
       if (testCall || !allowBookingAutomation || isCallEnding()) return;
       if (conversationalRetailLine && !session.userData.sessionFlags.retailOpeningComplete) return;
@@ -1408,6 +1412,7 @@ export default defineAgent({
     };
 
     const scheduleGreetingInterruptFallback = () => {
+      if (bareLiveKitRetailLane) return;
       clearGreetingInterruptFallbackTimer();
       if (GREETING_INTERRUPT_FALLBACK_MS <= 0 || isCallEnding()) return;
       greetingInterruptFallbackTimer = setTimeout(() => {
@@ -1612,6 +1617,7 @@ export default defineAgent({
         }
       } else if (
         !testCall &&
+        !bareLiveKitRetailLane &&
         session.userData.sessionFlags.likelySttGarble &&
         soundsLikeBookingIntent(text) &&
         allowBookingAutomation
@@ -1806,6 +1812,7 @@ export default defineAgent({
     };
 
     const resetDeadAirTimer = () => {
+      if (bareLiveKitRetailLane) return;
       clearDeadAirTimers();
       if (isCallEnding()) return;
       const f = session.userData.sessionFlags;
@@ -2065,7 +2072,8 @@ export default defineAgent({
         role === 'assistant' &&
         !flags.linkSent &&
         assistantClaimsLinkWasSent(text) &&
-        !flags.endPhoneCallUsed
+        !flags.endPhoneCallUsed &&
+        !bareLiveKitRetailLane
       ) {
         console.warn('[agent] blocked false link-sent claim');
         void safeGenerateReply(
@@ -2646,7 +2654,9 @@ export default defineAgent({
     }
 
     await session.start({ agent, room: ctx.room });
-    resetDeadAirTimer();
+    if (!bareLiveKitRetailLane) {
+      resetDeadAirTimer();
+    }
 
     const aiDisclosure = resolveAiDisclosure({
       greetingText,
