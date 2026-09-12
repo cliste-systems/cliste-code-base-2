@@ -1292,7 +1292,8 @@ export default defineAgent({
 
     const retryFailedReplyOnce = (source: string) => {
       if (replyRetryUsedForTurn || isCallEnding()) return;
-      if (conversationalRetailLine || testCall) return;
+      if (testCall) return;
+      if (conversationalRetailLine && source !== 'empty_speech_handle') return;
       if (!canPlayRecoverySpeech()) return;
       if (session.userState === 'speaking') return;
       replyRetryUsedForTurn = true;
@@ -1755,6 +1756,29 @@ export default defineAgent({
         })();
       }, 700);
     };
+    const armRetailFarewellForceHangup = (text: string) => {
+      const flags = session.userData.sessionFlags;
+      if (
+        !conversationalRetailLine ||
+        testCall ||
+        flags.endPhoneCallUsed ||
+        (flags.awaitingAnythingElseReply && !flags.callerRespondedAfterAnythingElse) ||
+        !assistantTextSoundsLikeGoodbye(text)
+      ) {
+        return;
+      }
+      clearGoodbyeForceTimer();
+      diag.push('info', 'retail_farewell_force_hangup', { snippet: text.slice(0, 120) });
+      goodbyeForceTimer = setTimeout(() => {
+        goodbyeForceTimer = null;
+        if (session.userData.sessionFlags.endPhoneCallUsed) return;
+        void (async () => {
+          await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
+          if (session.userData.sessionFlags.endPhoneCallUsed) return;
+          await disconnectCallerLeg(session, session.userData, async () => {});
+        })();
+      }, 700);
+    };
     const clearDeadAirTimers = () => {
       if (deadAirTimer) {
         clearTimeout(deadAirTimer);
@@ -1998,6 +2022,7 @@ export default defineAgent({
       if (isCallEnding()) {
         if (role === 'assistant') {
           armDemoFarewellForceHangup(text);
+          armRetailFarewellForceHangup(text);
         }
         const label = role === 'user' ? 'Caller' : 'Assistant';
         const interruptedNote =
@@ -2110,6 +2135,15 @@ export default defineAgent({
         !flags.awaitingAnythingElseReply
       ) {
         armDemoFarewellForceHangup(text);
+      }
+
+      if (
+        conversationalRetailLine &&
+        !testCall &&
+        role === 'assistant' &&
+        !flags.endPhoneCallUsed
+      ) {
+        armRetailFarewellForceHangup(text);
       }
 
       if (

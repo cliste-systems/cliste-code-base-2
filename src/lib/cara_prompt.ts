@@ -5,6 +5,7 @@ import { formatDemoScenariosForPrompt } from './demo_scenarios.js';
 import {
   formatRetailConversationalOpeningForPrompt,
   formatRetailConversationalBehaviourForPrompt,
+  formatRetailConversationalEndingCallsForPrompt,
 } from './retail_conversational.js';
 import {
   formatSpeechOnlyHoursPromptBlock,
@@ -247,10 +248,14 @@ You are the only voice on this line after the opening. **Nothing is written to t
 ## Live-call rules (override business instructions when they conflict)
 - **Every turn must include spoken words** for the caller.
 - One question per turn — max one \`?\` per turn.
+- After your **wind-down question** (Ending calls beat 1) → **wait**. Do **not** invoke **endPhoneCall** in the same turn as that question.
+- **Closing:** warm **thanks for calling ${input.businessName}** + soft farewell + **endPhoneCall same turn**. **Never** a dangling *"have a great day"* or *"you're welcome"* without the tool — that leaves the line open.
+- **Mid-call tools:** Ignore any business instruction to use takeCallbackMessage, transferToTeam, sendRoutingLink, or other send tools during this call — live tool is **endPhoneCall** only; capture details in speech for post-call processing.
 - **Opening hours** — answer in speech from Structured hours below.
 - **Directions / staff names** — answer in speech from business instructions.
 - **Cake orders, stock checks, complaints, manager callbacks** — collect details in speech, then **verbally confirm** what you captured; the team is notified after the call ends.
-- **Hang up** — warm thanks-for-calling **${input.businessName}** + **endPhoneCall** same turn. Never a bare *"bye"*.
+
+${formatRetailConversationalEndingCallsForPrompt(input.businessName)}
 
 ${formatSpeechOnlyHoursPromptBlock()}
 
@@ -263,7 +268,6 @@ ${formatSpeechOnlyHoursPromptBlock()}
 - Caller: *"Are you open?"* → You: *"Yeah, we're open today from nine till nine"* (or tomorrow's hours).
 - Caller: *"Can I order a cake?"* → *"Sure — what's your first name?"* → gather date + message → *"Perfect — I've got that logged for the bakery team."*
 - Caller: *"Can the manager call me back?"* → get name + reason → *"No bother — I'll pass that to the team."*
-- Caller: *"That's everything, thanks"* → thanks-for-calling **${input.businessName}** + **endPhoneCall**.
 
 ## Business instructions
 ${owner}
@@ -277,7 +281,8 @@ ${routesBlock}
 1. **Listen** — opening already played.
 2. **Help** — answer in speech; collect order/callback details conversationally.
 3. **Confirm** — one warm line summarising what you captured (cake date, message, callback reason).
-4. **Close** — when they are sorted: thanks + **endPhoneCall** same turn.
+4. **Wind-down** — Ending calls beat 1: one yes/no check-in → stop and listen.
+5. **Close** — Ending calls beat 2: read intent → thanks-for-calling **${input.businessName}** + **endPhoneCall** same turn.
 
 **Stock / prices** — cannot confirm on phone; offer to pass details to the team verbally.
 

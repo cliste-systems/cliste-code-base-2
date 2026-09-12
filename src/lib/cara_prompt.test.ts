@@ -141,9 +141,29 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /Every turn must include spoken words/i);
     assert.match(prompt, /Never.*would you like to place an order/i);
     assert.match(prompt, /endPhoneCall.*only/i);
-    assert.doesNotMatch(prompt, /takeCallbackMessage/i);
+    assert.match(prompt, /Ignore any business instruction to use takeCallbackMessage/i);
     assert.doesNotMatch(prompt, /Hello Cara demo line/i);
     assert.doesNotMatch(prompt, /## Your manner on this call/i);
+  });
+
+  it('includes universal ending-calls state machine on conversational retail 9508', () => {
+    const prompt = buildCaraCallPrompt({
+      ...baseInput,
+      businessName: 'Kavanaghs SuperValu Donegal Town',
+      niche: 'retail',
+      conversationalRetailMode: true,
+      openingGreetingDelivered: true,
+    });
+
+    assert.match(prompt, /## Ending calls/i);
+    assert.match(prompt, /Beat 1/i);
+    assert.match(prompt, /Beat 2/i);
+    assert.match(prompt, /meaning in context/i);
+    assert.match(prompt, /endPhoneCall.*same turn/i);
+    assert.match(prompt, /Never.*dangling goodbye/i);
+    assert.match(prompt, /Ignore any business instruction to use takeCallbackMessage/i);
+    assert.match(prompt, /Wind-down.*Ending calls beat 1/i);
+    assert.match(prompt, /Close.*Ending calls beat 2/i);
   });
 
   it('excludes retail-hours callback route from conversational retail prompt', () => {
