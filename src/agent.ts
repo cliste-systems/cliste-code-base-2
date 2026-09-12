@@ -25,6 +25,7 @@ import {
   estimateCallCostUsd,
 } from './lib/call_cost_estimate.js';
 import { postprocessCallTranscript } from './lib/call_postprocess.js';
+import { assessTranscriptCompleteness } from './lib/transcript_completeness.js';
 import { insertCallLog, updateCallLogEnrichment, updateCallLogOutcome } from './lib/call_logs.js';
 import { executePostCallActions, type PostCallAction } from './lib/post_call_actions.js';
 import {
@@ -1189,6 +1190,7 @@ export default defineAgent({
     const transcriptParts: TranscriptLine[] = [];
     let transcriptSeq = 0;
     const recentCallerTranscripts = new Map<string, number>();
+    const recentAssistantTranscripts = new Map<string, number>();
 
     const normalizeTranscriptKey = (text: string) =>
       text
@@ -1205,6 +1207,59 @@ export default defineAgent({
       }
       recentCallerTranscripts.set(key, at);
       return false;
+    };
+
+    const isDuplicateAssistantUtterance = (key: string, at: number): boolean => {
+      const prev = recentAssistantTranscripts.get(key);
+      if (prev !== undefined && at - prev < CALLER_TRANSCRIPT_DEDUPE_MS) {
+        return true;
+      }
+      recentAssistantTranscripts.set(key, at);
+      return false;
+    };
+
+    const getLatestAssistantChatText = (): string => {
+      try {
+        const items = session.history.items;
+        for (let i = items.length - 1; i >= 0; i -= 1) {
+          const chatItem = items[i];
+          if (chatItem.type !== 'message' || chatItem.role !== 'assistant') continue;
+          const text = chatItem.textContent?.trim();
+          if (text && text.length > 3) return text;
+        }
+      } catch {
+        /* ignore */
+      }
+      return '';
+    };
+
+    const appendAssistantTranscriptLine = (
+      text: string,
+      at: number,
+      interrupted = false,
+    ): boolean => {
+      const trimmed = text.trim();
+      if (!trimmed) return false;
+      if (lineMatchesGreeting(trimmed, playbackGreetingText) && greetingTranscriptLogged) {
+        return false;
+      }
+      const key = normalizeTranscriptKey(trimmed);
+      if (isDuplicateAssistantUtterance(key, at)) return false;
+      const note = interrupted ? ' [cut off]' : '';
+      appendTranscriptLine(at, `Assistant: ${trimmed}${note}`);
+      return true;
+    };
+
+    const flushPendingAssistantTranscript = (at: number, interrupted = false): boolean => {
+      const pending = lastAssistantChatText.trim();
+      if (pending) {
+        const appended = appendAssistantTranscriptLine(pending, at, interrupted);
+        if (appended) lastAssistantChatText = '';
+        return appended;
+      }
+      const fromHistory = getLatestAssistantChatText();
+      if (!fromHistory) return false;
+      return appendAssistantTranscriptLine(fromHistory, at, interrupted);
     };
 
     const appendTranscriptLine = (at: number, line: string) => {
@@ -1887,6 +1942,9 @@ export default defineAgent({
       } else if (ev.newState === 'listening') {
         clearResponseFillerTimer();
         clearCallerReplyNudgeTimer();
+        if (ev.oldState === 'speaking' && allowBookingAutomation) {
+          flushPendingAssistantTranscript(Date.now());
+        }
       }
       if (ev.newState === 'thinking' || ev.newState === 'speaking') {
         clearGreetingInterruptFallbackTimer();
@@ -1961,8 +2019,11 @@ export default defineAgent({
           }
           // SpeechHandle text/source can be empty even when TTS played; chat ctx has the line.
           if (lastAssistantChatText.trim()) {
-            appendTranscriptLine(Date.now(), `Assistant: ${lastAssistantChatText.trim()}`);
+            appendAssistantTranscriptLine(lastAssistantChatText.trim(), Date.now());
             lastAssistantChatText = '';
+            return;
+          }
+          if (flushPendingAssistantTranscript(Date.now())) {
             return;
           }
           if (lastAssistantSpokeAt > 0 && Date.now() - lastAssistantSpokeAt < 8000) {
@@ -2154,9 +2215,7 @@ export default defineAgent({
         if (!allowBookingAutomation && lineMatchesGreeting(text, playbackGreetingText)) {
           return;
         }
-        const label = 'Assistant';
-        const interruptedNote = item.interrupted ? ' [cut off]' : '';
-        appendTranscriptLine(ev.createdAt, `${label}: ${text}${interruptedNote}`);
+        appendAssistantTranscriptLine(text, ev.createdAt, item.interrupted);
       }
     });
 
@@ -2232,6 +2291,7 @@ export default defineAgent({
         if (Number.isFinite(transcriptFlushMs) && transcriptFlushMs > 0) {
           await new Promise((r) => setTimeout(r, Math.min(transcriptFlushMs, 2000)));
         }
+        flushPendingAssistantTranscript(Date.now());
 
         durationSeconds = Math.max(0, Math.round((Date.now() - callStartedAt) / 1000));
         outcome = canonicalCallOutcome({
@@ -2251,6 +2311,15 @@ export default defineAgent({
 
         const verbatimRaw = mergeTranscriptLines(transcriptParts);
         verbatim = verbatimRaw ? redactPii(verbatimRaw) : null;
+
+        const transcriptCompleteness = assessTranscriptCompleteness(verbatim);
+        if (
+          transcriptCompleteness.callerLineCount > 1 &&
+          transcriptCompleteness.assistantLineCount <= 1
+        ) {
+          console.warn('[agent] transcript_capture_incomplete', transcriptCompleteness);
+          diag.push('warn', 'transcript_capture_incomplete', transcriptCompleteness);
+        }
 
         mirrorLatestCall({
           ...mirrorBase(),

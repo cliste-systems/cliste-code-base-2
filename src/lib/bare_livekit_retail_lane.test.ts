@@ -20,4 +20,9 @@ describe('bare_livekit_retail_lane', () => {
     assert.ok(BARE_LIVEKIT_DISABLED_PROGRAMMATIC_GUARDS.includes('steerReply'));
     assert.equal(BARE_LIVEKIT_DISABLED_PROGRAMMATIC_GUARDS.length, 7);
   });
+
+  it('loop fix on 9508 is prompt-only — no runtime guard rails re-added', () => {
+    assert.ok(BARE_LIVEKIT_DISABLED_PROGRAMMATIC_GUARDS.includes('maybeCloseAfterAnythingElse'));
+    assert.ok(BARE_LIVEKIT_DISABLED_PROGRAMMATIC_GUARDS.includes('playPipelineRecoverySpeech'));
+  });
 });

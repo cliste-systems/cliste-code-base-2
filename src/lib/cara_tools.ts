@@ -844,7 +844,7 @@ export class CaraTools {
 
   readonly endPhoneCall = llm.tool({
     description:
-      'End the call after a warm Irish goodbye (e.g. "Lovely — thanks for calling Kavanaghs SuperValu Donegal Town. Take care." or "Lovely — thanks for calling Murphy\'s SuperValu. Take care."). Invoke in the same turn as your farewell — never abrupt "ok bye", bare "bye", or "grand". On the Hello Cara demo line: after "is that everything?" and they confirm, give the outro ("Lovely, {name} — thanks for calling Hello Cara today. Have a good day/evening. Bye for now.") then call this tool in that same turn; never say "grand" or "sound"; do not ask another question after they wind down.',
+      'End the call after a warm Irish goodbye (e.g. "Lovely — thanks for calling Kavanaghs SuperValu Donegal Town. Take care." or "Lovely — thanks for calling Murphy\'s SuperValu. Take care."). Invoke in the same turn as your farewell — never abrupt "ok bye", bare "bye", or "grand". On the Hello Cara demo line: after "is that everything?" and they confirm, give the outro ("Lovely, {name} — thanks for calling Hello Cara today. Have a good day/evening. Bye for now.") then call this tool in that same turn; never say "grand" or "sound"; do not ask another question after they wind down. On Kavanaghs 9508 (conversational retail): any spoken farewell ("have a great day", "take care", "thanks for calling") MUST invoke this tool in that same turn — never leave a dangling goodbye. After beat 1, if the caller is done → outro + this tool; no third question.',
     parameters: z.object({}),
     execute: async (_args, { ctx }) => {
       const ud = readCaraUserData(ctx);

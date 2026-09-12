@@ -45,3 +45,11 @@ export function assessTranscriptCompleteness(
     assistantLineCount,
   };
 }
+
+/** Verbatim has multiple caller turns but at most one assistant line (usually greeting-only). */
+export function isCallerHeavyAssistantMissingTranscript(
+  transcript: string | null | undefined,
+): boolean {
+  const { callerLineCount, assistantLineCount } = assessTranscriptCompleteness(transcript);
+  return callerLineCount > 1 && assistantLineCount <= 1;
+}

@@ -164,6 +164,11 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /Ignore any business instruction to use takeCallbackMessage/i);
     assert.match(prompt, /Finish.*Ending calls/i);
     assert.match(prompt, /summarising what you captured for their errand/i);
+    assert.match(prompt, /## Confirm once/i);
+    assert.match(prompt, /Never.*ask the same confirmation twice/i);
+    assert.match(prompt, /Beat 1.*exactly once per call/i);
+    assert.match(prompt, /Cake close:/i);
+    assert.match(prompt, /banned slop phrase.*failure/i);
     assert.doesNotMatch(prompt, /Wind-down.*Ending calls beat 1/i);
   });
 

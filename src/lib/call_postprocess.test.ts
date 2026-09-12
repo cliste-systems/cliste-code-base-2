@@ -5,6 +5,7 @@ import {
   filterKnowledgeGapsForStructuredHours,
   normalizePostprocessKnowledgeGaps,
   parsePostprocessJsonPayload,
+  postprocessCallTranscript,
 } from './call_postprocess.js';
 import { normalizePostCallActions } from './post_call_actions.js';
 
@@ -101,5 +102,21 @@ describe('parsePostprocessJsonPayload', () => {
     const actions = normalizePostCallActions(parsed?.postCallActions);
     assert.equal(actions.length, 1);
     assert.equal(actions[0]?.callerName, 'Timmy');
+  });
+});
+
+describe('postprocessCallTranscript caller-heavy guard', () => {
+  it('skips LLM reconstruction when assistant lines are missing from verbatim', async () => {
+    const verbatim =
+      'Assistant: Hello\n\nCaller: Are you open?\n\nCaller: Cake order please\n\nCaller: Brendan';
+    const result = await postprocessCallTranscript({
+      verbatim,
+      businessName: 'Kavanaghs SuperValu Donegal Town',
+      outcome: 'answered',
+      inferenceLlmModel: 'openai/gpt-4.1',
+      conversationalRetailLine: true,
+    });
+    assert.equal(result.transcriptReview, verbatim);
+    assert.match(result.aiSummary, /Assistant lines missing from live capture/);
   });
 });

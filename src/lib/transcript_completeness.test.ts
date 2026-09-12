@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { assessTranscriptCompleteness } from './transcript_completeness.js';
+import { assessTranscriptCompleteness, isCallerHeavyAssistantMissingTranscript } from './transcript_completeness.js';
 
 describe('assessTranscriptCompleteness', () => {
   it('accepts a normal two-sided transcript', () => {
@@ -31,5 +31,12 @@ describe('assessTranscriptCompleteness', () => {
     );
     assert.equal(result.complete, false);
     assert.match(result.reasons.join(' '), /placeholder/);
+  });
+
+  it('detects caller-heavy verbatim with missing assistant lines', () => {
+    const transcript =
+      'Assistant: Hello\n\nCaller: Are you open?\n\nCaller: Cake order please\n\nCaller: Brendan';
+    assert.equal(isCallerHeavyAssistantMissingTranscript(transcript), true);
+    assert.equal(isCallerHeavyAssistantMissingTranscript('Assistant: Hi\n\nCaller: One line'), false);
   });
 });

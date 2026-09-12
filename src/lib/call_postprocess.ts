@@ -2,6 +2,7 @@ import { llm } from '@livekit/agents';
 
 import { parseBankHolidayConfig, parseBusinessHoursSchedule } from './business_hours.js';
 import { createCaraLlm } from './llm_provider.js';
+import { isCallerHeavyAssistantMissingTranscript } from './transcript_completeness.js';
 import {
   callerSoundsLikeBankHolidayQuestion,
   callerSoundsLikeOpenHoursQuestion,
@@ -258,6 +259,18 @@ export async function postprocessCallTranscript(input: {
       aiSummary: '',
       knowledgeGaps: emptyGaps,
       postCallActions: emptyActions,
+    };
+  }
+
+  if (isCallerHeavyAssistantMissingTranscript(verbatim)) {
+    const fallbackActions = input.conversationalRetailLine
+      ? fallbackExtractPostCallActions(verbatim)
+      : emptyActions;
+    return {
+      transcriptReview: verbatim,
+      aiSummary: `${fallbackSummary(input.outcome)} Assistant lines missing from live capture — review verbatim only.`,
+      knowledgeGaps: emptyGaps,
+      postCallActions: fallbackActions,
     };
   }
 
