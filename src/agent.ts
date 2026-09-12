@@ -203,6 +203,65 @@ const SLOW_TOOL_ACK_NAMES = new Set([
   'transferToTeam',
 ]);
 
+/** Debug-mode runtime telemetry — also visible in Railway logs via console.info. */
+function debugSessionLog(
+  hypothesisId: string,
+  location: string,
+  message: string,
+  data: Record<string, unknown>,
+): void {
+  const payload = {
+    sessionId: '0f50f3',
+    hypothesisId,
+    location,
+    message,
+    data,
+    timestamp: Date.now(),
+  };
+  console.info('[agent][debug]', payload);
+  // #region agent log
+  fetch('http://127.0.0.1:7662/ingest/95496c05-1739-4e32-b7be-319b56b1c5b5', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '0f50f3' },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+  // #endregion
+}
+
+function tapLlmTextStreamForTranscript(
+  source: ReadableStream<string>,
+  onComplete: (spoken: string) => void,
+): ReadableStream<string> {
+  let buffer = '';
+  return new ReadableStream<string>({
+    start(controller) {
+      const reader = source.getReader();
+      void (async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              buffer += value;
+              controller.enqueue(value);
+            }
+          }
+          controller.close();
+          const spoken = buffer.trim();
+          if (spoken.length > 3) onComplete(spoken);
+        } catch (err) {
+          controller.error(err);
+        } finally {
+          reader.releaseLock();
+        }
+      })();
+    },
+    cancel(reason) {
+      return source.cancel(reason);
+    },
+  });
+}
+
 function normalizeSpokenLine(text: string): string {
   return text
     .trim()
@@ -1176,6 +1235,7 @@ export default defineAgent({
     let listenGraceUntil = 0;
     let callerHasFinalTranscript = false;
     let lastAssistantChatText = '';
+    let pendingLlmTtsTranscript = '';
     let lastAssistantSpokeAt = 0;
     let corporateAssistCorrectedEpoch = -1;
     let programmaticSpeechPending = 0;
@@ -1224,13 +1284,42 @@ export default defineAgent({
         for (let i = items.length - 1; i >= 0; i -= 1) {
           const chatItem = items[i];
           if (chatItem.type !== 'message' || chatItem.role !== 'assistant') continue;
-          const text = chatItem.textContent?.trim();
+          const text =
+            chatItem.textContent?.trim() ||
+            ('rawTextContent' in chatItem
+              ? (chatItem as { rawTextContent?: string }).rawTextContent?.trim()
+              : undefined);
           if (text && text.length > 3) return text;
         }
       } catch {
         /* ignore */
       }
       return '';
+    };
+
+    const syncAssistantTranscriptFromHistory = (at: number): number => {
+      const logged = new Set(
+        transcriptParts
+          .filter((part) => part.line.startsWith('Assistant:'))
+          .map((part) => normalizeTranscriptKey(part.line.slice('Assistant: '.length))),
+      );
+      let appended = 0;
+      for (const chatItem of session.history.items) {
+        if (chatItem.type !== 'message' || chatItem.role !== 'assistant') continue;
+        const text =
+          chatItem.textContent?.trim() ||
+          ('rawTextContent' in chatItem
+            ? (chatItem as { rawTextContent?: string }).rawTextContent?.trim()
+            : undefined);
+        if (!text || text.length <= 3) continue;
+        const key = normalizeTranscriptKey(text);
+        if (logged.has(key)) continue;
+        if (appendAssistantTranscriptLine(text, at, chatItem.interrupted)) {
+          logged.add(key);
+          appended += 1;
+        }
+      }
+      return appended;
     };
 
     const appendAssistantTranscriptLine = (
@@ -1247,6 +1336,10 @@ export default defineAgent({
       if (isDuplicateAssistantUtterance(key, at)) return false;
       const note = interrupted ? ' [cut off]' : '';
       appendTranscriptLine(at, `Assistant: ${trimmed}${note}`);
+      debugSessionLog('E', 'agent.ts:appendAssistantTranscriptLine', 'assistant_transcript_appended', {
+        textLen: trimmed.length,
+        interrupted,
+      });
       return true;
     };
 
@@ -2017,6 +2110,14 @@ export default defineAgent({
             programmaticSpeechPending -= 1;
             return;
           }
+          if (pendingLlmTtsTranscript.trim()) {
+            appendAssistantTranscriptLine(pendingLlmTtsTranscript.trim(), Date.now());
+            pendingLlmTtsTranscript = '';
+            debugSessionLog('B', 'agent.ts:SpeechCreated', 'transcript_from_tts_tap', {
+              source: 'pendingLlmTtsTranscript',
+            });
+            return;
+          }
           // SpeechHandle text/source can be empty even when TTS played; chat ctx has the line.
           if (lastAssistantChatText.trim()) {
             appendAssistantTranscriptLine(lastAssistantChatText.trim(), Date.now());
@@ -2024,11 +2125,27 @@ export default defineAgent({
             return;
           }
           if (flushPendingAssistantTranscript(Date.now())) {
+            debugSessionLog('C', 'agent.ts:SpeechCreated', 'transcript_flushed', {
+              source: 'flushPendingAssistantTranscript',
+            });
             return;
           }
           if (lastAssistantSpokeAt > 0 && Date.now() - lastAssistantSpokeAt < 8000) {
+            debugSessionLog('D', 'agent.ts:SpeechCreated', 'empty_speech_suppressed_recent_speak', {
+              msSinceSpeak: Date.now() - lastAssistantSpokeAt,
+              pendingTtsLen: pendingLlmTtsTranscript.length,
+              historyAssistantLen: getLatestAssistantChatText().length,
+            });
             return;
           }
+          debugSessionLog('A', 'agent.ts:SpeechCreated', 'empty_speech_handle', {
+            pendingTtsLen: pendingLlmTtsTranscript.length,
+            lastAssistantLen: lastAssistantChatText.length,
+            historyAssistantLen: getLatestAssistantChatText().length,
+            historyAssistantCount: session.history.items.filter(
+              (i) => i.type === 'message' && i.role === 'assistant',
+            ).length,
+          });
           console.warn('[agent] empty_speech_handle', {
             userState: session.userState,
             agentState: session.agentState,
@@ -2055,8 +2172,20 @@ export default defineAgent({
       if (item.type !== 'message') return;
       const { role } = item;
       if (role === 'developer' || role === 'system') return;
-      const text = item.textContent?.trim();
-      if (!text) return;
+      const rawAssistantText =
+        role === 'assistant' && 'rawTextContent' in item
+          ? (item as { rawTextContent?: string }).rawTextContent?.trim()
+          : undefined;
+      const text = (item.textContent?.trim() || rawAssistantText || '').trim();
+      if (!text) {
+        if (role === 'assistant') {
+          debugSessionLog('A', 'agent.ts:ConversationItemAdded', 'assistant_item_empty_text', {
+            hasTextContent: Boolean(item.textContent?.trim()),
+            rawLen: rawAssistantText?.length ?? 0,
+          });
+        }
+        return;
+      }
 
       if (role === 'user') {
         ingestCallerFinalText(text, 'caller_conversation_item', ev.createdAt);
@@ -2094,6 +2223,10 @@ export default defineAgent({
         flags.anythingElseAskCount += 1;
         flags.callerRespondedAfterAnythingElse = false;
         clearAllGuardTimers();
+        debugSessionLog('F', 'agent.ts:ConversationItemAdded', 'anything_else_asked', {
+          count: flags.anythingElseAskCount,
+          snippet: text.slice(0, 80),
+        });
       }
       if (
         role === 'assistant' &&
@@ -2225,6 +2358,9 @@ export default defineAgent({
         if (call.name === 'endPhoneCall') {
           session.userData.sessionFlags.closingCall = true;
           clearAllGuardTimers();
+          debugSessionLog('G', 'agent.ts:FunctionToolsExecuted', 'endPhoneCall_invoked', {
+            conversationalRetailLine,
+          });
         } else if (SLOW_TOOL_ACK_NAMES.has(call.name)) {
           scheduleResponseFillerForSlowWork();
         }
@@ -2292,6 +2428,12 @@ export default defineAgent({
           await new Promise((r) => setTimeout(r, Math.min(transcriptFlushMs, 2000)));
         }
         flushPendingAssistantTranscript(Date.now());
+        const syncedFromHistory = syncAssistantTranscriptFromHistory(Date.now());
+        if (syncedFromHistory > 0) {
+          debugSessionLog('C', 'agent.ts:call_close', 'history_sync_appended', {
+            count: syncedFromHistory,
+          });
+        }
 
         durationSeconds = Math.max(0, Math.round((Date.now() - callStartedAt) / 1000));
         outcome = canonicalCallOutcome({
@@ -2319,6 +2461,10 @@ export default defineAgent({
         ) {
           console.warn('[agent] transcript_capture_incomplete', transcriptCompleteness);
           diag.push('warn', 'transcript_capture_incomplete', transcriptCompleteness);
+          debugSessionLog('E', 'agent.ts:call_close', 'transcript_capture_incomplete', {
+            ...transcriptCompleteness,
+            transcriptLineCount: transcriptParts.length,
+          });
         }
 
         mirrorLatestCall({
@@ -2688,9 +2834,20 @@ export default defineAgent({
         if (this.session.userData.factoryFreshLine) {
           return voice.Agent.default.ttsNode(this, text, modelSettings);
         }
+        const captureLlmTts =
+          conversationalRetailLine && !preparedSpeechNext && !singleUtterance;
+        const ttsInput = captureLlmTts
+          ? tapLlmTextStreamForTranscript(text, (spoken) => {
+              pendingLlmTtsTranscript = spoken;
+              lastAssistantChatText = spoken;
+              debugSessionLog('B', 'agent.ts:ttsNode', 'llm_tts_text_captured', {
+                textLen: spoken.length,
+              });
+            })
+          : text;
         return voice.Agent.default.ttsNode(
           this,
-          buildTtsNodeInputStream(text, {
+          buildTtsNodeInputStream(ttsInput, {
             provider: useCartesiaInference ? 'cartesia-inference' : 'elevenlabs',
             ttsModel: activeTtsModel,
             // Sentence-only buffering — comma early-flush caused staccato / letter-by-letter turbo TTS on demo line.
