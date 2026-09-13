@@ -1,5 +1,4 @@
 import {
-  formatBusinessHoursForPrompt,
   parseBankHolidayConfig,
   parseBusinessHoursSchedule,
   weekdayKeyFromDate,
@@ -250,8 +249,6 @@ export function formatStructuredHoursForLivePrompt(
     'St Patrick\'s Day and other Irish public holidays: use the bank-holiday line above, not normal weekday hours.',
   ].join('\n');
 }
-
-export { formatBusinessHoursForPrompt };
 
 /** Caller correcting hours, e.g. "we're open on Thursday". */
 export function callerSoundsLikeWeekdayHoursCorrection(text: string): boolean {

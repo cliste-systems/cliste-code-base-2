@@ -6,13 +6,8 @@
  *   - call_logs.caller_number                                → 'erased'
  *   - action_tickets.caller_number                           → 'erased'
  *   - action_tickets.summary                                 → '[erased on request]'
- *   - appointments.customer_name                             → 'Erased'
- *   - appointments.customer_phone                            → 'erased'
- *   - appointments.customer_email                            → null  (if column exists)
- *
- * The booking ROW itself is preserved so the salon's diary still shows that a
- * slot was used (Art 17(3)(b) — exercise of legal claims / business records).
- * Only the personal-data columns are blanked.
+ * Only personal-data columns are blanked; audit rows may be preserved where
+ * required for legal claims / business records (Art 17(3)(b)).
  *
  * Usage:
  *   npx tsx scripts/gdpr-erase.ts +353871234567
@@ -82,16 +77,6 @@ async function main() {
   }
   console.log(`action_tickets matched: ${actionTickets.data?.length ?? 0}`);
 
-  const appointments = await supabase
-    .from('appointments')
-    .select('id, organization_id, booking_reference, start_time')
-    .in('customer_phone', variants);
-  if (appointments.error) {
-    console.error('appointments lookup failed', appointments.error);
-    process.exit(1);
-  }
-  console.log(`appointments matched: ${appointments.data?.length ?? 0}`);
-
   if (dryRun) {
     console.log('--dry-run set; not modifying any rows.');
     return;
@@ -129,31 +114,6 @@ async function main() {
       process.exit(1);
     }
     console.log('action_tickets: caller_number + summary erased.');
-  }
-
-  // Blank PII columns on appointments — keep the row + booking_reference.
-  if ((appointments.data?.length ?? 0) > 0) {
-    const update: Record<string, unknown> = {
-      customer_name: 'Erased',
-      customer_phone: 'erased',
-    };
-    // Best-effort attempt at customer_email column (present in code-base-1).
-    const tryWithEmail = await supabase
-      .from('appointments')
-      .update({ ...update, customer_email: null })
-      .in('customer_phone', variants);
-    if (tryWithEmail.error) {
-      // Fall back without email column if it doesn't exist on this DB.
-      const { error } = await supabase
-        .from('appointments')
-        .update(update)
-        .in('customer_phone', variants);
-      if (error) {
-        console.error('appointments update failed', error);
-        process.exit(1);
-      }
-    }
-    console.log('appointments: PII columns blanked (booking row kept).');
   }
 
   console.log('Erasure complete.');

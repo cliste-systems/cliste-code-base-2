@@ -33,8 +33,8 @@ async function main(): Promise<void> {
   let metadata: string | undefined;
   if (slugArg) {
     metadata = JSON.stringify({ organization_slug: slugArg });
-  } else if (process.env.DEFAULT_SALON_PHONE?.trim()) {
-    metadata = JSON.stringify({ phone_number: process.env.DEFAULT_SALON_PHONE.trim() });
+  } else if (process.env.DEFAULT_ORG_PHONE?.trim()) {
+    metadata = JSON.stringify({ phone_number: process.env.DEFAULT_ORG_PHONE.trim() });
   }
 
   const dispatch = await client.createDispatch(room.trim(), agentName, metadata ? { metadata } : {});

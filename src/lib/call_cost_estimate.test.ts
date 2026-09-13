@@ -19,7 +19,7 @@ const ENV_KEYS = [
   'CALL_COST_CARTESIA_SSML_OVERHEAD_FRACTION',
   'CALL_COST_CARTESIA_FALLBACK_USD_PER_MIN',
   'CALL_COST_TWILIO_VOICE_USD_PER_MIN',
-  'CALL_COST_ELEVENLABS_USD_PER_MIN',
+  'CALL_COST_CARTESIA_USD_PER_MIN',
 ] as const;
 
 function clearCostEnv(): void {
@@ -54,7 +54,7 @@ describe('call_cost_estimate', () => {
       ttsModel: 'cartesia/sonic-3.6',
     });
 
-    assert.equal(estimate.ratesVersion, '2026-09-11');
+    assert.equal(estimate.ratesVersion, '2026-09-12');
     assert.equal(estimate.breakdown.twilioVoice, 0.018);
     assert.ok(estimate.breakdown.tts >= 0.064 && estimate.breakdown.tts <= 0.066);
     assert.ok(estimate.breakdown.stt >= 0.016 && estimate.breakdown.stt <= 0.017);

@@ -136,18 +136,8 @@ export function routesForConversationalRetailPrompt(links: RoutingLink[]): Routi
   return activeRoutes(links).filter((r) => !isSpeechOnlyRetailRoute(r));
 }
 
-export function isBookingRoute(link: RoutingLink): boolean {
-  if (link.presetId === 'booking-inquiry') return true;
-  const blob = `${link.intent} ${link.label} ${link.keywords ?? ''}`.toLowerCase();
-  return blob.includes('book') && blob.includes('appointment');
-}
-
 export function routeUsesCallerLinkDelivery(link: RoutingLink): boolean {
-  return (
-    link.targetType === 'link' &&
-    Boolean(link.linkDelivery) &&
-    (isLocationRoute(link) || isBookingRoute(link))
-  );
+  return link.targetType === 'link' && Boolean(link.linkDelivery) && isLocationRoute(link);
 }
 
 function normalizeRouteKey(value: string): string {
@@ -194,9 +184,7 @@ export function formatRoutesForPrompt(links: RoutingLink[]): string {
         r.linkDelivery && routeUsesCallerLinkDelivery(r) ? `, delivery: ${r.linkDelivery}` : '';
       const tool = routeToolForPrompt(r);
       const linkHint =
-        r.url.trim() && (isBookingRoute(r) || isLocationRoute(r))
-          ? ` | link: ${r.url.trim()}`
-          : '';
+        r.url.trim() && isLocationRoute(r) ? ` | link: ${r.url.trim()}` : '';
       return `- routeId: ${r.id} | trigger: ${trigger} | type: ${r.targetType}${delivery}${linkHint} | tool: ${tool}`;
     })
     .join('\n');
@@ -240,22 +228,9 @@ export function resolveRoute(links: RoutingLink[], routeId: string): RoutingLink
         return link;
       }
     }
-    if (isBookingRoute(link) && (norm.includes('book') || norm.includes('appointment') || norm.includes('schedule'))) {
-      return link;
-    }
     if (isLocationRoute(link) && (norm.includes('direction') || norm.includes('location') || norm.includes('where'))) {
       return link;
     }
-  }
-
-  if (norm.includes('book') || norm.includes('appointment') || norm === 'booking') {
-    const bookingLink = links.find(
-      (r) =>
-        r.active &&
-        r.targetType === 'link' &&
-        (routeUsesCallerLinkDelivery(r) || isBookingRoute(r) || /book|fresha|appointment/i.test(r.url)),
-    );
-    if (bookingLink) return bookingLink;
   }
 
   return null;

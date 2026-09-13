@@ -87,7 +87,7 @@ describe('call_diagnostic_bundle', () => {
 
   it('extracts tool lines from transcript', () => {
     const lines = extractToolLinesFromTranscript(
-      'Assistant: hi\n[Tool] sendBookingLink {"routeId":"x"}\n[Tool result] ok',
+      'Assistant: hi\n[Tool] sendRoutingLink {"routeId":"x"}\n[Tool result] ok',
     );
     assert.equal(lines.length, 2);
   });

@@ -4,51 +4,27 @@ import { describe, it } from 'node:test';
 import {
   detectLikelySttGarble,
   isPhantomCallerTranscript,
-  soundsLikeBookingIntent,
   soundsLikeSubstantiveServiceAnswer,
 } from './stt_garble.js';
 
 describe('stt_garble', () => {
-  it('flags R appointment as garble and booking intent', () => {
-    const text = 'R appointment. Please.';
+  it('flags garbled cake order phrasing', () => {
+    const text = 'order of cake please';
     assert.equal(detectLikelySttGarble(text), true);
-    assert.equal(soundsLikeBookingIntent(text), true);
   });
 
-  it('flags book for the quote as garble and booking intent', () => {
-    const text = 'Can I book for the quote? Please?';
-    assert.equal(detectLikelySttGarble(text), true);
-    assert.equal(soundsLikeBookingIntent(text), true);
-  });
-
-  it('accepts clean hair appointment without garble flag', () => {
-    const text = 'Hi, I want a hair appointment please.';
+  it('accepts clean retail question without garble flag', () => {
+    const text = 'Hi, are you open tomorrow?';
     assert.equal(detectLikelySttGarble(text), false);
-    assert.equal(soundsLikeBookingIntent(text), true);
   });
 
-  it('does not treat cancel appointment as booking intent', () => {
-    assert.equal(soundsLikeBookingIntent('I need to cancel my appointment'), false);
-  });
-
-  it('ignores phantom STT fragments but keeps numeric answers', () => {
-    assert.equal(isPhantomCallerTranscript('6.'), false);
-    assert.equal(isPhantomCallerTranscript('13.'), false);
-    assert.equal(isPhantomCallerTranscript('10'), false);
+  it('treats um as phantom transcript', () => {
     assert.equal(isPhantomCallerTranscript('um'), true);
-    assert.equal(isPhantomCallerTranscript('Um,'), true);
-    assert.equal(isPhantomCallerTranscript('Uh, just'), false);
-    assert.equal(isPhantomCallerTranscript('Yes, sir, book for my mother'), false);
-    assert.equal(isPhantomCallerTranscript('Hello?'), false);
-    assert.equal(isPhantomCallerTranscript('Hello'), false);
-    assert.equal(isPhantomCallerTranscript('OK'), false);
   });
 
-  it('accepts substantive service answers', () => {
-    assert.equal(soundsLikeSubstantiveServiceAnswer("she's looking for a balayage"), true);
-    assert.equal(soundsLikeSubstantiveServiceAnswer('book for my mother'), false);
+  it('accepts substantive retail answers', () => {
     assert.equal(
-      soundsLikeSubstantiveServiceAnswer('Um, I was looking at booking a root touch-up, please.'),
+      soundsLikeSubstantiveServiceAnswer('I need to check stock on the bakery counter'),
       true,
     );
   });

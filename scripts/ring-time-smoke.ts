@@ -52,13 +52,13 @@ async function main(): Promise<void> {
 
   const businessFiles = await getSendableBusinessFiles(org.id);
   const routingLinks = CaraTools.parseLinks(org.routing_links);
-  const bookingTz = resolveOrgTimeZone(org);
+  const orgTz = resolveOrgTimeZone(org);
   const voiceId = resolveOrgVoiceId(org);
 
   ok(
     `mode=cara routes=${activeRoutes(routingLinks).length} files=${businessFiles.length}`,
   );
-  ok(`timezone=${bookingTz} voiceId=${voiceId ?? '(env fallback)'}`);
+  ok(`timezone=${orgTz} voiceId=${voiceId ?? '(env fallback)'}`);
 
   if (!org.custom_prompt?.trim()) {
     fail('custom_prompt is empty — run onboarding / Cara Setup compile');
@@ -67,14 +67,14 @@ async function main(): Promise<void> {
 
   const now = new Date();
   const callerLine = classifyCallerLine(phone ?? '+353871234567');
-  const todayLocal = now.toLocaleDateString('en-GB', { timeZone: bookingTz });
+  const todayLocal = now.toLocaleDateString('en-GB', { timeZone: orgTz });
 
   const prompt = buildCaraCallPrompt({
     businessName: org.name,
     customPrompt: org.custom_prompt.trim(),
     callerLine,
     routingLinks,
-    bookingTimeZone: bookingTz,
+    orgTimeZone: orgTz,
     nowUtcIso: now.toISOString(),
     todayLocal,
   });

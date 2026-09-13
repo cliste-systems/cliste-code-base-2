@@ -1,98 +1,43 @@
 import assert from 'node:assert/strict';
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it } from 'node:test';
 
-import {
-  CARTESIA_SIOBHAN_VOICE_ID,
-  DEFAULT_ELEVEN_TTS_MODEL,
-  DEFAULT_ELEVEN_VOICE_ID,
-  resolveTtsConfig,
-} from './tts_config.js';
+import { CARTESIA_SIOBHAN_VOICE_ID, resolveTtsConfig } from './tts_config.js';
 
 const cartesiaProfile = {
-  id: '1',
-  name: 'Cartesia Siobhan (Irish)',
-  description: null,
+  id: 'profile-cartesia',
+  name: 'Cartesia test',
+  description: 'Cartesia inference profile',
   voice_id: CARTESIA_SIOBHAN_VOICE_ID,
-  llm_model: null,
-  stt_model: null,
-  tts_model: 'cartesia/sonic-3',
-  llm_provider: null,
+  llm_model: 'google/gemma-4-31b-it',
+  stt_model: 'assemblyai/universal-3-5-pro',
+  tts_model: 'cartesia/sonic-3.6',
+  llm_provider: 'gateway',
   is_active: true,
 };
 
-const elevenProfile = {
-  id: '2',
-  name: 'Eleven Irish demo',
-  description: null,
-  voice_id: DEFAULT_ELEVEN_VOICE_ID,
-  llm_model: null,
-  stt_model: null,
-  tts_model: 'eleven_v3',
-  llm_provider: null,
-  is_active: true,
-};
-
-describe('resolveTtsConfig', () => {
-  const envBackup = { ...process.env };
-
-  beforeEach(() => {
-    process.env.CARA_TTS_PROVIDER = 'cartesia-inference';
-    process.env.LIVEKIT_INFERENCE_TTS_MODEL = 'cartesia/sonic-3';
-    delete process.env.ELEVEN_VOICE_ID;
-  });
-
-  afterEach(() => {
-    process.env = { ...envBackup };
-  });
-
-  it('uses ElevenLabs when CARA_TTS_PROVIDER=elevenlabs even if profile is Cartesia', () => {
-    process.env.CARA_TTS_PROVIDER = 'elevenlabs';
-    process.env.ELEVEN_VOICE_ID = DEFAULT_ELEVEN_VOICE_ID;
-    const cfg = resolveTtsConfig({ testProfile: cartesiaProfile, orgVoiceId: null });
-    assert.equal(cfg.provider, 'elevenlabs');
-    assert.equal(cfg.voiceId, DEFAULT_ELEVEN_VOICE_ID);
-    assert.equal(cfg.model, DEFAULT_ELEVEN_TTS_MODEL);
-  });
-
-  it('uses Cartesia when profile model is cartesia and env is not elevenlabs', () => {
-    const cfg = resolveTtsConfig({ testProfile: cartesiaProfile, orgVoiceId: null });
-    assert.equal(cfg.provider, 'cartesia-inference');
-    assert.equal(cfg.voiceId, CARTESIA_SIOBHAN_VOICE_ID);
-  });
-
-  it('uses Cartesia Siobhan when CARA_TTS_PROVIDER=cartesia-inference even if profile is Eleven', () => {
-    process.env.CARA_TTS_PROVIDER = 'cartesia-inference';
-    process.env.LIVEKIT_INFERENCE_TTS_VOICE = CARTESIA_SIOBHAN_VOICE_ID;
-    const cfg = resolveTtsConfig({ testProfile: elevenProfile, orgVoiceId: null });
-    assert.equal(cfg.provider, 'cartesia-inference');
-    assert.equal(cfg.model, 'cartesia/sonic-3');
-  });
-
-  it('defaults to Cartesia Sonic 3.6 when no env model is set', () => {
-    delete process.env.LIVEKIT_INFERENCE_TTS_MODEL;
+describe('tts_config', () => {
+  it('defaults to Cartesia Siobhan via LiveKit Inference', () => {
     const cfg = resolveTtsConfig({ testProfile: null, orgVoiceId: null });
-    assert.equal(cfg.provider, 'cartesia-inference');
+    assert.equal(cfg.model, 'cartesia/sonic-3.6');
+    assert.equal(cfg.voiceId, CARTESIA_SIOBHAN_VOICE_ID);
+    assert.match(cfg.label, /cartesia\/sonic-3\.6/);
+  });
+
+  it('uses profile cartesia model and voice when set', () => {
+    const cfg = resolveTtsConfig({ testProfile: cartesiaProfile, orgVoiceId: null });
     assert.equal(cfg.model, 'cartesia/sonic-3.6');
     assert.equal(cfg.voiceId, CARTESIA_SIOBHAN_VOICE_ID);
   });
 
-  it('uses Siobhan when Cartesia profile still has a stale Eleven voice id', () => {
-    const staleProfile = {
-      ...cartesiaProfile,
-      tts_model: 'cartesia/sonic-3.6',
-      voice_id: DEFAULT_ELEVEN_VOICE_ID,
-    };
-    delete process.env.LIVEKIT_INFERENCE_TTS_VOICE;
-    const cfg = resolveTtsConfig({ testProfile: staleProfile, orgVoiceId: null });
-    assert.equal(cfg.provider, 'cartesia-inference');
-    assert.equal(cfg.voiceId, CARTESIA_SIOBHAN_VOICE_ID);
-  });
-
-  it('uses Eleven profile voice and model when provider is unset', () => {
-    delete process.env.CARA_TTS_PROVIDER;
-    const cfg = resolveTtsConfig({ testProfile: elevenProfile, orgVoiceId: null });
-    assert.equal(cfg.provider, 'elevenlabs');
-    assert.equal(cfg.voiceId, DEFAULT_ELEVEN_VOICE_ID);
-    assert.equal(cfg.model, 'eleven_v3');
+  it('respects LIVEKIT_INFERENCE_TTS_MODEL env override', () => {
+    const prev = process.env.LIVEKIT_INFERENCE_TTS_MODEL;
+    process.env.LIVEKIT_INFERENCE_TTS_MODEL = 'cartesia/sonic-3.6';
+    try {
+      const cfg = resolveTtsConfig({ testProfile: null, orgVoiceId: null });
+      assert.equal(cfg.model, 'cartesia/sonic-3.6');
+    } finally {
+      if (prev === undefined) delete process.env.LIVEKIT_INFERENCE_TTS_MODEL;
+      else process.env.LIVEKIT_INFERENCE_TTS_MODEL = prev;
+    }
   });
 });

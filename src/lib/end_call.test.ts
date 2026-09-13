@@ -13,7 +13,7 @@ describe('end_call goodbye detector', () => {
     assert.equal(assistantTextSoundsLikeGoodbye('Lovely, thanks for calling Brandon. Bye!'), true);
     assert.equal(assistantTextSoundsLikeGoodbye('Thanks for calling. Goodbye!'), true);
     assert.equal(
-      assistantTextSoundsLikeGoodbye('Lovely, thanks for calling Bloom Beauty Studio. Bye!'),
+      assistantTextSoundsLikeGoodbye('Lovely, thanks for calling Kavanaghs SuperValu. Bye!'),
       true,
     );
   });
@@ -52,7 +52,7 @@ describe('end_call goodbye detector', () => {
 
   it('matches agent auto-close string pattern', () => {
     assert.equal(
-      assistantTextSoundsLikeGoodbye('Lovely, thanks for calling Bloom Beauty Studio. Bye!'),
+      assistantTextSoundsLikeGoodbye('Lovely, thanks for calling Kavanaghs SuperValu. Bye!'),
       true,
     );
   });
@@ -85,7 +85,7 @@ describe('end_call goodbye detector', () => {
     );
     assert.equal(
       assistantTextSoundsLikeDemoFarewell(
-        'Lovely — for a salon I can handle calls while you\'re busy and take care of messages.',
+        'Lovely — for a shop I can handle calls while you\'re busy and take care of messages.',
       ),
       false,
     );

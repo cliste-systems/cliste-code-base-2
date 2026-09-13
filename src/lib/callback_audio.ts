@@ -21,7 +21,10 @@ function resolveTypingSoundPath(): string | null {
 }
 
 /** Fire-and-forget subtle typing cue during takeCallbackMessage — never await in tool execute. */
-export function playTypingSound(session: voice.AgentSession<unknown>): void {
+export function playTypingSound(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  session: voice.AgentSession<any>,
+): void {
   if (!caraTypingSoundEnabled()) return;
   const path = resolveTypingSoundPath();
   if (!path) {

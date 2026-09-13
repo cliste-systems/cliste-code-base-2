@@ -16,7 +16,7 @@ const baseInput = {
     hint: 'Caller ID on file.',
   },
   routingLinks: [],
-  bookingTimeZone: 'Europe/Dublin',
+  orgTimeZone: 'Europe/Dublin',
   nowUtcIso: '2026-06-20T12:00:00.000Z',
   todayLocal: '2026-06-20',
 };
@@ -32,7 +32,7 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /takeCallbackMessage/i);
   });
 
-  it('uses retail flow without booking language', () => {
+  it('uses retail flow for grocery stores', () => {
     const prompt = buildCaraCallPrompt({
       ...baseInput,
       niche: 'retail',
@@ -43,8 +43,6 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /retail store/i);
     assert.match(prompt, /greeting already played/i);
     assert.match(prompt, /can you hear me/i);
-    assert.doesNotMatch(prompt, /sendBookingLink/i);
-    assert.doesNotMatch(prompt, /salon/i);
     assert.doesNotMatch(prompt, /root touch-up/i);
   });
 
@@ -88,7 +86,6 @@ describe('buildCaraCallPrompt', () => {
     });
 
     assert.match(prompt, /### Electrician/i);
-    assert.match(prompt, /### Salon/i);
     assert.match(prompt, /### Mechanic/i);
     assert.match(prompt, /### Shop \/ retail/i);
     assert.match(prompt, /### General Hello Cara/i);
@@ -140,8 +137,8 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /after hang-up/i);
     assert.match(prompt, /Every turn must include spoken words/i);
     assert.match(prompt, /Never.*would you like to place an order/i);
-    assert.match(prompt, /endPhoneCall.*only/i);
-    assert.match(prompt, /Ignore any business instruction to use takeCallbackMessage/i);
+    assert.match(prompt, /searchWeeklyOffers.*searchSuperValuProducts.*endPhoneCall/s);
+    assert.match(prompt, /Ignore takeCallbackMessage, transferToTeam/i);
     assert.doesNotMatch(prompt, /Hello Cara demo line/i);
     assert.doesNotMatch(prompt, /## Your manner on this call/i);
   });
@@ -161,7 +158,7 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /meaning in context/i);
     assert.match(prompt, /endPhoneCall.*same turn/i);
     assert.match(prompt, /Never.*dangling goodbye/i);
-    assert.match(prompt, /Ignore any business instruction to use takeCallbackMessage/i);
+    assert.match(prompt, /Ignore takeCallbackMessage, transferToTeam/i);
     assert.match(prompt, /Finish.*Ending calls/i);
     assert.match(prompt, /summarising what you captured for their errand/i);
     assert.match(prompt, /## Confirm once/i);

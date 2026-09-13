@@ -1,13 +1,13 @@
 /**
  * Tiny in-process TTL cache. Used to keep the per-call hot path off Supabase
- * for read-mostly data (salon config + services) without introducing Redis.
+ * for read-mostly data (org config + services) without introducing Redis.
  *
  * Scope: the worker process. Cache lives only as long as the Node process —
- * fine for our short-lived call sessions, and a salon-data update from the
+ * fine for our short-lived call sessions, and a org-data update from the
  * dashboard is reflected within `ttlMs` on the next call (default 60s).
  *
- * NOTE: This cache stores plain salon config + service catalogue rows only,
- * never any per-caller PII. Do not extend it to cache `appointments` / call
+ * NOTE: This cache stores plain org config + service catalogue rows only,
+ * never any per-caller PII. Do not extend it to cache `callbacks` / call
  * logs without a fresh GDPR review.
  */
 

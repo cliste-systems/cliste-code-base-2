@@ -789,38 +789,24 @@ export class CaraTools {
 
   readonly searchWeeklyOffers = llm.tool({
     description:
-      'Look up synced **meat** weekly promotions (pre-pack rashers, sausages, pudding — not grocery). Use for specific products (steak, ham, rashers) OR when caller asks what meat offers you have / weekly offers / surprise me with the best — use query "weekly meat offers" or "meat offers this week" to list synced promos. Quote only what this tool returns.',
+      'Look up synced SuperValu weekly promotions (meat, grocery, household, and more). Use when the caller asks if something is ON OFFER / this week / on special, or wants a list of weekly deals. For listing, use query "weekly offers". For specific products (Heinz ketchup, rashers, chocolate), search that name. Quote only what this tool returns.',
     parameters: z.object({
       query: z
         .string()
         .min(2)
         .max(120)
         .describe(
-          'Product or browse — e.g. "striploin steak", "rashers", or "weekly meat offers" when listing all synced meat promos',
+          'Product or browse — e.g. "Heinz tomato ketchup", "rashers", or "weekly offers" when listing promos',
         ),
     }),
     execute: async ({ query }, { ctx }) => {
       const ud = readCaraUserData(ctx);
       const trimmed = query.trim();
-      if (
-        /weetabix|cereal|bread|milk|yogurt|crisps|tayto|mayo|mayonnaise|ketchup|tea|coffee|biscuits|grocery/i.test(
-          trimmed,
-        ) &&
-        !/meat|steak|striploin|sirloin|chicken|lamb|pork|butcher|rashers|sausage|pudding|beef/i.test(
-          trimmed,
-        )
-      ) {
-        return {
-          ok: false,
-          message:
-            'Weekly offers sync is meat promotions only — not grocery. Use searchSuperValuProducts for this product instead.',
-        };
-      }
       if (!voiceWebhooksConfigured()) {
         return {
           ok: false,
           message:
-            'Weekly offer lookup is not available on this call. Do not guess a price — offer the butcher or take a message.',
+            'Weekly offer lookup is not available on this call. Do not guess a price — offer a team callback or take a message.',
         };
       }
 
@@ -843,7 +829,7 @@ export class CaraTools {
       ) {
         result = await postSearchWeeklyOffers({
           ...payload,
-          query: 'weekly meat offers',
+          query: 'weekly offers',
         });
       }
 
@@ -852,21 +838,21 @@ export class CaraTools {
           ok: false,
           message:
             result.error ??
-            'Could not search weekly offers right now. Offer the butcher department or take a message — do not guess.',
+            'Could not search weekly offers right now. Offer a team callback — do not guess.',
         };
       }
 
       if (result.matches.length === 0) {
         const channelHint = payload.channel === 'butcher_counter'
-          ? 'No butcher counter offer found in this week\'s sync — do not quote pre-pack meat aisle deals. Offer the butcher team to confirm counter specials like multi-buy deals.'
+          ? 'No butcher counter offer found in this week\'s sync — do not quote pre-pack meat aisle deals unless the tool returns them.'
           : payload.channel === 'prepack'
             ? 'No matching pre-pack offer found in this week\'s sync.'
             : inferWeeklyOffersListIntent(trimmed)
-              ? 'No meat offers are synced this week.'
-              : `No matching offer found for "${trimmed}" in this week's sync. If they asked generally what meat offers you have, retry with query "weekly meat offers".`;
+              ? 'No weekly offers are synced right now.'
+              : `No matching offer found for "${trimmed}" in this week's sync. If they asked generally what offers you have, retry with query "weekly offers".`;
         return {
           ok: true,
-          message: `${channelHint} Do not invent a price — offer the butcher or take a message.`,
+          message: `${channelHint} Do not invent a price — offer a team callback if needed.`,
           matches: [],
         };
       }
@@ -885,7 +871,7 @@ export class CaraTools {
 
   readonly searchSuperValuProducts = llm.tool({
     description:
-      'Look up SuperValu national range products — prices, offer status, and stock guidance. When the caller asks if something is ON OFFER / this week / on special, set intent to "offer". When they ask to LIST several grocery offers (milk, bread, crisps, chocolate, fruit), pass all categories in one query with intent "offer". Quote exactly what this tool returns.',
+      'Look up SuperValu national range products — stock, sizes, and regular pricing. Use for "do you stock / do you sell / how much is it" when they are NOT asking about weekly offers. If they ask ON OFFER / this week / on special, use searchWeeklyOffers instead. Quote exactly what this tool returns.',
     parameters: z.object({
       query: z
         .string()
@@ -916,20 +902,12 @@ export class CaraTools {
         callerAskedAboutOffers: ud.sessionFlags.callerAskedAboutOffers,
       });
 
-      // #region agent log
-      fetch('http://127.0.0.1:7662/ingest/95496c05-1739-4e32-b7be-319b56b1c5b5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0f50f3'},body:JSON.stringify({sessionId:'0f50f3',runId:'intent-fix',hypothesisId:'H3',location:'cara_tools.ts:searchSuperValuProducts',message:'catalog tool intent resolved',data:{query:trimmed,explicitIntent,resolvedIntent,callerAskedAboutOffers:ud.sessionFlags.callerAskedAboutOffers},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
-
       const payload: SearchSupervaluProductsPayload = {
         called_number: ud.calledNumber,
         query: trimmed,
         intent: resolvedIntent,
       };
       const result = await postSearchSupervaluProducts(payload);
-
-      // #region agent log
-      fetch('http://127.0.0.1:7662/ingest/95496c05-1739-4e32-b7be-319b56b1c5b5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0f50f3'},body:JSON.stringify({sessionId:'0f50f3',runId:'grocery-browse',hypothesisId:'H1',location:'cara_tools.ts:searchSuperValuProducts',message:'catalog tool result',data:{query:trimmed,resolvedIntent,matchCount:result.ok?result.matches.length:0,browseCategories:result.browseCategories??null,firstMatch:result.ok&&result.matches[0]?{productName:result.matches[0].product_name,isOnOffer:result.matches[0].is_on_offer}:null},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
 
       if (!result.ok) {
         return {

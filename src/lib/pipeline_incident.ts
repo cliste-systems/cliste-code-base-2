@@ -74,7 +74,7 @@ export async function postPipelineIncident(
 
 export function classifyPipelineErrorStage(message: string): PipelineIncidentStage {
   const m = message.toLowerCase();
-  if (m.includes('synthesize') || m.includes('elevenlabs') || m.includes('tts')) return 'tts';
+  if (m.includes('synthesize') || m.includes('cartesia') || m.includes('tts')) return 'tts';
   if (m.includes('llm') || m.includes('openai') || m.includes('completion') || m.includes('credit')) {
     return 'llm';
   }

@@ -116,7 +116,7 @@ export function buildCloseDiagnosticsPayload(input: {
       ? input.sessionFlags.demoScenarioSlug
       : null;
   const transcriptIssues = analyzeTranscriptForIssues(input.transcript, {
-    isTestCall: input.isTestCall,
+    ...(input.isTestCall !== undefined ? { isTestCall: input.isTestCall } : {}),
     demoScenarioSlug,
   });
   const recommendedChecks = buildRecommendedChecks({

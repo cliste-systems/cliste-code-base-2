@@ -285,8 +285,10 @@ export async function postprocessCallTranscript(input: {
         businessName: input.businessName,
         outcome: input.outcome,
         inferenceLlmModel: input.inferenceLlmModel,
-        conversationalRetailLine: input.conversationalRetailLine,
-        routesCatalog: input.routesCatalog,
+        ...(input.conversationalRetailLine !== undefined
+          ? { conversationalRetailLine: input.conversationalRetailLine }
+          : {}),
+        ...(input.routesCatalog !== undefined ? { routesCatalog: input.routesCatalog } : {}),
       }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
     ]);

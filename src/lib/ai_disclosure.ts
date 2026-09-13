@@ -3,7 +3,7 @@ import { isRetailNiche } from './org_vertical.js';
 
 const PROD_OVERRIDE_TOKEN = 'i-have-a-pre-call-ivr-and-accept-the-legal-risk';
 
-/** Default post-greeting disclosure — retail / grocery only (no booking language). */
+/** Default post-greeting disclosure — retail / grocery only (no link language). */
 const DEFAULT_BUSINESS_DISCLOSURE =
   "Just so you know, I'm an AI assistant for the store and your call may be recorded to help with your enquiry.";
 
@@ -27,7 +27,7 @@ function isProductionEnv(): boolean {
 
 function isValidCustomDisclosure(text: string): boolean {
   const t = text.trim();
-  return t.length >= 24 && /\bai\b/i.test(t) && !/\bsalon\b/i.test(t) && !/\bbooking\b/i.test(t);
+  return t.length >= 24 && /\bai\b/i.test(t) && !/\bshop\b/i.test(t) && !/\blink\b/i.test(t);
 }
 
 /**
@@ -75,7 +75,7 @@ export function resolveAiDisclosure(input?: {
     }
   }
 
-  // Retail-only product today — never fall back to legacy booking/salon copy.
+  // Retail-only product today — never fall back to legacy link/shop copy.
   void isRetailNiche(input?.niche);
   void input?.businessType;
 

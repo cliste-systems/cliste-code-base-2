@@ -2,10 +2,10 @@
  * GDPR / data-minimisation helpers.
  *
  * Storage policy for this voice agent:
- *  - **Booking details** (name, mobile, service, time, booking reference) are
+ *  - **Call details** (name, mobile, service, time, call reference) are
  *    necessary for the contract with the customer (GDPR Art 6(1)(b)) and are
- *    persisted in the salon's database.
- *  - **Call transcripts and AI summaries** are kept only to give the salon a
+ *    persisted in the org's database.
+ *  - **Call transcripts and AI summaries** are kept only to give the org a
  *    record of the conversation; they MUST NOT contain payment-card data,
  *    CVV/security codes, IBANs, PPS numbers, or anything that looks like
  *    special-category data the agent had no business collecting.
@@ -37,7 +37,7 @@ const REDACTED = '[redacted]';
  *  - "expir(y|es)" or "exp" + a 2/4 digit number
  *
  * We deliberately KEEP names, phone numbers and email addresses untouched —
- * those are the legitimate purpose of the call (booking contact details).
+ * those are the legitimate purpose of the call (call contact details).
  */
 export function redactPii(input: string | null | undefined): string {
   if (!input) {

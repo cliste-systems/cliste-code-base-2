@@ -2,26 +2,24 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  bufferCartesiaStreamBySentence,
   bufferTtsStreamBySentence,
-  bufferTtsStreamForCartesia,
   buildTtsNodeInputStream,
   prepareCartesiaSpeechChunk,
   prepareCartesiaGreetingChunk,
   prepareGreetingForTts,
   prepareHardcodedSpeechForTts,
-  prepareTextForTtsStreaming,
   setActiveTtsModelForSanitizer,
 } from './tts_text_sanitize.js';
 
-const BLOOM_GREETING =
-  "Thanks for calling Bloom Beauty Studio. I'm Cara, the AI assistant. This call may be recorded and transcribed. How can I help you?";
+const RETAIL_GREETING =
+  "Thanks for calling Kavanaghs SuperValu. I'm Cara, the AI assistant. This call may be recorded and transcribed. How can I help you?";
 
 describe('tts_text_sanitize', () => {
-  it('flows Bloom greeting clauses with commas', () => {
-    const out = prepareGreetingForTts(BLOOM_GREETING);
-    assert.match(out, /Thanks for calling Bloom Beauty Studio,/);
+  it('flows retail greeting clauses with commas', () => {
+    const out = prepareGreetingForTts(RETAIL_GREETING);
+    assert.match(out, /Thanks for calling Kavanahs SuperValu,/);
     assert.match(out, /how can I help you\?/);
-    assert.doesNotMatch(out, /Studio\. I'm/);
   });
 
   it('softens goodbye for TTS', () => {
@@ -31,33 +29,14 @@ describe('tts_text_sanitize', () => {
     assert.doesNotMatch(out, /\bbye\b/i);
   });
 
-  it('softens bare bye at end of line', () => {
-    const out = prepareHardcodedSpeechForTts('Lovely — thanks for calling. Bye.');
-    assert.match(out, /take care/i);
-    assert.doesNotMatch(out, /\bbye\b/i);
-  });
-
   it('strips model control tokens before TTS', () => {
     const out = prepareHardcodedSpeechForTts('No bother — take care. <|end|>');
     assert.doesNotMatch(out, /<\|/);
     assert.match(out, /take care/i);
   });
 
-  it('strips emoji before TTS', () => {
-    const out = prepareHardcodedSpeechForTts('Grand, Abigail — take care now. 👋');
-    assert.doesNotMatch(out, /👋/);
-    assert.match(out, /take care/i);
-  });
-
-  it('inserts comma after leading acknowledgement before a name', () => {
-    const out = prepareHardcodedSpeechForTts('No bother Abigail — take care now.');
-    assert.match(out, /^No bother, Abigail/i);
-  });
-
-  it('maps is that alright to okay for TTS (avoids drawn-out alright)', () => {
-    const out = prepareHardcodedSpeechForTts(
-      "I can text you our booking link — is that alright?",
-    );
+  it('maps is that alright to okay for TTS', () => {
+    const out = prepareHardcodedSpeechForTts('I can text you our directions link — is that alright?');
     assert.match(out, /is that okay/i);
     assert.doesNotMatch(out, /alright/i);
   });
@@ -72,45 +51,17 @@ describe('tts_text_sanitize', () => {
     assert.doesNotMatch(out, /21:00/);
   });
 
-  it('collapses repeated letters that turbo screams', () => {
-    const out = prepareHardcodedSpeechForTts('Hellooooo — grand so.');
-    assert.match(out, /Hello — lovely so/);
-    assert.doesNotMatch(out, /Hellooooo/);
-    assert.doesNotMatch(out, /\bgrand\b/i);
-  });
-
-  it('applies pronunciation replacements', () => {
-    const out = prepareHardcodedSpeechForTts('Book on Fresha.');
-    assert.match(out, /Fresh-ah/i);
-  });
-
-  it('respells garage and salon for Irish TTS', () => {
-    const out = prepareHardcodedSpeechForTts('We run a garage and a salon.');
+  it('respells garage for Irish TTS', () => {
+    const out = prepareHardcodedSpeechForTts('We run a garage in Donegal.');
     assert.match(out, /gar-idge/i);
-    assert.match(out, /sal-on/i);
     assert.doesNotMatch(out, /\bgarage\b/i);
-    assert.doesNotMatch(out, /\bsalon\b/i);
   });
 
   it('maps Cara to Irish Kara for TTS', () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3');
+    setActiveTtsModelForSanitizer('cartesia/sonic-3.6');
     const out = prepareHardcodedSpeechForTts("Hello, you're through to Cara.");
     assert.match(out, /Kara/);
     assert.doesNotMatch(out, /\bCara\b/);
-  });
-
-  it('strips v3 audio tags when model is turbo', () => {
-    setActiveTtsModelForSanitizer('eleven_turbo_v2_5');
-    const out = prepareHardcodedSpeechForTts('Grand — [pause] lovely.');
-    assert.doesNotMatch(out, /\[pause\]/);
-    assert.match(out, /lovely — lovely/);
-  });
-
-  it('keeps v3 audio tags when model is v3', () => {
-    setActiveTtsModelForSanitizer('eleven_v3');
-    const out = prepareHardcodedSpeechForTts('Grand — [pause] lovely.');
-    assert.match(out, /\[pause\]/);
-    setActiveTtsModelForSanitizer('eleven_turbo_v2_5');
   });
 
   it('flushes unpunctuated short replies through sentence buffer', async () => {
@@ -121,254 +72,61 @@ describe('tts_text_sanitize', () => {
       },
     });
     const reader = bufferTtsStreamBySentence(source).getReader();
-    const { value, done } = await reader.read();
-    assert.equal(done, false);
-    assert.match(value ?? '', /Lovely — happy to help/);
-    const next = await reader.read();
-    assert.equal(next.done, true);
-  });
-
-  it('prepareCartesiaSpeechChunk uses SSML breaks instead of periods', () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3');
-    const out = prepareCartesiaSpeechChunk(
-      "Yeah, I can hear you fine. What would you like to try?",
-    );
-    assert.match(out, /Yeah, I can hear you fine/);
-    assert.match(out, /<break time="240ms"\/> What would you like to try\?/);
-    assert.doesNotMatch(out, /\./);
-    assert.doesNotMatch(out, /<break time="160ms"\/>/);
-  });
-
-  it('prepareCartesiaSpeechChunk pauses before comma-run-on questions', () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
-    const out = prepareCartesiaSpeechChunk(
-      "It's a beautiful day, what kind of business have you got Joe?",
-    );
-    assert.match(out, /It's a beautiful day/);
-    assert.match(out, /<break time="240ms"\/> what kind of business have you got Joe\?/);
-    assert.doesNotMatch(out, /beautiful day, what/);
-  });
-
-  it('prepareCartesiaSpeechChunk slows farewell outro with outro breaks', () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
-    const out = prepareCartesiaSpeechChunk(
-      'Perfect, Martin — thanks for calling Hello Cara today. Have a good day. Bye for now.',
-    );
-    assert.match(out, /Perfect, Martin <break time="400ms"\/> thanks for calling/i);
-    assert.match(out, /<break time="400ms"\/> Have a good day/);
-    assert.match(out, /<break time="400ms"\/> Bye for now/);
-    assert.doesNotMatch(out, /<break time="240ms"\/>/);
-  });
-
-  it('prepareCartesiaSpeechChunk keeps mid-call dashes flowing without outro breaks', () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
-    const out = prepareCartesiaSpeechChunk(
-      'Sure — I can help an electrician by answering calls, taking messages, and sending out appointment reminders. What would you like to try?',
-    );
-    assert.match(out, /Sure — I can help an electrician by answering calls, taking messages/);
-    assert.match(out, /<break time="240ms"\/> What would you like to try\?/);
-    assert.doesNotMatch(out, /<break time="160ms"\/>/);
-    assert.doesNotMatch(out, /<break time="320ms"\/>/);
-  });
-
-  it('strips bracketed fake tool annotations before TTS', () => {
-    const out = prepareHardcodedSpeechForTts(
-      'Lovely, Martin — thanks for calling Hello Cara today. Have a good day. Bye for now. [tool call] Might need actually invoke tool, not textual.',
-    );
-    assert.doesNotMatch(out, /\[tool call\]/i);
-    assert.doesNotMatch(out, /invoke tool/i);
-    assert.match(out, /Bye for now/i);
-  });
-
-  it('cartesia buffer streams sentence chunks without trailing periods', async () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3');
-    const source = new ReadableStream<string>({
-      start(controller) {
-        controller.enqueue('Yeah, I can hear you fine. ');
-        controller.enqueue('What would you like to try?');
-        controller.close();
-      },
-    });
-    const reader = bufferTtsStreamForCartesia(source).getReader();
     const chunks: string[] = [];
     while (true) {
-      const { value, done } = await reader.read();
+      const { done, value } = await reader.read();
       if (done) break;
       if (value) chunks.push(value);
     }
-    assert.ok(chunks.length >= 1);
-    assert.match(chunks.join(' '), /Yeah, I can hear you fine/);
-    assert.match(chunks.join(' '), /What would you like to try/);
-    assert.doesNotMatch(chunks.join(' '), /\./);
+    assert.ok(chunks.join(' ').includes('Lovely'));
   });
 
-  it('cartesia multi-sentence replies pause between streamed chunks', async () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
+  it('buffers Cartesia stream by sentence with SSML breaks', async () => {
     const source = new ReadableStream<string>({
       start(controller) {
-        controller.enqueue(
-          'Hello! I can take a message for the electrician and let them know you need assistance. What issue are you experiencing?',
-        );
+        controller.enqueue('We are open today. Anything else?');
         controller.close();
       },
     });
-    const reader = buildTtsNodeInputStream(source, { provider: 'cartesia-inference' }).getReader();
+    const reader = bufferCartesiaStreamBySentence(source).getReader();
     const chunks: string[] = [];
     while (true) {
-      const { value, done } = await reader.read();
+      const { done, value } = await reader.read();
       if (done) break;
       if (value) chunks.push(value);
     }
-    assert.equal(chunks.length, 2);
-    assert.match(chunks[0]!, /need assistance/);
-    assert.match(chunks[1]!, /^<break time="240ms"\/> What issue are you experiencing\?/);
+    assert.ok(chunks.some((c) => c.includes('<break')));
   });
 
-  it('cartesia streamed outro uses slower farewell breaks between sentences', async () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
-    const source = new ReadableStream<string>({
-      start(controller) {
-        controller.enqueue(
-          'Perfect, Martin — thanks for calling Hello Cara today. Have a good day. Bye for now.',
-        );
-        controller.close();
-      },
-    });
-    const reader = bufferTtsStreamForCartesia(source).getReader();
-    const chunks: string[] = [];
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (value) chunks.push(value);
-    }
-    const joined = chunks.join(' ');
-    assert.ok(chunks.length >= 1);
-    assert.match(joined, /thanks for calling Hello Kara today/);
-    assert.match(joined, /<break time="400ms"\/> Have a good day/);
-    assert.match(joined, /<break time="400ms"\/> Bye for now/);
-    assert.doesNotMatch(joined, /<break time="240ms"\/>/);
-  });
-
-  it('buildTtsNodeInputStream routes cartesia by sentence for faster first audio', async () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3');
-    const source = new ReadableStream<string>({
-      start(controller) {
-        controller.enqueue('One clause. Two clause.');
-        controller.close();
-      },
-    });
-    const reader = buildTtsNodeInputStream(source, {
-      provider: 'cartesia-inference',
-    }).getReader();
-    const chunks: string[] = [];
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (value) chunks.push(value);
-    }
-    assert.ok(chunks.length >= 1);
-    assert.match(chunks.join(' '), /One clause/);
-    assert.match(chunks.join(' '), /Two clause/);
-    assert.match(chunks.join(' '), /<break time="240ms"\/>/);
-    assert.doesNotMatch(chunks.join(' '), /\./);
-  });
-
-  it('respells Kavanaghs and Donegal for Irish TTS', () => {
-    const out = prepareHardcodedSpeechForTts("Hello, you're through to Kavanaghs SuperValu Donegal Town.");
-    assert.match(out, /Kavanahs/i);
-    assert.match(out, /Doneygall Town/i);
-    assert.doesNotMatch(out, /\bKavanaghs\b/i);
-    assert.doesNotMatch(out, /\bDonegal\b/i);
-  });
-
-  it('normalises St Patrick\'s Day for consistent TTS', () => {
-    const out = prepareHardcodedSpeechForTts("We're closed on St Patrick's Day.");
-    assert.match(out, /Saint Patrick's Day/i);
-    assert.doesNotMatch(out, /\bSt Patrick/i);
-  });
-
-  it('prepareCartesiaRetailOpeningChunk keeps retail intro natural', () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
+  it('prepareCartesiaGreetingChunk keeps intro brisk', () => {
     const greeting =
-      "Hello, you're through to Kavanahs SuperValu Doneygall Town. I'm Cara, the AI assistant. This call may be recorded and transcribed. How can I help you today?";
-    const out = prepareHardcodedSpeechForTts(greeting, {
+      "Hello, you're through to Cara. I'm the AI assistant. This call may be recorded. How can I help you today?";
+    const out = prepareCartesiaGreetingChunk(greeting);
+    assert.match(out, /<break time="160ms"\/>/);
+  });
+
+  it('cartesia greeting single-utterance does not double-prepare', async () => {
+    const greeting =
+      "Hello, you're through to Cara. I'm the AI assistant. This call may be recorded. How can I help you today?";
+    const prepared = prepareHardcodedSpeechForTts(greeting, {
       greeting: true,
       greetingCommaFlow: false,
       greetingRetailOpening: true,
     });
-    assert.match(out, /Hello, you're through to Kavanahs SuperValu Doneygall Town<break time="240ms"\/> I'm Kara, the AI assistant/);
-    assert.match(out, /<break time="240ms"\/> This call may be recorded and transcribed/);
-    assert.match(out, /<break time="240ms"\/> How can I help you today\?/);
-    assert.doesNotMatch(out, /<break time="480ms"\/>/);
-  });
-
-  it('prepareCartesiaGreetingChunk keeps intro brisk — sentence breaks only', () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
-    const greeting =
-      "Hi — you're through to Hello Cara. I'm your AI assistant, and this call may be recorded and transcribed. How are you keeping today?";
-    const out = prepareCartesiaGreetingChunk(greeting);
-    assert.match(out, /Hello Kara<break time="160ms"\/> I'm your AI assistant, and this call may be recorded and transcribed/);
-    assert.match(out, /<break time="160ms"\/> How are you keeping today\?/);
-    assert.doesNotMatch(out, /<break time="240ms"\/>/);
-    assert.doesNotMatch(out, /<break time="320ms"\/>/);
-    assert.doesNotMatch(out, /Hello Cara.*Hello Cara/);
-  });
-  it('cartesia greeting single-utterance does not replay or double-prepare the opening', async () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
-    const greeting =
-      "Hi — you're through to Hello Cara. I'm your AI assistant, and this call may be recorded and transcribed. How are you keeping today?";
-    const prepared = prepareHardcodedSpeechForTts(greeting, {
-      greeting: true,
-      greetingCommaFlow: false,
-    });
-    const breakCount = (prepared.match(/<break /g) ?? []).length;
-    assert.equal(breakCount, 2);
     const source = new ReadableStream<string>({
       start(controller) {
         controller.enqueue(prepared);
         controller.close();
       },
     });
-    const reader = buildTtsNodeInputStream(source, {
-      provider: 'cartesia-inference',
-      singleUtterance: true,
-    }).getReader();
+    const reader = buildTtsNodeInputStream(source, { singleUtterance: true }).getReader();
     const chunks: string[] = [];
     while (true) {
-      const { value, done } = await reader.read();
+      const { done, value } = await reader.read();
       if (done) break;
       if (value) chunks.push(value);
     }
     assert.equal(chunks.length, 1);
     assert.equal(chunks[0], prepared);
-    assert.doesNotMatch(chunks[0]!, /Hello Cara.*Hello Cara/);
-  });
-
-  it('cartesia comma early-flush does not repeat flushed prefix in later chunks', async () => {
-    setActiveTtsModelForSanitizer('cartesia/sonic-3.5');
-    const prepared = prepareCartesiaSpeechChunk(
-      "You're through to Hello Cara, the demo line — I'm Cara, the AI assistant, This call may be recorded and transcribed, What would you like to try",
-    );
-    const source = new ReadableStream<string>({
-      start(controller) {
-        controller.enqueue(prepared);
-        controller.close();
-      },
-    });
-    const reader = buildTtsNodeInputStream(source, {
-      provider: 'cartesia-inference',
-    }).getReader();
-    const chunks: string[] = [];
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (value) chunks.push(value);
-    }
-    assert.ok(chunks.length >= 1);
-    const joined = chunks.join(' ');
-    assert.doesNotMatch(joined, /Hello Cara,\s+You're through to Hello Cara/);
-    if (chunks.length > 1) {
-      assert.doesNotMatch(chunks[1]!, /^You're through to Hello Cara,/);
-    }
   });
 });

@@ -32,7 +32,7 @@ describe('persona', () => {
         seed: `seed-${i}`,
         localHour: i % 24,
       });
-      assert.doesNotMatch(p.greeting, /\{business\}|\{salon\}|\{timeOfDay\}/);
+      assert.doesNotMatch(p.greeting, /\{business\}|\{timeOfDay\}/);
     }
   });
 
@@ -91,7 +91,7 @@ describe('persona', () => {
   it('personaVarietyEnabled defaults on', () => {
     const prev = process.env.CARA_PERSONA_VARIETY;
     delete process.env.CARA_PERSONA_VARIETY;
-    delete process.env.SALON_PERSONA_VARIETY;
+    delete process.env.CARA_PERSONA_VARIETY;
     try {
       assert.equal(personaVarietyEnabled(), true);
     } finally {

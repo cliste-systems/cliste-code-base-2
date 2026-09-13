@@ -253,7 +253,7 @@ function looksLikeBulletListSpeech(body: string): boolean {
   if (/\b\d+\.\s/.test(body)) return true;
   if ((body.match(/\s[-–—]\s/g) ?? []).length >= 2) return true;
   if (/^\s*[-•*]\s/m.test(body)) return true;
-  if (/\b(electrician|salon|mechanic|shop|garage)\b.*,\s.*\b(or|and)\b/i.test(body)) {
+  if (/\b(electrician|shop|mechanic|shop|garage)\b.*,\s.*\b(or|and)\b/i.test(body)) {
     return true;
   }
   return false;
@@ -350,8 +350,8 @@ export function buildRecommendedChecks(input: {
   if (tags.has('caller_reply_recovery')) {
     checks.push('Caller reply recovery fired — agent may have been silent; check generateReply / pipeline.');
   }
-  if (tags.has('booking_consent_pivot') || tags.has('booking_qa_question')) {
-    checks.push('Booking pivot/Q&A path — confirm callback intake (date/time, flexibility) in prompt + pivot handler.');
+  if (tags.has('sms_consent_pivot') || tags.has('link_qa_question')) {
+    checks.push('SMS consent pivot/Q&A path — confirm callback intake in prompt + pivot handler.');
   }
   if (tags.has('call_complete_webhook_failed') || tags.has('call-complete webhook failed')) {
     checks.push('call-complete webhook failed — Supabase row may be missing enrichment; check voice webhook + Railway.');

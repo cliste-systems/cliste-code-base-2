@@ -57,7 +57,7 @@ export function callerAsksDemoMenu(text: string): boolean {
 export function assistantSoundsLikeTradeMenu(text: string): boolean {
   const t = text.replace(/^Assistant:\s*/i, '').trim();
   if (!t) return false;
-  if (/\b(electrician|salon|mechanic|shop|garage|beauty|retail)\b.*,\s.*\b(or|and)\b/i.test(t)) {
+  if (/\b(electrician|mechanic|shop|garage|retail)\b.*,\s.*\b(or|and)\b/i.test(t)) {
     return true;
   }
   if (/\b(like|such as|for example)\b/i.test(t) && (t.match(/,/g) ?? []).length >= 2) {
@@ -132,8 +132,8 @@ export function demoCallerReadyForClose(
   return false;
 }
 
-/** Caller wants human/phone booking instead of the SMS link. */
-export function callerAskedPhoneOrHumanBooking(text: string): boolean {
+/** Caller wants a human on the phone instead of an SMS link. */
+export function callerAskedPhoneOrHumanHandoff(text: string): boolean {
   const t = text
     .trim()
     .toLowerCase()
@@ -141,7 +141,7 @@ export function callerAskedPhoneOrHumanBooking(text: string): boolean {
     .replace(/\s+/g, ' ');
   if (!t) return false;
   return (
-    /\b(book over the (phone|call)|on the phone|over the phone|speak to (someone|a person|the team|a team member|human)|team member|real person|get someone|talk to someone|someone (to )?book)\b/.test(
+    /\b(on the phone|over the phone|speak to (someone|a person|the team|a team member|human)|team member|real person|get someone|talk to someone)\b/.test(
       t,
     ) || /\b(is there any way you can get|can i (speak|talk)|could i (speak|talk))\b/.test(t)
   );
@@ -204,7 +204,7 @@ export function callerPivotedFromSmsConsent(
   if (!text.trim() || callerSaidNothingElse(text)) return false;
   if (callerSoundsLikeSocialChitchat(text)) return false;
   if (callerSoundsLikeAudioCheck(text)) return false;
-  if (callerAskedPhoneOrHumanBooking(text)) return true;
+  if (callerAskedPhoneOrHumanHandoff(text)) return true;
   const t = text
     .trim()
     .toLowerCase()
@@ -221,14 +221,14 @@ export function callerPivotedFromSmsConsent(
   return false;
 }
 
-/** Assistant asked what service / appointment type before offering the link. */
+/** Assistant asked what the caller needs before offering a link. */
 export function assistantAskedServiceIntake(text: string): boolean {
   const t = text.trim();
   if (!t || !/\?/.test(t)) return false;
   return (
-    /\bwhat (were you|type of|kind of|service)\b/i.test(t) ||
-    /\b(hair, nails, lashes|nails, lashes|something else)\b/i.test(t) ||
-    /\blooking to book\b/i.test(t)
+    /\bwhat (were you|type of|kind of|service|department)\b/i.test(t) ||
+    /\b(something else|which department)\b/i.test(t) ||
+    /\blooking for\b/i.test(t)
   );
 }
 
@@ -257,7 +257,7 @@ export function callerSoundsLikeLineEngagement(text: string): boolean {
     .trim();
   if (!t) return false;
   if (callerSoundsLikeAudioCheck(text)) return false;
-  if (/\b(book|booking|appointment|how are you|keeping)\b/.test(t)) return false;
+  if (/\b(how are you|keeping)\b/.test(t)) return false;
   return (
     /^(hello|hi|hey|hiya|howya|how ya|anyone there|you there|still there)\b/.test(t) ||
     /^(hello|hi|hey)\s*(there|cara)?\s*$/.test(t)
@@ -265,7 +265,7 @@ export function callerSoundsLikeLineEngagement(text: string): boolean {
 }
 
 const DEMO_CHITCHAT_BUSINESS_HINT =
-  /\b(business|hello cara|curious|salon|shop|garage|electrician|website|pricing|because|looking for|book|appointment|demo an|try a)\b/;
+  /\b(business|hello cara|curious|shop|garage|electrician|website|pricing|because|looking for|demo an|try a)\b/;
 
 /** Small talk / greeting — no thinking filler needed before the reply. */
 export function callerSoundsLikeSocialChitchat(text: string): boolean {
@@ -276,7 +276,7 @@ export function callerSoundsLikeSocialChitchat(text: string): boolean {
     .replace(/\s+/g, ' ')
     .trim();
   if (!t) return false;
-  if (/\b(book|booking|appointment|schedule|cancel|reschedule)\b/.test(t)) return false;
+  if (/\b(schedule|cancel|reschedule)\b/.test(t)) return false;
   if (callerSoundsLikeLineEngagement(text)) return false;
   if (
     /\b(weather|what'?s it like (there|with you|out)|how'?s the weather|soft day|lovely day|raining|showers?)\b/.test(
@@ -305,9 +305,10 @@ export function callerSoundsLikeWellbeingReply(text: string): boolean {
     .replace(/\s+/g, ' ')
     .trim();
   if (!t) return false;
-  if (/\b(book|booking|appointment|schedule|cancel|reschedule|electrician|salon|demo an|hello cara)\b/.test(t)) {
+  if (/\b(schedule|cancel|reschedule|electrician|demo an|hello cara)\b/.test(t)) {
     return false;
   }
+  if (DEMO_CHITCHAT_BUSINESS_HINT.test(t)) return false;
   return (
     /\b(not too bad|not doing too bad|doing well|doing good|doing very good|i'?m good|very well|not bad|keeping well|keeping good|i'?m keeping|i'?m fine|i'?m alright)\b/.test(
       t,
@@ -330,7 +331,7 @@ export function callerSoundsLikeVagueDemoOpening(text: string): boolean {
     .replace(/\s+/g, ' ')
     .trim();
   if (!t) return false;
-  if (/\b(what do you do|what is it that you do|what is it you do|who made|who built|electrician|salon|demo an|try a)\b/.test(t)) {
+  if (/\b(what do you do|what is it that you do|what is it you do|who made|who built|electrician|demo an|try a)\b/.test(t)) {
     return false;
   }
   if (
@@ -404,7 +405,7 @@ export function callerAskedNewQuestion(text: string): boolean {
     .replace(/\s+/g, ' ');
   if (!t || callerSaidNothingElse(text)) return false;
   if (/\?\s*$/.test(text.trim())) return true;
-  return /\b(can i|could i|do you|does|what|how|when|where|which|is it|are you|would you|tell me|wondering|interested in|looking for|book|booking|appointment|keratin|colour|color|cut|lash|wax|same day)\b/.test(
+  return /\b(can i|could i|do you|does|what|how|when|where|which|is it|are you|would you|tell me|wondering|interested in|looking for|stock|price|hours|department|same day)\b/.test(
     t,
   );
 }

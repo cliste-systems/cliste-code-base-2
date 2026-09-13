@@ -4,9 +4,13 @@ import { describe, it } from 'node:test';
 import { CaraTools } from './cara_tools.js';
 
 describe('CaraTools.toolContext', () => {
-  it('exposes only endPhoneCall on conversational retail 9508', () => {
+  it('exposes retail lookup tools on conversational retail 9508', () => {
     const tools = new CaraTools().toolContext({ conversationalRetailLine: true });
-    assert.deepEqual(Object.keys(tools).sort(), ['endPhoneCall']);
+    assert.deepEqual(Object.keys(tools).sort(), [
+      'endPhoneCall',
+      'searchSuperValuProducts',
+      'searchWeeklyOffers',
+    ]);
   });
 
   it('exposes only endPhoneCall on demo line', () => {

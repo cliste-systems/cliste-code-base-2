@@ -10,7 +10,7 @@ import {
   assistantSoundsLikeCorporateAssist,
   assistantSoundsLikeTradeMenu,
   callerAskedNewQuestion,
-  callerAskedPhoneOrHumanBooking,
+  callerAskedPhoneOrHumanHandoff,
   callerAsksDemoMenu,
   callerExplicitlyRequestedHangup,
   callerPivotedFromSmsConsent,
@@ -48,7 +48,7 @@ describe('speech_triggers', () => {
   it('detects robotic trade menu lists', () => {
     assert.equal(
       assistantSoundsLikeTradeMenu(
-        'Sure — you can demo a call for a trade like an electrician, salon, or shop.',
+        'Sure — you can demo a call for a trade like an electrician, shop, or shop.',
       ),
       true,
     );
@@ -117,10 +117,10 @@ describe('speech_triggers', () => {
     assert.equal(callerAskedNewQuestion('No'), false);
   });
 
-  it('detects phone-booking pivot during consent', () => {
+  it('detects phone-link pivot during consent', () => {
     const pivot =
       "Um, yeah, actually, maybe. Um, is there any way you can get a team member to— can I book over the phone, actually?";
-    assert.equal(callerAskedPhoneOrHumanBooking(pivot), true);
+    assert.equal(callerAskedPhoneOrHumanHandoff(pivot), true);
     assert.equal(callerPivotedFromSmsConsent(pivot), true);
   });
 
@@ -156,19 +156,19 @@ describe('speech_triggers', () => {
   it('detects service intake questions', () => {
     assert.equal(
       assistantAskedServiceIntake(
-        'What type of appointment are you looking to book — hair, nails, lashes, or something else?',
+        'What type of callback are you looking to book — hair, nails, lashes, or something else?',
       ),
       true,
     );
     assert.equal(
       assistantAskedServiceIntake(
-        "I can text you our booking link to the number you're calling from — is that alright?",
+        "I can text you our link link to the number you're calling from — is that alright?",
       ),
       false,
     );
   });
 
-  it('detects social chitchat without booking intent', () => {
+  it('detects social chitchat without link intent', () => {
     assert.equal(callerSoundsLikeSocialChitchat('Hello, how are you keeping today?'), true);
     assert.equal(callerSoundsLikeSocialChitchat('You keeping?'), true);
     assert.equal(
@@ -188,7 +188,7 @@ describe('speech_triggers', () => {
     );
     assert.equal(callerSoundsLikeVagueDemoOpening("I'm good thanks"), true);
     assert.equal(
-      callerSoundsLikeVagueDemoOpening("Not too bad — I run a salon and I'm curious"),
+      callerSoundsLikeVagueDemoOpening("Not too bad — I run a shop and I'm curious"),
       false,
     );
   });

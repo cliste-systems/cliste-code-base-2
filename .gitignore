@@ -5,3 +5,5 @@ dist/
 .DS_Store
 call-transcripts/*.md
 !call-transcripts/README.md
+outputs/
+spikes/

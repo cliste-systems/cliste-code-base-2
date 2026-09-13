@@ -1,4 +1,4 @@
-/** Parse dashboard `organizations.business_hours` JSON and validate slots in salon local time. */
+/** Parse dashboard `organizations.business_hours` JSON for retail opening hours. */
 
 const WEEK_ORDER = [
   'monday',
@@ -223,77 +223,3 @@ export function minutesSinceMidnightInTimezone(d: Date, timeZone: string): numbe
   return h * 60 + m;
 }
 
-export type HoursCheck =
-  | { allowed: true; skipped: true }
-  | { allowed: true; skipped: false }
-  | { allowed: false; skipped: false; reason: string };
-
-/**
- * If schedule parses and includes this weekday, require the whole service fits inside open–close.
- */
-export function checkSlotAgainstBusinessHours(
-  start: Date,
-  durationMinutes: number,
-  raw: unknown,
-  timeZone: string,
-): HoursCheck {
-  const sched = parseBusinessHoursSchedule(raw);
-  if (!sched) {
-    return { allowed: true, skipped: true };
-  }
-  const day = weekdayKeyFromDate(start, timeZone);
-  if (!day || !sched.has(day)) {
-    return { allowed: true, skipped: true };
-  }
-  const row = sched.get(day)!;
-  if (row === 'closed') {
-    return {
-      allowed: false,
-      skipped: false,
-      reason: `Closed on ${day} (per salon opening hours).`,
-    };
-  }
-  const startM = minutesSinceMidnightInTimezone(start, timeZone);
-  const endM = startM + durationMinutes;
-  if (startM < row.openMin) {
-    return {
-      allowed: false,
-      skipped: false,
-      reason: `That time is before opening (${fmtMinutes(row.openMin)} local).`,
-    };
-  }
-  if (endM > row.closeMin) {
-    return {
-      allowed: false,
-      skipped: false,
-      reason: `That appointment would finish after closing (${fmtMinutes(row.closeMin)} local).`,
-    };
-  }
-  return { allowed: true, skipped: false };
-}
-
-export function formatBusinessHoursForPrompt(raw: unknown, timeZone: string): string {
-  const sched = parseBusinessHoursSchedule(raw);
-  if (!sched) {
-    return `Opening hours: **not set or not readable** in dashboard. Do **not** invent hours. If the caller asks, say you do not have opening times on this phone system and offer **createActionTicket** or a callback.`;
-  }
-  const lines: string[] = [];
-  for (const day of WEEK_ORDER) {
-    const row = sched.get(day);
-    if (row === 'closed') {
-      lines.push(`- ${day}: closed`);
-    } else if (row) {
-      lines.push(
-        `- ${day}: ${fmtMinutes(row.openMin)}–${fmtMinutes(row.closeMin)} (local wall time, timezone ${timeZone})`,
-      );
-    }
-  }
-  if (lines.length === 0) {
-    return `Opening hours: **not set or not readable** in dashboard. Do **not** invent hours.`;
-  }
-  return (
-    `Salon opening hours (from dashboard; interpret and speak times in **${timeZone}** local time):\n` +
-    `${lines.join('\n')}\n` +
-    `- Only offer and book **checkAvailability** slots that fall **fully inside** these hours for that weekday.`
-  );
-}

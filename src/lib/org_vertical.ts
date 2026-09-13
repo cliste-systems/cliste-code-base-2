@@ -14,8 +14,3 @@ export function orgVerticalLabel(input: {
   if (isRetailNiche(input.niche) || isRetailNiche(input.businessType)) return 'retail';
   return 'generic';
 }
-
-/** @deprecated Salon vertical not live — treat legacy salon niches as generic. */
-export function isSalonNiche(_niche: string | null | undefined): boolean {
-  return false;
-}

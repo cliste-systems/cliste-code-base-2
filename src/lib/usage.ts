@@ -112,8 +112,8 @@ export function currentBillingPeriodStart(
 }
 
 /**
- * Sum the salon's billable minutes inside the current billing period. Used
- * by the agent to decide whether to refuse a new call when the salon is
+ * Sum the org's billable minutes inside the current billing period. Used
+ * by the agent to decide whether to refuse a new call when the org is
  * already over their plan quota — the metering row alone tracks billing
  * but does NOT cap costs without this gate.
  *
@@ -124,7 +124,7 @@ export function currentBillingPeriodStart(
  * traffic if Supabase is having a moment).
  *
  * Open-row estimates are bounded so a single zombie row (worker crash,
- * SIGKILL, deploy mid-call) cannot lock the whole salon out of inbound
+ * SIGKILL, deploy mid-call) cannot lock the whole org out of inbound
  * calls. Anything we'd estimate above MAX_OPEN_MINUTES is treated as a
  * zombie and ignored — the real billable minutes are captured by the
  * call_logs / Twilio reconciliation cron.
@@ -190,7 +190,7 @@ export async function sumUsageMinutesThisPeriod(input: {
  * Best-effort sweep of open usage rows older than ZOMBIE_OPEN_AGE_MS.
  * Closes them out at started_at with minutes_billable=0 so they survive
  * for audit but don't poison the quota gate (which previously summed
- * `now - started_at` for any open row, locking out salons after a worker
+ * `now - started_at` for any open row, locking out orgs after a worker
  * crash). Safe to call from agent boot — runs once, fail-silent.
  */
 export async function reapZombieUsageRows(): Promise<void> {

@@ -67,7 +67,7 @@ async function main(): Promise<void> {
     const msg = await smsClient.messages.create({
       from: bloomFrom,
       to: testTo,
-      body: `Bloom Beauty Studio: https://www.fresha.com/a/bloom-beauty-studio-dublin`,
+      body: `Kavanaghs SuperValu: https://maps.example.com/kavanaghs-donegal`,
     });
     console.log('\nTest SMS sent:', { sid: msg.sid, from: msg.from, to: msg.to, status: msg.status });
   }

@@ -31,12 +31,12 @@ export function resolveCatalogSearchIntent(input: {
   return undefined;
 }
 
-/** Caller wants a rundown of synced meat offers, not one specific product. */
+/** Caller wants a rundown of synced offers, not one specific product. */
 export function inferWeeklyOffersListIntent(query: string): boolean {
   const trimmed = query.trim();
   if (!trimmed) return true;
   if (
-    /\bweekly offers\b|\bwhat (?:meat )?offers\b|\b(?:meat|butcher) offers\b|\bbest offer|\blist offers\b|\bany offers\b|\boffers (?:this week|do you have|you have|on)\b|\bsurprise me\b|\bhighlights\b|\bwhat'?s on offer\b|\bwhats on offer\b|\btell me (?:the|your) offers\b/i.test(
+    /\bweekly offers\b|\bwhat offers\b|\bwhat'?s on offer\b|\bwhats on offer\b|\bbest offer|\blist offers\b|\blist (?:five|5|\d+)\b|\bany offers\b|\boffers (?:this week|do you have|you have|on)\b|\bsurprise me\b|\bhighlights\b|\btell me (?:the|your) offers\b|\bapart from meat\b|\bnot meat\b|\bgrocery offers\b|\bwhat (?:meat )?offers\b|\b(?:meat|butcher) offers\b/i.test(
       trimmed,
     )
   ) {
@@ -50,11 +50,50 @@ export function inferWeeklyOffersListIntent(query: string): boolean {
   if (tokens.length === 0 && /\boffer/i.test(trimmed)) return true;
   if (
     tokens.length === 1 &&
-    /^(meat|butcher|deli|offers?|promos?)$/i.test(tokens[0] ?? '')
+    /^(meat|butcher|deli|offers?|promos?|grocery)$/i.test(tokens[0] ?? '')
   ) {
     return true;
   }
+  if (tokens.length >= 2 && inferWeeklyOffersBrowseCategories(trimmed).length >= 2) {
+    return true;
+  }
   return false;
+}
+
+export function inferWeeklyOffersBrowseCategories(query: string): string[] {
+  const trimmed = query.trim().toLowerCase();
+  const tokens = trimmed
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length > 1);
+  const categoryHints = new Set([
+    'milk',
+    'bread',
+    'crisps',
+    'chocolate',
+    'fruit',
+    'yogurt',
+    'cheese',
+    'butter',
+    'tea',
+    'coffee',
+    'biscuits',
+    'sweets',
+    'confectionery',
+    'drinks',
+    'household',
+    'frozen',
+  ]);
+  const fromTokens = tokens.filter((token) => categoryHints.has(token));
+  if (fromTokens.length >= 2) return fromTokens.slice(0, 5);
+  if (/confectionery|sweets|candy/.test(trimmed)) return ['chocolate', 'sweets'];
+  if (/\bapart from meat\b|\bnot meat\b|\bgrocery offers\b|\bnon[- ]meat\b/i.test(trimmed)) {
+    return ['chocolate', 'crisps', 'yogurt', 'bread', 'fruit'];
+  }
+  if (/\blist\b|\bfive\b|\b5\b|weekly offers|best deal|sample|highlights/i.test(trimmed)) {
+    return ['chocolate', 'crisps', 'yogurt', 'bread', 'fruit'];
+  }
+  return [];
 }
 
 export function trackCallerCatalogSearchIntent(
@@ -63,7 +102,7 @@ export function trackCallerCatalogSearchIntent(
 ): void {
   const t = text.toLowerCase();
   if (
-    /\b(on offer|this week|any offers?|special|promotion|promo|deal|reduced|is there an offer|are there offers|offer on|weekly offers|what meat offers|meat offers)\b/i.test(
+    /\b(on offer|this week|any offers?|special|promotion|promo|deal|reduced|is there an offer|are there offers|offer on|weekly offers|what offers|what meat offers|meat offers|list offers|apart from meat)\b/i.test(
       t,
     )
   ) {

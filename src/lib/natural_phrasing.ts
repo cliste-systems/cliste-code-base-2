@@ -170,7 +170,7 @@ export function buildDemoCallClosingLine(
     name ? `${seed}:${name}:${timePhrase}` : `${seed}:${timePhrase}`,
     DEMO_OUTRO_BUILDERS.length,
   );
-  return DEMO_OUTRO_BUILDERS[idx]!({ name, timePhrase });
+  return DEMO_OUTRO_BUILDERS[idx]!(name ? { name, timePhrase } : { timePhrase });
 }
 
 /** @internal exported for tests */

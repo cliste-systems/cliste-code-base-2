@@ -43,9 +43,10 @@ describe('catalog search intent', () => {
     assert.equal(inferCatalogSearchIntent('McVitie\'s'), 'stock');
   });
 
-  it('infers browse intent for weekly meat offers', () => {
-    assert.equal(inferWeeklyOffersListIntent('weekly meat offers'), true);
+  it('infers browse intent for weekly offers', () => {
+    assert.equal(inferWeeklyOffersListIntent('weekly offers'), true);
     assert.equal(inferWeeklyOffersListIntent('best offers'), true);
+    assert.equal(inferWeeklyOffersListIntent('list 5 offers apart from meat'), true);
     assert.equal(inferWeeklyOffersListIntent('steak'), false);
   });
 });

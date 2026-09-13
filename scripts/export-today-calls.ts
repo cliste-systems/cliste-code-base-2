@@ -10,7 +10,6 @@ import { join } from 'node:path';
 import { assessTranscriptCompleteness } from '../src/lib/transcript_completeness.js';
 import { mirrorCallTranscriptToWorkspace } from '../src/lib/call_transcript_mirror.js';
 import {
-  buildDiagnosticsForMirror,
   getSupabaseForTranscriptSync,
   rowToMirrorInput,
   type LatestCallRow,
@@ -55,14 +54,10 @@ async function main() {
   for (const row of rows) {
     const completeness = assessTranscriptCompleteness(row.transcript);
     const input = rowToMirrorInput(row);
-    const diagnostics = buildDiagnosticsForMirror(row, input, { fetchRailwayLogs: true });
-    const path = mirrorCallTranscriptToWorkspace(
-      { ...input, diagnostics },
-      {
+    const path = mirrorCallTranscriptToWorkspace(input, {
         partial: !completeness.complete,
         partialReasons: completeness.reasons,
-      },
-    );
+    });
     if (path) lastPath = path;
   }
 

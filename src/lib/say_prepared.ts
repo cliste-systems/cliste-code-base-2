@@ -5,13 +5,13 @@ import { prepareHardcodedSpeechForTts, type PrepareHardcodedSpeechOptions } from
 
 /** Programmatic speech through the same TTS prep path as LLM output. */
 export function sayPrepared(
-  session: voice.AgentSession<unknown>,
+  session: voice.AgentSession<CaraAgentUserData>,
   text: string,
   options?: PrepareHardcodedSpeechOptions & {
     allowInterruptions?: boolean;
     addToChatCtx?: boolean;
   },
-): ReturnType<voice.AgentSession<unknown>['say']> {
+): ReturnType<voice.AgentSession<CaraAgentUserData>['say']> {
   const { greeting, greetingCommaFlow, greetingRetailOpening, ttsModel, allowInterruptions, addToChatCtx } =
     options ?? {};
   const prepOptions: PrepareHardcodedSpeechOptions = {};

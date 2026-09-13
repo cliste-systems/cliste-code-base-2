@@ -75,7 +75,7 @@ Golden suite locks demo prompt content (LLM-owned opening arc, playbooks, endPho
 4. Complete mini demo or short role-play
 5. Wrap + close as above
 
-**Fail if:** forced electrician/salon without caller choosing trade
+**Fail if:** forced electrician/shop without caller choosing trade
 
 ## Path 3 — Explore / audio check
 

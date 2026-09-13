@@ -3,22 +3,16 @@
  * enforces before starting Cara (VOICE-WORKER-CONTRACT Blocklist gate).
  */
 import type { JobContext } from '@livekit/agents';
-import { voice } from '@livekit/agents';
-import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
+import { inference, voice } from '@livekit/agents';
 import * as silero from '@livekit/agents-plugin-silero';
 import type { RemoteParticipant } from '@livekit/rtc-node';
 import { RoomServiceClient } from 'livekit-server-sdk';
 
-import { createElevenLabsTts } from './elevenlabs-v3-http-tts.js';
+import { CARTESIA_SIOBHAN_VOICE_ID } from './tts_config.js';
 import { prepareHardcodedSpeechForTts } from './tts_text_sanitize.js';
 import { maskPhone } from './gdpr.js';
 import { classifyCallerLine } from './phone_classify.js';
-import {
-  getSupabaseClient,
-  isOfflinePlayground,
-  resolveOrgVoiceId,
-  type OrgCallConfig,
-} from './supabase.js';
+import { getSupabaseClient, isOfflinePlayground } from './supabase.js';
 import { postCallComplete } from './voice_api.js';
 
 export const ANONYMOUS_CALLER_E164 = '+anonymous';
@@ -107,16 +101,6 @@ export async function checkCallerBlocklist(input: {
   return data?.id ? 'blocked' : 'allowed';
 }
 
-/** @deprecated Use checkCallerBlocklist */
-export async function isCallerBlocked(input: {
-  organizationId: string;
-  callerE164: string;
-  blockAnonymous: boolean;
-}): Promise<boolean> {
-  const result = await checkCallerBlocklist(input);
-  return result !== 'allowed';
-}
-
 function waitForSpeechPlayout(handle: {
   done(): boolean;
   addDoneCallback: (cb: (sh: unknown) => void) => void;
@@ -163,34 +147,13 @@ export function stableCallSidFallback(
   return roomName.trim() || null;
 }
 
-function createBlockRejectTts(org: OrgCallConfig) {
-  const elevenApiKey =
-    process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
-  if (!elevenApiKey) {
-    return null;
-  }
-  const voiceId =
-    resolveOrgVoiceId(org) ||
-    process.env.ELEVEN_VOICE_ID?.trim() ||
-    'C92s6vssSLlabgIln1iY';
-  const model = process.env.ELEVEN_TTS_MODEL?.trim() || 'eleven_flash_v2_5';
-  const encoding = process.env.ELEVEN_TTS_ENCODING?.trim() || 'pcm_24000';
-  const baseURL =
-    process.env.ELEVENLABS_BASE_URL?.trim() || 'https://api.elevenlabs.io/v1';
-
-  return createElevenLabsTts({
-    apiKey: elevenApiKey,
-    voiceId,
+function createBlockRejectTts() {
+  const model = process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3.6';
+  const voiceId = process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() || CARTESIA_SIOBHAN_VOICE_ID;
+  return new inference.TTS({
     model,
-    encoding: encoding as elevenlabs.TTSEncoding,
-    baseURL,
-    streamingLatency: 0,
-    voiceSettings: {
-      stability: 0.5,
-      similarity_boost: 0.75,
-      style: 0.35,
-      use_speaker_boost: true,
-    },
+    voice: voiceId,
+    language: process.env.LIVEKIT_INFERENCE_TTS_LANGUAGE?.trim() || 'en',
   });
 }
 
@@ -198,7 +161,7 @@ function createBlockRejectTts(org: OrgCallConfig) {
 export async function rejectBlockedCaller(input: {
   ctx: JobContext;
   participant: RemoteParticipant;
-  org: OrgCallConfig;
+  org: { id: string; name: string; phone_number?: string | null };
   callerNumberRaw: string;
   callerE164: string;
   calledNumber: string;
@@ -208,7 +171,7 @@ export async function rejectBlockedCaller(input: {
   const callerIdentity = (input.participant.identity ?? '').trim();
   const callSid = stableCallSidFallback(input.participant, roomName);
 
-  const tts = createBlockRejectTts(input.org);
+  const tts = createBlockRejectTts();
   const vad = input.ctx.proc.userData.vad;
   const spokenMessage = blockedCallSpokenMessage(input.org.name);
 

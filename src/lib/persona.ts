@@ -88,7 +88,6 @@ export function resolveTimeOfDay(localHour?: number): string {
 export function personaVarietyEnabled(): boolean {
   const raw =
     process.env.CARA_PERSONA_VARIETY?.trim() ||
-    process.env.SALON_PERSONA_VARIETY?.trim() ||
     'on';
   const v = raw.toLowerCase();
   return !(['off', 'false', '0', 'no'].includes(v));
@@ -103,7 +102,7 @@ function pickBankIndex(seed: string, bankPrefix: string, bankSize: number): numb
 function interpolateGreeting(template: string, businessName: string, timeOfDay: string): string {
   return template
     .replace(/\{business\}/g, businessName)
-    .replace(/\{salon\}/g, businessName)
+    .replace(/\{business\}/g, businessName)
     .replace(/\{timeOfDay\}/g, timeOfDay);
 }
 
@@ -153,11 +152,23 @@ export function measurePersonaSpread(sampleCount: number): {
       localHour: i % 24,
     });
     variants.add(p.variant);
-    const [m, g, a, s] = p.variant.split('-').map((x) => Number.parseInt(x, 10));
-    if (Number.isFinite(m) && m >= 0 && m < bankCounts.manner.length) bankCounts.manner[m]! += 1;
-    if (Number.isFinite(g) && g >= 0 && g < bankCounts.greeting.length) bankCounts.greeting[g]! += 1;
-    if (Number.isFinite(a) && a >= 0 && a < bankCounts.ack.length) bankCounts.ack[a]! += 1;
-    if (Number.isFinite(s) && s >= 0 && s < bankCounts.signoff.length) bankCounts.signoff[s]! += 1;
+    const parts = p.variant.split('-').map((x) => Number.parseInt(x, 10));
+    const m = parts[0];
+    const g = parts[1];
+    const a = parts[2];
+    const s = parts[3];
+    if (m !== undefined && Number.isFinite(m) && m >= 0 && m < bankCounts.manner.length) {
+      bankCounts.manner[m]! += 1;
+    }
+    if (g !== undefined && Number.isFinite(g) && g >= 0 && g < bankCounts.greeting.length) {
+      bankCounts.greeting[g]! += 1;
+    }
+    if (a !== undefined && Number.isFinite(a) && a >= 0 && a < bankCounts.ack.length) {
+      bankCounts.ack[a]! += 1;
+    }
+    if (s !== undefined && Number.isFinite(s) && s >= 0 && s < bankCounts.signoff.length) {
+      bankCounts.signoff[s]! += 1;
+    }
   }
 
   return { distinctVariants: variants.size, bankCounts };

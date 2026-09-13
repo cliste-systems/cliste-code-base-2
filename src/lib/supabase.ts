@@ -24,7 +24,7 @@ function ensureNodeWebSocket(): void {
 
 const ORG_CACHE_TTL_MS = Number.parseInt(
   process.env.CLISTE_ORG_CACHE_TTL_MS ??
-    process.env.CLISTE_SALON_CACHE_TTL_MS ??
+    process.env.CLISTE_ORG_CACHE_TTL_MS ??
     '30000',
   10,
 );
@@ -46,7 +46,6 @@ export function playgroundOrg(): OrgCallConfig {
     name: process.env.CARA_TRANSCRIPT_ORG_NAME?.trim() || "Murphy's SuperValu Killarney",
     slug:
       process.env.DEFAULT_ORG_SLUG?.trim() ||
-      process.env.DEFAULT_SALON_SLUG?.trim() ||
       'playground',
     niche: 'retail',
     tier: 'starter',
@@ -57,7 +56,7 @@ export function playgroundOrg(): OrgCallConfig {
     custom_prompt: null,
     greeting: null,
     assistant_display_name: 'Cara',
-    agent_voice_id: process.env.ELEVEN_VOICE_ID?.trim() || null,
+    agent_voice_id: process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() || null,
     agent_business_type: 'retail',
     agent_opening_hours: null,
     routing_links: null,
@@ -65,7 +64,6 @@ export function playgroundOrg(): OrgCallConfig {
     call_routing_mode: null,
     phone_number:
       process.env.DEFAULT_ORG_PHONE?.trim() ||
-      process.env.DEFAULT_SALON_PHONE?.trim() ||
       null,
     plan_tier: null,
     billing_period_start: null,
@@ -386,12 +384,12 @@ export function resolveOrgTimeZone(org: OrgCallConfig): string {
       return tz.trim();
     }
   }
-  return process.env.ORG_TIMEZONE?.trim() || process.env.SALON_TIMEZONE?.trim() || 'Europe/Dublin';
+  return process.env.ORG_TIMEZONE?.trim() || 'Europe/Dublin';
 }
 
 export function resolveOrgVoiceId(org: OrgCallConfig): string | null {
   const id = org.agent_voice_id?.trim();
   if (id) return id;
-  const envId = process.env.ELEVEN_VOICE_ID?.trim();
+  const envId = process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim();
   return envId || null;
 }

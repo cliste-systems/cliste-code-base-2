@@ -31,7 +31,7 @@ export const DEFAULT_DEMO_SCENARIOS: DemoScenario[] = [
         label: 'Ack + value',
         guidance: 'Acknowledge electrician trade in one warm line — answer calls, take messages, text reminders. No prices or hours.',
         suggestedLine:
-          'Lovely — for an electrician I\'d answer every call, take clear messages, and text appointment reminders — want to try a quick example?',
+          'Lovely — for an electrician I\'d answer every call, take clear messages, and text follow-up reminders — want to try a quick example?',
       },
       {
         label: 'Invite role-play',
@@ -55,37 +55,6 @@ export const DEFAULT_DEMO_SCENARIOS: DemoScenario[] = [
     ],
   },
   {
-    slug: 'salon',
-    label: 'Salon / beauty',
-    triggerKeywords: ['salon', 'hair', 'beauty', 'blow-dry', 'blow dry', 'nails', 'barber'],
-    beats: [
-      {
-        label: 'Ack + value',
-        guidance: 'Acknowledge salon — no real booking on this demo line. One line on calls, messages, booking links in production.',
-        suggestedLine:
-          'Yeah — for a salon I\'d handle calls, take messages, and text booking links on your real line — fancy a quick role-play?',
-      },
-      {
-        label: 'Invite role-play',
-        guidance: 'Invite customer role-play — ask for a blow-dry or appointment this Saturday.',
-        suggestedLine:
-          'Go for it — ask me for a blow-dry this Saturday like a customer would, and I\'ll respond as the salon assistant.',
-      },
-      {
-        label: 'In-role reply',
-        guidance: 'In role — explain you would check availability or send a booking link on their real line. Speech only, no tools.',
-        suggestedLine:
-          'I\'d check availability for Saturday and text you a booking link on the salon\'s real line — shall I note your preferred time?',
-      },
-      {
-        label: 'Wrap demo beat',
-        guidance: 'Step out of role-play. Offer another example or close.',
-        suggestedLine:
-          'That\'s the idea on a live salon line — another example or are you happy enough?',
-      },
-    ],
-  },
-  {
     slug: 'mechanic',
     label: 'Mechanic / garage',
     triggerKeywords: ['mechanic', 'garage', 'mot', 'nct', 'service', 'car repair', 'tyre'],
@@ -98,7 +67,7 @@ export const DEFAULT_DEMO_SCENARIOS: DemoScenario[] = [
       },
       {
         label: 'Invite role-play',
-        guidance: 'Invite customer role-play — NCT prep or service booking this week.',
+        guidance: 'Invite customer role-play — NCT prep or service enquiry this week.',
         suggestedLine:
           'Lovely — pretend you\'re asking if we do NCT prep this week, and I\'ll answer like the garage assistant.',
       },

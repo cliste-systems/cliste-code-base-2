@@ -378,6 +378,7 @@ export type SearchSupervaluProductsMatch = {
   sku: string | null;
   score: number;
   quote_text: string;
+  is_on_offer?: boolean;
 };
 
 export async function postSearchSupervaluProducts(
@@ -385,6 +386,7 @@ export async function postSearchSupervaluProducts(
 ): Promise<{
   ok: boolean;
   matches: SearchSupervaluProductsMatch[];
+  browseCategories?: string[] | null;
   noMatchQuote?: string | null;
   error?: string;
 }> {
@@ -396,6 +398,7 @@ export async function postSearchSupervaluProducts(
     const { res, body } = await postVoiceWebhook<{
       ok?: boolean;
       matches?: SearchSupervaluProductsMatch[];
+      browse_categories?: string[] | null;
       no_match_quote?: string | null;
       error?: string;
     }>('/api/voice/search-supervalu-products', payload);
@@ -411,6 +414,7 @@ export async function postSearchSupervaluProducts(
     return {
       ok: true,
       matches: Array.isArray(body.matches) ? body.matches : [],
+      browseCategories: body.browse_categories ?? null,
       noMatchQuote: body.no_match_quote ?? null,
     };
   } catch (err) {

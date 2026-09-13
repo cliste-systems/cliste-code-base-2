@@ -32,9 +32,8 @@ describe('demo_scenarios', () => {
 
   it('embeds all five playbooks for prompt injection', () => {
     const block = formatDemoScenariosForPrompt();
-    for (const slug of ['electrician', 'salon', 'mechanic', 'retail', 'general']) {
+    for (const slug of ['electrician', 'mechanic', 'retail', 'general']) {
       assert.match(block, new RegExp(`\`${slug}\``));
     }
-    assert.equal(getDemoScenarioBySlug('salon', DEFAULT_DEMO_SCENARIOS)?.beats.length, 4);
   });
 });

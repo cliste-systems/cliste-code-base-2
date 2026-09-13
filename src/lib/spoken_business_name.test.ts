@@ -28,10 +28,10 @@ describe('resolveSpokenBusinessName', () => {
   it('strips configured base town suffix', () => {
     assert.equal(
       resolveSpokenBusinessName({
-        name: 'Bloom Beauty Studio Letterkenny',
+        name: 'Kavanaghs SuperValu Letterkenny',
         agentBaseTown: 'Letterkenny',
       }),
-      'Bloom Beauty Studio',
+      'Kavanaghs SuperValu',
     );
   });
 

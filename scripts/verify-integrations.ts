@@ -1,12 +1,12 @@
 /**
- * Smoke-test LiveKit, Supabase, voice webhooks, and ElevenLabs TTS (required).
+ * Smoke-test LiveKit, Supabase, voice webhooks, and Cartesia TTS config.
  * Run: npm run verify
  */
 import 'dotenv/config';
 
 import { createClient } from '@supabase/supabase-js';
 import { RoomServiceClient } from 'livekit-server-sdk';
-import { isElevenV3Model } from '../src/lib/elevenlabs-v3-http-tts.js';
+import { resolveTtsConfig } from '../src/lib/tts_config.js';
 import { twilioSmsConfigured } from '../src/lib/twilio_sms.js';
 import { ie1SmsConfigured } from '../src/lib/twilio_ie_messaging.js';
 import { voiceWebhooksConfigured } from '../src/lib/voice_api.js';
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
       console.log('✓ Twilio IE1: regional credentials set (Irish +353 SMS from org DID)');
     } else {
       failures.push(
-        'TWILIO_IE1_AUTH_TOKEN (or TWILIO_IE1_API_KEY/SECRET) missing — Irish booking SMS will fail until IE1 credentials are set in Twilio Console',
+        'TWILIO_IE1_AUTH_TOKEN (or TWILIO_IE1_API_KEY/SECRET) missing — Irish caller SMS will fail until IE1 credentials are set in Twilio Console',
       );
       console.error(
         '✗ Twilio IE1 credentials missing — caller-facing SMS from +353 numbers requires IE1 auth',
@@ -118,77 +118,18 @@ async function main(): Promise<void> {
   }
 
   try {
-    const apiKey =
-      process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim();
-    if (!apiKey) {
-      throw new Error('ELEVENLABS_API_KEY or ELEVEN_API_KEY missing (ElevenLabs-only TTS)');
+    const tts = resolveTtsConfig({ testProfile: null, orgVoiceId: null });
+    if (!tts.model.startsWith('cartesia/')) {
+      throw new Error(`Expected cartesia inference model, got ${tts.model}`);
     }
-    const res = await fetch('https://api.elevenlabs.io/v1/voices?page_size=1', {
-      headers: { 'xi-api-key': apiKey },
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(`${res.status} ${t.slice(0, 200)}`);
+    if (!tts.voiceId) {
+      throw new Error('Cartesia voice id missing');
     }
-    const model = process.env.ELEVEN_TTS_MODEL?.trim() || 'eleven_flash_v2_5';
-    const voice = process.env.ELEVEN_VOICE_ID?.trim() || 'C92s6vssSLlabgIln1iY';
-    const encoding = process.env.ELEVEN_TTS_ENCODING?.trim() || 'pcm_24000';
-    const baseUrl =
-      (process.env.ELEVENLABS_BASE_URL?.trim() || 'https://api.elevenlabs.io/v1').replace(
-        /\/$/,
-        '',
-      );
-
-    if (isElevenV3Model(model)) {
-      const streamUrl =
-        `${baseUrl}/text-to-speech/${voice}/stream` +
-        `?model_id=${encodeURIComponent(model)}` +
-        `&output_format=${encodeURIComponent(encoding)}`;
-      const streamRes = await fetch(streamUrl, {
-        method: 'POST',
-        headers: {
-          'xi-api-key': apiKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text: 'Hello', model_id: model }),
-      });
-      if (!streamRes.ok) {
-        const t = await streamRes.text();
-        throw new Error(`v3 HTTP stream ${streamRes.status}: ${t.slice(0, 200)}`);
-      }
-      console.log(`✓ ElevenLabs: v3 HTTP stream OK (${model}, ${encoding})`);
-    } else {
-      const wsUrl =
-        `wss://api.elevenlabs.io/v1/text-to-speech/${voice}/multi-stream-input` +
-        `?model_id=${encodeURIComponent(model)}&output_format=${encodeURIComponent(encoding)}` +
-        '&enable_ssml_parsing=false&enable_logging=true&inactivity_timeout=60&apply_text_normalization=auto';
-      const ws = await import('ws').then((m) => m.default);
-      await new Promise<void>((resolve, reject) => {
-        const socket = new ws(wsUrl, { headers: { 'xi-api-key': apiKey } });
-        const timer = setTimeout(() => {
-          socket.terminate();
-          reject(new Error(`WebSocket open timed out (${model})`));
-        }, 8000);
-        socket.once('open', () => {
-          clearTimeout(timer);
-          socket.close();
-          resolve();
-        });
-        socket.once('unexpected-response', (_req: unknown, res: { statusCode?: number }) => {
-          clearTimeout(timer);
-          reject(new Error(`WebSocket rejected model ${model}: HTTP ${res.statusCode}`));
-        });
-        socket.once('error', (err: Error) => {
-          clearTimeout(timer);
-          reject(err);
-        });
-      });
-      console.log(`✓ ElevenLabs: WebSocket OK (${model}, ${encoding})`);
-    }
+    console.log(`✓ TTS: LiveKit Inference Cartesia (${tts.label})`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    failures.push(`ElevenLabs: ${msg}`);
-    console.error('✗ ElevenLabs:', msg);
+    failures.push(`TTS: ${msg}`);
+    console.error('✗ TTS:', msg);
   }
 
   if (failures.length > 0) {

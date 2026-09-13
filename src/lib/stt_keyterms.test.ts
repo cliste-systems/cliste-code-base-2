@@ -38,39 +38,28 @@ When someone asks how long a service takes`;
     const p = buildSttDomainPrompt("Murphy's SuperValu Killarney", { niche: 'retail' });
     assert.match(p, /retail grocery store/i);
     assert.match(p, /are ye open/i);
-    assert.doesNotMatch(p, /salon/i);
+    assert.doesNotMatch(p, /shop/i);
   });
 
-  it('uses prompt for u3-rt-pro and keyterms for universal-streaming', () => {
+  it('uses keyterms for universal-3-5-pro', () => {
     const keyterms = ['deli', 'butcher'];
     const domain = 'Retail store calls.';
-    const u3 = buildAssemblyAiSttOptions({
-      model: 'assemblyai/u3-rt-pro',
+    const u35 = buildAssemblyAiSttOptions({
+      model: 'assemblyai/universal-3-5-pro',
       keyterms,
       domainPrompt: domain,
       minTurnSilenceMs: 300,
       maxTurnSilenceMs: 1400,
       eotConfidence: 0.4,
     });
-    assert.equal(u3.prompt, domain);
-    assert.equal(u3.keyterms_prompt, undefined);
-
-    const legacy = buildAssemblyAiSttOptions({
-      model: 'assemblyai/universal-streaming',
-      keyterms,
-      domainPrompt: domain,
-      minTurnSilenceMs: 300,
-      maxTurnSilenceMs: 1400,
-      eotConfidence: 0.4,
-    });
-    assert.deepEqual(legacy.keyterms_prompt, keyterms);
-    assert.equal(legacy.prompt, undefined);
+    assert.deepEqual(u35.keyterms_prompt, keyterms);
+    assert.equal(u35.prompt, undefined);
   });
 
-  it('u3-rt-pro uses LiveKit turn-detector silence tuning', () => {
-    assert.deepEqual(assemblyAiTurnSilenceDefaults('assemblyai/u3-rt-pro', 'snappy'), {
-      minTurnSilenceMs: 100,
-      maxTurnSilenceMs: 100,
+  it('universal-3-5-pro uses snappy silence defaults', () => {
+    assert.deepEqual(assemblyAiTurnSilenceDefaults('assemblyai/universal-3-5-pro', 'snappy'), {
+      minTurnSilenceMs: 200,
+      maxTurnSilenceMs: 1000,
       eotConfidence: 0.35,
     });
   });

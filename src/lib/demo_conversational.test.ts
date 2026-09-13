@@ -16,7 +16,7 @@ const baseInput = {
     hint: 'Caller ID on file.',
   },
   routingLinks: [],
-  bookingTimeZone: 'Europe/Dublin',
+  orgTimeZone: 'Europe/Dublin',
   nowUtcIso: '2026-06-20T12:00:00.000Z',
   todayLocal: '2026-06-20',
 };

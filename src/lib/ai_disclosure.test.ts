@@ -35,15 +35,15 @@ describe('resolveAiDisclosure', () => {
     assert.equal(result.text, '');
   });
 
-  it('never uses salon or booking disclosure copy', () => {
+  it('never uses shop or link disclosure copy', () => {
     const prev = process.env.CLISTE_AI_DISCLOSURE_OPENING;
     process.env.CLISTE_AI_DISCLOSURE_OPENING = 'on';
     try {
       const result = resolveAiDisclosure({ greetingText: 'Hello, how can I help?' });
       assert.equal(result.disabled, false);
       assert.match(result.text, /store/i);
-      assert.doesNotMatch(result.text, /salon/i);
-      assert.doesNotMatch(result.text, /booking/i);
+      assert.doesNotMatch(result.text, /shop/i);
+      assert.doesNotMatch(result.text, /link/i);
     } finally {
       if (prev === undefined) delete process.env.CLISTE_AI_DISCLOSURE_OPENING;
       else process.env.CLISTE_AI_DISCLOSURE_OPENING = prev;

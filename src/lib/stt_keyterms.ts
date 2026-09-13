@@ -1,6 +1,6 @@
 import { isRetailNiche } from './org_vertical.js';
 
-/** STT vocabulary for phone calls — keyterms + u3-rt-pro domain prompt. */
+/** STT vocabulary for phone calls — keyterms + domain prompt. */
 
 const MAX_KEYTERM_LEN = 50;
 const DEFAULT_KEYTERM_CAP = 400;
@@ -140,14 +140,6 @@ export function buildSttDomainPrompt(
   );
 }
 
-export function isU3RtProSttModel(model: string): boolean {
-  return model.toLowerCase().includes('u3-rt-pro');
-}
-
-export function isUniversal35ProSttModel(model: string): boolean {
-  return model.toLowerCase().includes('universal-3-5-pro');
-}
-
 export function isAssemblyAiSttModel(model: string): boolean {
   return model.toLowerCase().includes('assemblyai');
 }
@@ -177,14 +169,10 @@ export function sttTurnSilenceDefaults(profile: SttLatencyProfile): SttTurnSilen
   return { minTurnSilenceMs: 200, maxTurnSilenceMs: 1000, eotConfidence: 0.35 };
 }
 
-/** u3-rt-pro with LiveKit turn detector — AssemblyAI recommends 100/100ms, not STT-owned EOT. */
 export function assemblyAiTurnSilenceDefaults(
-  model: string,
+  _model: string,
   profile: SttLatencyProfile,
 ): SttTurnSilenceTuning {
-  if (isU3RtProSttModel(model)) {
-    return { minTurnSilenceMs: 100, maxTurnSilenceMs: 100, eotConfidence: 0.35 };
-  }
   return sttTurnSilenceDefaults(profile);
 }
 
@@ -226,10 +214,6 @@ export function buildAssemblyAiSttOptions(input: {
     end_of_turn_confidence_threshold: input.eotConfidence,
     format_turns: true,
   };
-
-  if (isU3RtProSttModel(input.model)) {
-    return { ...base, prompt: input.domainPrompt };
-  }
 
   if (input.keyterms.length > 0) {
     return { ...base, keyterms_prompt: input.keyterms };

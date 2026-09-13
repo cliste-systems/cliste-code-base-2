@@ -33,7 +33,7 @@ describe('demo_close', () => {
       true,
     );
     assert.equal(
-      shouldArmDemoCloseFromCallerText('I have a salon', {}, { interim: true }),
+      shouldArmDemoCloseFromCallerText('I have a shop', {}, { interim: true }),
       false,
     );
   });
