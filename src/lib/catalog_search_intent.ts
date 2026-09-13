@@ -31,13 +31,39 @@ export function resolveCatalogSearchIntent(input: {
   return undefined;
 }
 
+/** Caller wants a rundown of synced meat offers, not one specific product. */
+export function inferWeeklyOffersListIntent(query: string): boolean {
+  const trimmed = query.trim();
+  if (!trimmed) return true;
+  if (
+    /\bweekly offers\b|\bwhat (?:meat )?offers\b|\b(?:meat|butcher) offers\b|\bbest offer|\blist offers\b|\bany offers\b|\boffers (?:this week|do you have|you have|on)\b|\bsurprise me\b|\bhighlights\b|\bwhat'?s on offer\b|\bwhats on offer\b|\btell me (?:the|your) offers\b/i.test(
+      trimmed,
+    )
+  ) {
+    return true;
+  }
+  const tokens = trimmed
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length > 1);
+  if (tokens.length === 0 && /\boffer/i.test(trimmed)) return true;
+  if (
+    tokens.length === 1 &&
+    /^(meat|butcher|deli|offers?|promos?)$/i.test(tokens[0] ?? '')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function trackCallerCatalogSearchIntent(
   text: string,
   flags: { callerAskedAboutOffers?: boolean },
 ): void {
   const t = text.toLowerCase();
   if (
-    /\b(on offer|this week|any offers?|special|promotion|promo|deal|reduced|is there an offer|are there offers|offer on)\b/i.test(
+    /\b(on offer|this week|any offers?|special|promotion|promo|deal|reduced|is there an offer|are there offers|offer on|weekly offers|what meat offers|meat offers)\b/i.test(
       t,
     )
   ) {

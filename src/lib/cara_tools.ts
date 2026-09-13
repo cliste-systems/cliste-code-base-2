@@ -30,6 +30,7 @@ import {
   staffSummaryLooksLikeSpeechOnlyQuestion,
 } from './conversational_retail_policy.js';
 import {
+  inferWeeklyOffersListIntent,
   resolveCatalogSearchIntent,
   type CatalogSearchIntent,
 } from './catalog_search_intent.js';
@@ -787,13 +788,15 @@ export class CaraTools {
 
   readonly searchWeeklyOffers = llm.tool({
     description:
-      'Look up synced **meat** weekly promotions (butcher counter or pre-pack meat aisle). Use for steak, chicken, rashers, sausages, butcher specials — NOT for grocery (cereal, Weetabix, mayo, crisps). For grocery use searchSuperValuProducts. Quote only what this tool returns.',
+      'Look up synced **meat** weekly promotions (pre-pack rashers, sausages, pudding — not grocery). Use for specific products (steak, ham, rashers) OR when caller asks what meat offers you have / weekly offers / surprise me with the best — use query "weekly meat offers" or "meat offers this week" to list synced promos. Quote only what this tool returns.',
     parameters: z.object({
       query: z
         .string()
         .min(2)
         .max(120)
-        .describe('Product to search — e.g. "striploin steak" or "chicken fillets"'),
+        .describe(
+          'Product or browse — e.g. "striploin steak", "rashers", or "weekly meat offers" when listing all synced meat promos',
+        ),
     }),
     execute: async ({ query }, { ctx }) => {
       const ud = readCaraUserData(ctx);
@@ -830,7 +833,18 @@ export class CaraTools {
               ? 'prepack'
               : undefined,
       };
-      const result = await postSearchWeeklyOffers(payload);
+      let result = await postSearchWeeklyOffers(payload);
+
+      if (
+        result.ok &&
+        result.matches.length === 0 &&
+        !inferWeeklyOffersListIntent(trimmed)
+      ) {
+        result = await postSearchWeeklyOffers({
+          ...payload,
+          query: 'weekly meat offers',
+        });
+      }
 
       if (!result.ok) {
         return {
@@ -846,7 +860,9 @@ export class CaraTools {
           ? 'No butcher counter offer found in this week\'s sync — do not quote pre-pack meat aisle deals. Offer the butcher team to confirm counter specials like multi-buy deals.'
           : payload.channel === 'prepack'
             ? 'No matching pre-pack offer found in this week\'s sync.'
-            : 'No matching offer found in this week\'s sync.';
+            : inferWeeklyOffersListIntent(trimmed)
+              ? 'No meat offers are synced this week.'
+              : `No matching offer found for "${trimmed}" in this week's sync. If they asked generally what meat offers you have, retry with query "weekly meat offers".`;
         return {
           ok: true,
           message: `${channelHint} Do not invent a price — offer the butcher or take a message.`,

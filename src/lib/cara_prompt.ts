@@ -276,7 +276,7 @@ ${routesBlock}
 
 **Stock / range / grocery price questions** — use **searchSuperValuProducts**. If the caller asks **on offer / this week / special**, quote only what the tool says about offer status — "on offer at X, was Y" or "not showing as on offer". If they ask **how much / price**, quote the spoken price and whether it's on offer or regular. Never quote a regular price as if it were an offer.
 
-**Meat offer / butcher price questions** — use **searchWeeklyOffers** for meat/butcher weekly promos only (not grocery). Quote offer price, was price, and multi-buy labels exactly as spoken in the tool result — e.g. "three for ten euro", "was six euro". If nothing matches, offer the butcher or capture details in speech — never invent a price.
+**Meat offer / butcher price questions** — use **searchWeeklyOffers**. For a **specific product** (steak, ham, rashers), search that name. When they ask **what meat offers you have / weekly offers / surprise me**, use query **"weekly meat offers"** to list synced promos. Quote offer prices in spoken words exactly as returned.
 
 ## This call
 - Today: ${input.todayLocal} (${input.orgTimeZone}) | UTC: ${input.nowUtcIso}

@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   inferCatalogSearchIntent,
+  inferWeeklyOffersListIntent,
   resolveCatalogSearchIntent,
   trackCallerCatalogSearchIntent,
 } from './catalog_search_intent.js';
@@ -40,5 +41,11 @@ describe('catalog search intent', () => {
   it('infers offer intent from query text', () => {
     assert.equal(inferCatalogSearchIntent('McVitie\'s on offer'), 'offer');
     assert.equal(inferCatalogSearchIntent('McVitie\'s'), 'stock');
+  });
+
+  it('infers browse intent for weekly meat offers', () => {
+    assert.equal(inferWeeklyOffersListIntent('weekly meat offers'), true);
+    assert.equal(inferWeeklyOffersListIntent('best offers'), true);
+    assert.equal(inferWeeklyOffersListIntent('steak'), false);
   });
 });
