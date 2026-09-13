@@ -84,6 +84,8 @@ export type CaraSessionFlags = {
   pendingCallbackSummary?: string | null;
   /** Caller recently asked about weekly offers — steer catalog lookup to promo items. */
   callerAskedAboutOffers?: boolean;
+  /** One-time alcohol age reminder already given this call. */
+  alcoholAgeDisclaimerGiven?: boolean;
 };
 
 export type CaraAgentUserData = {
@@ -109,6 +111,9 @@ export type CaraAgentUserData = {
   /** Per-call conversational persona — production calls only. */
   callPersona?: CallPersona;
 };
+
+export const CARA_ALCOHOL_AGE_DISCLAIMER_ONCE =
+  'One-time reminder for this call: alcohol is age-restricted — you must be eighteen or over.';
 
 function readCaraUserData(ctx: { userData: unknown }): CaraAgentUserData {
   const ud = ctx.userData as CaraAgentUserData;
@@ -890,9 +895,16 @@ export class CaraTools {
         .map((match) => match.quote_text.trim())
         .join('\n\n');
 
+      const hasAlcohol = result.matches.some((match) => match.is_alcohol === true);
+      let alcoholNote = '';
+      if (hasAlcohol && !ud.sessionFlags.alcoholAgeDisclaimerGiven) {
+        ud.sessionFlags.alcoholAgeDisclaimerGiven = true;
+        alcoholNote = `\n\n${CARA_ALCOHOL_AGE_DISCLAIMER_ONCE}`;
+      }
+
       return {
         ok: true,
-        message: `Use only these synced offer quotes — speak prices in natural Irish words exactly as given (e.g. four euro, three for ten euro, was six euro):\n\n${formatted}`,
+        message: `Use only these synced offer quotes — speak prices in natural Irish words exactly as given (e.g. four euro, three for ten euro, was six euro). Do not mention payment on the phone.${alcoholNote ? ' Include the one-time age reminder once in your reply.' : ''}\n\n${formatted}${alcoholNote}`,
         matches: result.matches,
       };
     },
