@@ -369,6 +369,7 @@ export async function postSearchWeeklyOffers(
 export type SearchSupervaluProductsPayload = {
   called_number: string;
   query: string;
+  intent?: 'offer' | 'price' | 'stock';
 };
 
 export type SearchSupervaluProductsMatch = {

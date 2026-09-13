@@ -29,7 +29,10 @@ import {
   isPlaceholderCallerName,
   staffSummaryLooksLikeSpeechOnlyQuestion,
 } from './conversational_retail_policy.js';
-import { disconnectCallerLeg, type EndCallUserData } from './end_call.js';
+import {
+  resolveCatalogSearchIntent,
+  type CatalogSearchIntent,
+} from './catalog_search_intent.js';
 import { normalizePhoneE164 } from './phone_normalize.js';
 import { sendTwilioSms, twilioSmsConfigured, caraSmsDryRunEnabled } from './twilio_sms.js';
 import {
@@ -77,6 +80,8 @@ export type CaraSessionFlags = {
   awaitingRetailCallerName?: boolean;
   /** Stable retail — summary captured when stock/price question asked. */
   pendingCallbackSummary?: string | null;
+  /** Caller recently asked about weekly offers — steer catalog lookup to promo items. */
+  callerAskedAboutOffers?: boolean;
 };
 
 export type CaraAgentUserData = {
@@ -863,15 +868,21 @@ export class CaraTools {
 
   readonly searchSuperValuProducts = llm.tool({
     description:
-      'Look up SuperValu national range products — prices, offer status, and stock guidance. Use for grocery questions: "is Weetabix on offer?", "how much is Cadbury Snack?", "do you stock Heinz ketchup?". Returns spoken offer prices (on offer at X, was Y) or regular prices — quote exactly what this tool returns.',
+      'Look up SuperValu national range products — prices, offer status, and stock guidance. When the caller asks if something is ON OFFER / this week / on special, set intent to "offer". When they ask HOW MUCH / price, set intent to "price". Otherwise use "stock". Quote exactly what this tool returns.',
     parameters: z.object({
       query: z
         .string()
         .min(2)
         .max(120)
-        .describe('Product to search — e.g. "Heinz ketchup" or "semi-skimmed milk"'),
+        .describe('Product to search — e.g. "McVitie\'s biscuits" or "Weetabix"'),
+      intent: z
+        .enum(['offer', 'price', 'stock'])
+        .optional()
+        .describe(
+          'offer = caller asking if on offer/this week/special; price = how much/cost; stock = do you stock/carry',
+        ),
     }),
-    execute: async ({ query }, { ctx }) => {
+    execute: async ({ query, intent: explicitIntent }, { ctx }) => {
       const ud = readCaraUserData(ctx);
       if (!voiceWebhooksConfigured()) {
         return {
@@ -881,9 +892,21 @@ export class CaraTools {
         };
       }
 
+      const trimmed = query.trim();
+      const resolvedIntent = resolveCatalogSearchIntent({
+        query: trimmed,
+        explicitIntent: explicitIntent as CatalogSearchIntent | undefined,
+        callerAskedAboutOffers: ud.sessionFlags.callerAskedAboutOffers,
+      });
+
+      // #region agent log
+      fetch('http://127.0.0.1:7662/ingest/95496c05-1739-4e32-b7be-319b56b1c5b5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0f50f3'},body:JSON.stringify({sessionId:'0f50f3',runId:'intent-fix',hypothesisId:'H3',location:'cara_tools.ts:searchSuperValuProducts',message:'catalog tool intent resolved',data:{query:trimmed,explicitIntent,resolvedIntent,callerAskedAboutOffers:ud.sessionFlags.callerAskedAboutOffers},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+
       const payload: SearchSupervaluProductsPayload = {
         called_number: ud.calledNumber,
-        query: query.trim(),
+        query: trimmed,
+        intent: resolvedIntent,
       };
       const result = await postSearchSupervaluProducts(payload);
 

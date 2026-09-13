@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { buildCaraCallPrompt } from './lib/cara_prompt.js';
 import { resolveAiDisclosure } from './lib/ai_disclosure.js';
 import { CaraTools, type CaraAgentUserData } from './lib/cara_tools.js';
+import { trackCallerCatalogSearchIntent } from './lib/catalog_search_intent.js';
 import {
   countAssistantTranscriptChars,
   estimateCallCostUsd,
@@ -1513,6 +1514,9 @@ export default defineAgent({
       appendTranscriptLine(at, `Caller: ${text}`);
       session.userData.sessionFlags.likelySttGarble = false;
       noteCallerGarble(session.userData.sessionFlags, session.userData.organizationId, text);
+      if (conversationalRetailLine) {
+        trackCallerCatalogSearchIntent(text, session.userData.sessionFlags);
+      }
       resetClosePhaseIfCallerContinues(text);
       noteCallerTurnNeedsReply(text);
       if (session.userData.sessionFlags.awaitingAnythingElseReply) {
