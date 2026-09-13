@@ -342,7 +342,7 @@ export type SearchWeeklyOffersMatch = {
 
 export async function postSearchWeeklyOffers(
   payload: SearchWeeklyOffersPayload,
-): Promise<{ ok: boolean; matches: SearchWeeklyOffersMatch[]; error?: string }> {
+): Promise<{ ok: boolean; matches: SearchWeeklyOffersMatch[]; clarificationHint?: string | null; error?: string }> {
   if (!voiceWebhooksConfigured()) {
     return { ok: false, matches: [], error: 'voice webhooks not configured' };
   }
@@ -351,6 +351,7 @@ export async function postSearchWeeklyOffers(
     const { res, body } = await postVoiceWebhook<{
       ok?: boolean;
       matches?: SearchWeeklyOffersMatch[];
+      clarification_hint?: string | null;
       error?: string;
     }>('/api/voice/search-weekly-offers', payload);
 
@@ -365,6 +366,8 @@ export async function postSearchWeeklyOffers(
     return {
       ok: true,
       matches: Array.isArray(body.matches) ? body.matches : [],
+      clarificationHint:
+        typeof body.clarification_hint === 'string' ? body.clarification_hint : null,
     };
   } catch (err) {
     return { ok: false, matches: [], error: webhookFetchError(err) };
@@ -393,6 +396,7 @@ export async function postSearchSupervaluProducts(
   matches: SearchSupervaluProductsMatch[];
   browseCategories?: string[] | null;
   noMatchQuote?: string | null;
+  clarificationHint?: string | null;
   error?: string;
 }> {
   if (!voiceWebhooksConfigured()) {
@@ -405,6 +409,7 @@ export async function postSearchSupervaluProducts(
       matches?: SearchSupervaluProductsMatch[];
       browse_categories?: string[] | null;
       no_match_quote?: string | null;
+      clarification_hint?: string | null;
       error?: string;
     }>('/api/voice/search-supervalu-products', payload);
 
@@ -421,6 +426,8 @@ export async function postSearchSupervaluProducts(
       matches: Array.isArray(body.matches) ? body.matches : [],
       browseCategories: body.browse_categories ?? null,
       noMatchQuote: body.no_match_quote ?? null,
+      clarificationHint:
+        typeof body.clarification_hint === 'string' ? body.clarification_hint : null,
     };
   } catch (err) {
     return { ok: false, matches: [], error: webhookFetchError(err) };

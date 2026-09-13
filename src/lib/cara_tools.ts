@@ -857,6 +857,14 @@ export class CaraTools {
         };
       }
 
+      if (result.clarificationHint) {
+        return {
+          ok: true,
+          message: result.clarificationHint,
+          matches: [],
+        };
+      }
+
       if (result.matches.length === 0) {
         const areaLabel = service_area
           ? `${service_area}${fulfilment ? ` (${fulfilment})` : ''}`
@@ -938,6 +946,14 @@ export class CaraTools {
           message:
             result.error ??
             'Could not search the SuperValu range right now. Offer a team callback captured in speech — do not guess.',
+        };
+      }
+
+      if (result.clarificationHint) {
+        return {
+          ok: true,
+          message: result.clarificationHint,
+          matches: [],
         };
       }
 
