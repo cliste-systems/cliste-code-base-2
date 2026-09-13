@@ -855,7 +855,7 @@ export class CaraTools {
 
       return {
         ok: true,
-        message: `Use only these synced offer quotes:\n\n${formatted}`,
+        message: `Use only these synced offer quotes — speak prices in natural Irish words exactly as given (e.g. four euro, three for ten euro, was six euro):\n\n${formatted}`,
         matches: result.matches,
       };
     },
@@ -912,7 +912,7 @@ export class CaraTools {
 
       return {
         ok: true,
-        message: `Use this guidance — speak it naturally in your own words:\n\n${formatted}`,
+        message: `Use this guidance — speak prices in natural Irish words exactly as given (e.g. four euro seventy nine, three for ten euro), in your own words:\n\n${formatted}`,
         matches: result.matches,
       };
     },
