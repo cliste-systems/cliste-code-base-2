@@ -794,17 +794,29 @@ export class CaraTools {
 
   readonly searchWeeklyOffers = llm.tool({
     description:
-      'Look up synced SuperValu weekly promotions across butcher counter, deli counter, produce, off-licence, bakery, and grocery. Use for ON OFFER / this week / on special / list offers. Quote €/kg for counter items and pack prices for pre-pack — never mix deli counter and chilled-aisle prices. For listing use "weekly offers"; for deli hams use "carrolls ham" or "deli offers"; for wine use "wine offers". Quote only what this tool returns.',
+      'Look up synced SuperValu weekly promotions. Use when they ask ON OFFER / this week / on special / list offers. Set service_area and fulfilment from what the caller means (deli counter vs butcher/meat counter are different). Quote only what this tool returns — €/kg for counter, pack price for pre-pack.',
     parameters: z.object({
       query: z
         .string()
         .min(2)
         .max(120)
         .describe(
-          'Product or browse — e.g. "Carrolls ham deli", "striploin butcher counter", "wine offers", or "weekly offers"',
+          'Product name or browse term — e.g. "ham", "striploin", "wine", or "weekly offers" to list',
+        ),
+      service_area: z
+        .enum(['butcher', 'deli', 'produce', 'bakery', 'off_licence', 'grocery'])
+        .optional()
+        .describe(
+          'Store area the caller means: deli = deli counter/sliced meats; butcher = fresh meat counter (steaks, rashers, etc.); off_licence = wine/beer/spirits',
+        ),
+      fulfilment: z
+        .enum(['counter', 'prepack'])
+        .optional()
+        .describe(
+          'counter = sold at the counter by weight/slice; prepack = packaged on the shelf',
         ),
     }),
-    execute: async ({ query }, { ctx }) => {
+    execute: async ({ query, service_area, fulfilment }, { ctx }) => {
       const ud = readCaraUserData(ctx);
       const trimmed = query.trim();
       if (!voiceWebhooksConfigured()) {
@@ -815,42 +827,20 @@ export class CaraTools {
         };
       }
 
-      const q = trimmed.toLowerCase();
       const payload: SearchWeeklyOffersPayload = {
         called_number: ud.calledNumber,
         query: trimmed,
-        channel:
-          /butcher|meat counter|butchers/i.test(q) && !/deli/i.test(q)
-            ? 'butcher_counter'
-            : /pre\s*-?\s*pack|packaged|quick fry|meat aisle|chilled aisle/i.test(q)
-              ? 'prepack'
-              : undefined,
-        service_area: /off[- ]licence|wine|beer|spirits/i.test(q)
-          ? 'off_licence'
-          : /deli|carrolls|sliced ham|cooked meat|salami/i.test(q)
-            ? 'deli'
-            : /butcher|striploin|sirloin|steak|rashers|sausages/i.test(q)
-              ? 'butcher'
-              : /fruit|veg|potato|produce/i.test(q)
-                ? 'produce'
-                : /bakery|croissant|scone/i.test(q)
-                  ? 'bakery'
-                  : undefined,
-        fulfilment:
-          /deli counter|butcher counter|the counter|fresh sliced|per kilo|per kg|loose/i.test(q)
-            ? 'counter'
-            : /pre\s*-?\s*pack|packaged|quick fry|meat aisle|chilled aisle|pack\b/i.test(q)
-              ? 'prepack'
-              : /deli/i.test(q) && !/pre\s*-?\s*pack|chilled aisle/i.test(q)
-                ? 'counter'
-                : undefined,
+        ...(service_area ? { service_area } : {}),
+        ...(fulfilment ? { fulfilment } : {}),
       };
       let result = await postSearchWeeklyOffers(payload);
 
       if (
         result.ok &&
         result.matches.length === 0 &&
-        !inferWeeklyOffersListIntent(trimmed)
+        !inferWeeklyOffersListIntent(trimmed) &&
+        !service_area &&
+        !fulfilment
       ) {
         result = await postSearchWeeklyOffers({
           ...payload,
@@ -868,22 +858,14 @@ export class CaraTools {
       }
 
       if (result.matches.length === 0) {
-        const channelHint =
-          payload.service_area === 'deli' && payload.fulfilment === 'counter'
-            ? 'No deli counter offer found in this week\'s sync — do not quote pre-pack chilled-aisle ham unless the tool returns it.'
-            : payload.service_area === 'deli' && payload.fulfilment === 'prepack'
-              ? 'No matching pre-pack deli offer found in this week\'s sync.'
-              : payload.service_area === 'butcher' && payload.fulfilment === 'counter'
-                ? 'No butcher counter offer found in this week\'s sync — do not quote pre-pack meat aisle deals unless the tool returns them.'
-                : payload.channel === 'butcher_counter'
-                  ? 'No butcher counter offer found in this week\'s sync — do not quote pre-pack meat aisle deals unless the tool returns them.'
-                  : payload.channel === 'prepack'
-                    ? 'No matching pre-pack offer found in this week\'s sync.'
-                    : payload.service_area === 'off_licence'
-                      ? 'No off-licence offer found in this week\'s sync.'
-                      : inferWeeklyOffersListIntent(trimmed)
-                        ? 'No weekly offers are synced right now.'
-                        : `No matching offer found for "${trimmed}" in this week's sync. If they asked generally what offers you have, retry with query "weekly offers".`;
+        const areaLabel = service_area
+          ? `${service_area}${fulfilment ? ` (${fulfilment})` : ''}`
+          : null;
+        const channelHint = areaLabel
+          ? `No matching offer found for ${areaLabel} in this week's sync.`
+          : inferWeeklyOffersListIntent(trimmed)
+            ? 'No weekly offers are synced right now.'
+            : `No matching offer found for "${trimmed}" in this week's sync. If they asked generally what offers you have, retry with query "weekly offers".`;
         return {
           ok: true,
           message: `${channelHint} Do not invent a price — offer a team callback if needed.`,
