@@ -813,7 +813,7 @@ export class CaraTools {
         .enum(['counter', 'prepack'])
         .optional()
         .describe(
-          'counter = sold at the counter by weight/slice; prepack = packaged on the shelf',
+          'ONLY set when caller explicitly says counter / by weight / sliced OR pre-pack / packets / packaged. Omit for broad product questions like "steaks on offer".',
         ),
     }),
     execute: async ({ query, service_area, fulfilment }, { ctx }) => {
@@ -834,6 +834,21 @@ export class CaraTools {
         ...(fulfilment ? { fulfilment } : {}),
       };
       let result = await postSearchWeeklyOffers(payload);
+
+      if (
+        result.ok &&
+        result.matches.length === 0 &&
+        fulfilment &&
+        !inferWeeklyOffersListIntent(trimmed)
+      ) {
+        // #region agent log
+        fetch('http://127.0.0.1:7662/ingest/95496c05-1739-4e32-b7be-319b56b1c5b5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0f50f3'},body:JSON.stringify({sessionId:'0f50f3',runId:'steak-fix',hypothesisId:'FULFILMENT',location:'cara_tools.ts:searchWeeklyOffers-retry',message:'retry weekly offers without fulfilment filter',data:{query:trimmed,service_area:service_area??null,fulfilment,firstMatchCount:0},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
+        result = await postSearchWeeklyOffers({
+          ...payload,
+          fulfilment: undefined,
+        });
+      }
 
       if (
         result.ok &&
