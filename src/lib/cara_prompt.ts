@@ -1,5 +1,3 @@
-import { DEFAULT_ELEVEN_TTS_MODEL } from './tts_config.js';
-import { isElevenV3Model } from './elevenlabs-v3-http-tts.js';
 import type { CallerLineInfo } from './phone_classify.js';
 import { formatDemoScenariosForPrompt } from './demo_scenarios.js';
 import {
@@ -10,7 +8,6 @@ import {
 import {
   formatSpeechOnlyHoursPromptBlock,
 } from './conversational_retail_policy.js';
-import { formatRetailStableBehaviourForPrompt } from './retail_stable.js';
 import { formatRoutesForPrompt, routesForConversationalRetailPrompt, type RoutingLink } from './routing_links.js';
 import { orgVerticalLabel } from './org_vertical.js';
 import type { CallPersona } from './persona.js';
@@ -20,7 +17,7 @@ export type BuildCaraCallPromptInput = {
   customPrompt: string;
   callerLine: CallerLineInfo;
   routingLinks: RoutingLink[];
-  bookingTimeZone: string;
+  orgTimeZone: string;
   nowUtcIso: string;
   todayLocal: string;
   ttsModel?: string;
@@ -52,20 +49,14 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
   const owner = input.customPrompt.trim() || 'Be professional, concise, and helpful.';
   const routesBlock = formatRoutesForPrompt(input.routingLinks);
   const vertical = orgVerticalLabel({
-    niche: input.niche,
-    businessType: input.businessType,
+    ...(input.niche != null ? { niche: input.niche } : {}),
+    ...(input.businessType != null ? { businessType: input.businessType } : {}),
   });
-  const ttsModel = input.ttsModel?.trim() || DEFAULT_ELEVEN_TTS_MODEL;
-  const v3TagHint = isElevenV3Model(ttsModel)
-    ? '\nWhen speaking (not legal disclosure): sparing v3 tags [warm] or [pause] only — never in the AI/recording notice.'
-    : '';
-
   const storeSection =
     vertical === 'retail'
-      ? `### B. Store enquiries (retail — no appointment booking)
+      ? `### B. Store enquiries (retail)
 - Answer hours, location, departments, and general store questions from business instructions and **Structured hours** when present.
 - **Times:** speak naturally ("eight in the morning till nine in the evening") — never read "8:00" or "21:00" aloud.
-- **Never** mention beauty appointments or online booking — this is a grocery store.
 - Stock, prices, and allergens: never confirm from memory — direct to the shop floor or takeCallbackMessage.
 - Directions: say the address aloud, then offer sendDirectionsLink when a maps link route exists.
 - Complaints, lost property, suppliers, jobs: takeCallbackMessage with the fields in the matching route.`
@@ -76,26 +67,19 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
 
   const businessLabel = vertical === 'retail' ? 'retail store' : 'business';
   const personaBlock = input.persona
-    ? formatPersonaMannerBlock(input.persona, {
-        demoMode: input.demoMode || input.conversationalRetailMode,
-      })
+    ? formatPersonaMannerBlock(
+        input.persona,
+        input.demoMode || input.conversationalRetailMode ? { demoMode: true } : {},
+      )
     : '';
   const callerBlock = formatCallerLineBlock(input.callerLine);
   const hasCallerId = input.callerLine.kind !== 'unknown' && Boolean(input.callerLine.e164);
 
-  const conversationalOpeningBlock = input.conversationalRetailMode
-    ? `\n${formatRetailConversationalOpeningForPrompt()}\n${formatRetailStableBehaviourForPrompt()}`
-    : '';
-
-  const disclosurePerCallBlock = input.conversationalRetailMode
-    ? `- The full opening (intro, AI + recording notice, *how can I help you today?*) **already played** before your first reply.
-- Do **not** repeat greeting, recording notice, or *how can I help you today?*
-- Answer their store question from business instructions; use retail tools when needed.`
-    : input.openingGreetingDelivered
-      ? `- The caller already heard your AI + recording notice in the opening greeting.
-- **Never** repeat it or add a second disclosure (no extra GDPR/booking lines).
+  const disclosurePerCallBlock = input.openingGreetingDelivered
+    ? `- The caller already heard your AI + recording notice in the opening greeting.
+- **Never** repeat it or add a second disclosure.
 - After the greeting, listen — then answer their question in one short line.`
-      : `- On connect, include the AI and call-recording notice once, then ask how you can help.`;
+    : `- On connect, include the AI and call-recording notice once, then ask how you can help.`;
 
   const callerIdPerCallBlock = hasCallerId
     ? input.conversationalRetailMode
@@ -140,12 +124,12 @@ What you do NOT do is invent a life — no back-story, no opinions on weather yo
 - **Mirror their energy.** Chatty → a beat warmer, one extra line, then steer back. In a rush → tighter, faster, no filler at all.
 - **Soft-edged questions, not form-filling.** "Did you have a day in mind at all?" beats "What date do you require?". "What's the first name?" beats "May I take your name please?".
 - **Vary your openings.**${input.persona ? ' Rotate the acknowledgement words listed in *Your manner on this call*.' : ' Rotate openers — "Lovely —", "Sure —", "Perfect —".'} **Never open two turns in a row with the same word**.
-- **Times, always in words.** Never read 24-hour clock values (no "21:00", "08:00", "8:00 am"). Say Irish-style times: "eight in the morning", "nine in the evening", "half past six".${v3TagHint}
+- **Times, always in words.** Never read 24-hour clock values (no "21:00", "08:00", "8:00 am"). Say Irish-style times: "eight in the morning", "nine in the evening", "half past six".
 
 Real receptionists pause, think out loud and acknowledge. Weave these in sparingly — roughly 1 per 2 turns, never every line:
 
 - **Thinking fillers — ONLY paired with a real tool call in the same turn**, never alone.
-  - Before sendDirectionsLink / sendRoutingLink / sendRoutingFile / searchBusinessFile: "One moment while I check that…", "Let me have a look…", "Give me a second…"
+  - Before sendDirectionsLink / sendRoutingLink / sendRoutingFile / searchBusinessFile / searchWeeklyOffers / searchSuperValuProducts: "One moment while I check that…", "Let me have a look…", "Give me a second…"
   - Before takeCallbackMessage / transferToTeam: "Grand, let me get that logged for the team…", "Right, I'll pass that on…"
 - **Backchannels** (one short word, then continue): "Right,…", "Grand,…", "Okay,…", "Brilliant,…", "Lovely,…", "No bother,…", "Gotcha,…", "Sure,…", "Ah right,…".
 - **Tiny disfluencies**, occasionally: "Em…", "Eh…", "So…", "Right so…", "Let's see now…". Never twice in a turn.
@@ -208,7 +192,7 @@ Name (confirm spelling), need → takeCallbackMessage.
 Withheld caller ID → ask mobile/email. Complaint → acknowledge, take message. Bad audio / "can you hear me?" → **one warm line only** that you can hear them — **do not** ask how you can help again if they already heard the greeting. Never read full URLs aloud.
 
 ## This call (varies per caller — keep at end for prompt cache)
-- Today: ${input.todayLocal} (${input.bookingTimeZone}) | UTC: ${input.nowUtcIso}
+- Today: ${input.todayLocal} (${input.orgTimeZone}) | UTC: ${input.nowUtcIso}
 - ${callerBlock}
 
 ### Caller on this line
@@ -216,7 +200,7 @@ ${callerIdPerCallBlock}
 
 ### Opening on this call
 ${disclosurePerCallBlock}
-${conversationalOpeningBlock}${personaBlock}`;
+${personaBlock}`;
 }
 
 /** LLM-first retail prompt for Kavanaghs 9508 — greeting is programmatic PCM; speech-only live; actions post-call. */
@@ -243,12 +227,12 @@ ${formatRetailConversationalBehaviourForPrompt()}
 ## How this call works
 You are the only voice on this line after the opening. **Nothing is written to the dashboard during the call** — you confirm verbally; the system processes orders and callbacks **after hang-up**.
 
-**Live tools:** **endPhoneCall** only (after your warm goodbye). No mid-call tools.
+**Live tools:** **searchWeeklyOffers**, **searchSuperValuProducts**, and **endPhoneCall** (after your warm goodbye).
 
 ## Live-call rules (override business instructions when they conflict)
 - **Every turn must include spoken words** for the caller.
 - One question per turn — max one \`?\` per turn.
-- **Mid-call tools:** Ignore any business instruction to use takeCallbackMessage, transferToTeam, sendRoutingLink, or other send tools during this call — live tool is **endPhoneCall** only; capture details in speech for post-call processing.
+- **Mid-call tools:** Use **searchWeeklyOffers** for offer/price questions, **searchSuperValuProducts** for stock/range questions, and **endPhoneCall** to hang up. Ignore takeCallbackMessage, transferToTeam, sendRoutingLink, and other send tools during this call — capture callback details in speech for post-call processing.
 - **Opening hours** — answer in speech from Structured hours below.
 - **Directions / staff names** — answer in speech from business instructions.
 - **Cake orders, stock checks, complaints, manager callbacks** — collect details in speech, then **verbally confirm** what you captured; the team is notified after the call ends.
@@ -290,10 +274,12 @@ ${routesBlock}
 3. **Confirm** — one warm line summarising what you captured for their errand.
 4. **Finish** — **Ending calls** above (yes/no check-in → thanks-for-calling + **endPhoneCall** when they are sorted).
 
-**Stock / prices** — cannot confirm on phone; offer to pass details to the team verbally.
+**Stock / range questions** — use **searchSuperValuProducts** first. If it returns a match, say we carry it as part of the SuperValu range — as far as you're aware — but never guarantee it is on the shelf right now; offer a team callback captured in speech.
+
+**Offer / price questions** — use **searchWeeklyOffers** and quote only what it returns. If nothing matches, offer the butcher or capture details in speech — never invent a price.
 
 ## This call
-- Today: ${input.todayLocal} (${input.bookingTimeZone}) | UTC: ${input.nowUtcIso}
+- Today: ${input.todayLocal} (${input.orgTimeZone}) | UTC: ${input.nowUtcIso}
 - ${callerBlock}
 
 ### Caller on this line
@@ -374,7 +360,7 @@ ${callerIdLine}
 - Use commas where you'd breathe — *"Perfect, Abigail — ..."* not *"Perfect Abigail"*.
 - **Two thoughts = two sentences** — finish the first thought with a full stop before asking a question (*"It's a lovely day. What kind of business have you got?"* not one comma-run-on).
 - Use a caller's name only if they clearly said it on this call — never guess.
-- No salon/beauty/hair/booking talk unless they said those words first.
+- Stay on the demo product — no invented trade-specific facts unless they asked for role-play.
 - One idea per turn — no feature dumps, trade lists, or call-centre filler (*"for quality"*, *"just a quick note"*).
 
 ## Ending calls
@@ -396,7 +382,7 @@ If their last line is garbled, ask *"sorry — was that everything?"* instead of
 ${playbookBlock}
 
 ## Context
-- Today: ${input.todayLocal} (${input.bookingTimeZone}) | UTC: ${input.nowUtcIso}
+- Today: ${input.todayLocal} (${input.orgTimeZone}) | UTC: ${input.nowUtcIso}
 - ${callerBlock}
 ${personaBlock}`;
 }

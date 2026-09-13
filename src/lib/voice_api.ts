@@ -316,6 +316,105 @@ export async function postSearchBusinessFile(
   }
 }
 
+export type SearchWeeklyOffersPayload = {
+  called_number: string;
+  query: string;
+};
+
+export type SearchWeeklyOffersMatch = {
+  id: string;
+  product_name: string;
+  department: string;
+  current_price_eur: number;
+  was_price_eur: number | null;
+  discount_label: string | null;
+  price_per_unit: string | null;
+  score: number;
+  quote_text: string;
+};
+
+export async function postSearchWeeklyOffers(
+  payload: SearchWeeklyOffersPayload,
+): Promise<{ ok: boolean; matches: SearchWeeklyOffersMatch[]; error?: string }> {
+  if (!voiceWebhooksConfigured()) {
+    return { ok: false, matches: [], error: 'voice webhooks not configured' };
+  }
+
+  try {
+    const { res, body } = await postVoiceWebhook<{
+      ok?: boolean;
+      matches?: SearchWeeklyOffersMatch[];
+      error?: string;
+    }>('/api/voice/search-weekly-offers', payload);
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        matches: [],
+        error: body.error ?? `HTTP ${res.status}`,
+      };
+    }
+
+    return {
+      ok: true,
+      matches: Array.isArray(body.matches) ? body.matches : [],
+    };
+  } catch (err) {
+    return { ok: false, matches: [], error: webhookFetchError(err) };
+  }
+}
+
+export type SearchSupervaluProductsPayload = {
+  called_number: string;
+  query: string;
+};
+
+export type SearchSupervaluProductsMatch = {
+  product_name: string;
+  department: string;
+  sku: string | null;
+  score: number;
+  quote_text: string;
+};
+
+export async function postSearchSupervaluProducts(
+  payload: SearchSupervaluProductsPayload,
+): Promise<{
+  ok: boolean;
+  matches: SearchSupervaluProductsMatch[];
+  noMatchQuote?: string | null;
+  error?: string;
+}> {
+  if (!voiceWebhooksConfigured()) {
+    return { ok: false, matches: [], error: 'voice webhooks not configured' };
+  }
+
+  try {
+    const { res, body } = await postVoiceWebhook<{
+      ok?: boolean;
+      matches?: SearchSupervaluProductsMatch[];
+      no_match_quote?: string | null;
+      error?: string;
+    }>('/api/voice/search-supervalu-products', payload);
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        matches: [],
+        error: body.error ?? `HTTP ${res.status}`,
+      };
+    }
+
+    return {
+      ok: true,
+      matches: Array.isArray(body.matches) ? body.matches : [],
+      noMatchQuote: body.no_match_quote ?? null,
+    };
+  } catch (err) {
+    return { ok: false, matches: [], error: webhookFetchError(err) };
+  }
+}
+
 /** Map session flags to canonical contract values. */
 export function canonicalCallOutcome(flags: {
   linkSent?: boolean;

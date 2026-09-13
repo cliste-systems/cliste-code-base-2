@@ -11,7 +11,6 @@ import { maskPhone } from './gdpr.js';
 import { isE164SmsTarget } from './phone_classify.js';
 import {
   fallbackRoute,
-  isBookingRoute,
   isLocationRoute,
   listActiveRouteIds,
   parseRoutingLinks,
@@ -36,9 +35,13 @@ import { sendTwilioSms, twilioSmsConfigured, caraSmsDryRunEnabled } from './twil
 import {
   postSendCallerEmail,
   postSearchBusinessFile,
+  postSearchSupervaluProducts,
+  postSearchWeeklyOffers,
   postSendSms,
   voiceWebhooksConfigured,
   type SearchBusinessFilePayload,
+  type SearchSupervaluProductsPayload,
+  type SearchWeeklyOffersPayload,
 } from './voice_api.js';
 
 const SMS_FAILURE_MESSAGE =
@@ -54,11 +57,9 @@ export type CaraSessionFlags = {
   awaitingAnythingElseReply: boolean;
   anythingElseAskCount: number;
   callerRespondedAfterAnythingElse: boolean;
-  bookingRouteId: string | null;
-  bookingLinkSendInFlight: boolean;
   closingCall: boolean;
   likelySttGarble: boolean;
-  /** Active Hello Cara demo playbook slug (electrician, salon, …) — diagnostics only. */
+  /** Active Hello Cara demo playbook slug (electrician, retail, …) — diagnostics only. */
   demoScenarioSlug?: string | null;
   /** 1-based beat index within the active demo playbook (1–4) — diagnostics only. */
   demoScenarioBeat?: number;
@@ -214,56 +215,37 @@ export async function sendCallerSms(
   return { ok: true, detail: 'Sent.' };
 }
 
-/** Send booking link SMS for a route — invoked only via sendBookingLink tool. */
-export async function sendBookingLinkSmsForRoute(
+async function sendCallerLinkSms(
   ud: CaraAgentUserData,
-  routeId: string,
+  route: RoutingLink,
   mobilePhone?: string,
+  toolName = 'sendDirectionsLink',
 ): Promise<{ ok: boolean; detail: string }> {
   if (ud.sessionFlags.linkSent) {
     return { ok: true, detail: 'Already sent.' };
   }
-  if (ud.sessionFlags.bookingLinkSendInFlight) {
-    return { ok: false, detail: 'SMS send already in progress.' };
+  if (!routeUsesCallerLinkDelivery(route) || !route.url.trim()) {
+    return { ok: false, detail: 'Route not found or link delivery is not configured.' };
   }
-  ud.sessionFlags.bookingLinkSendInFlight = true;
-  try {
-    const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
-    if (!resolved.ok) {
-      return { ok: false, detail: resolved.message };
-    }
-    const { route } = resolved;
-    if (!routeUsesCallerLinkDelivery(route) || !route.url.trim()) {
-      return { ok: false, detail: 'Route not found or link delivery is not configured.' };
-    }
-    const to = resolveSmsDestination(ud, mobilePhone);
-    if (!isE164SmsTarget(to)) {
-      return {
-        ok: false,
-        detail: 'This line cannot receive texts. Ask for a mobile number, or offer email instead.',
-      };
-    }
-    const linkUrl = route.url.trim();
-    const smsPrefix = isLocationRoute(route)
-      ? `${ud.businessName} — directions: `
-      : `${ud.businessName}: `;
-    const body = `${smsPrefix}${linkUrl}`;
-    const sms = await sendCallerSms(ud, to, body, 'sendBookingLink');
-    if (!sms.ok) {
-      return { ok: false, detail: sms.detail };
-    }
-    ud.sessionFlags.linkSent = true;
-    ud.sessionFlags.smsSent += 1;
-    console.info('sendBookingLinkSmsForRoute', {
-      orgId: ud.organizationId,
-      routeId,
-      to: maskPhone(to),
-      ok: true,
-    });
-    return { ok: true, detail: 'Sent.' };
-  } finally {
-    ud.sessionFlags.bookingLinkSendInFlight = false;
+  const to = resolveSmsDestination(ud, mobilePhone);
+  if (!isE164SmsTarget(to)) {
+    return {
+      ok: false,
+      detail: 'This line cannot receive texts. Ask for a mobile number, or offer email instead.',
+    };
   }
+  const linkUrl = route.url.trim();
+  const smsPrefix = isLocationRoute(route)
+    ? `${ud.businessName} — directions: `
+    : `${ud.businessName}: `;
+  const body = `${smsPrefix}${linkUrl}`;
+  const sms = await sendCallerSms(ud, to, body, toolName);
+  if (!sms.ok) {
+    return { ok: false, detail: sms.detail };
+  }
+  ud.sessionFlags.linkSent = true;
+  ud.sessionFlags.smsSent += 1;
+  return { ok: true, detail: 'Sent.' };
 }
 
 /** Prefer caller-line E.164 when SMS-capable; ignore LLM national-format overrides. */
@@ -332,12 +314,6 @@ export class CaraTools {
         return resolved;
       }
       const { route } = resolved;
-      if (isBookingRoute(route)) {
-        return {
-          ok: false,
-          message: `Use sendBookingLink for booking routes (routeId ${route.id}).`,
-        };
-      }
       if (routeUsesCallerLinkDelivery(route)) {
         return {
           ok: false,
@@ -381,39 +357,9 @@ export class CaraTools {
     },
   });
 
-  readonly sendBookingLink = llm.tool({
-    description:
-      'Send the online booking link by SMS to the caller\'s phone after they agreed. Use only for booking routes.',
-    parameters: z.object({
-      routeId: z.string().min(1).describe('The booking routeId from Active routes'),
-      callerConsented: z
-        .boolean()
-        .describe('True only after the caller agreed to receive the booking link by text'),
-    }),
-    execute: async ({ routeId, callerConsented }, { ctx }) => {
-      if (!callerConsented) {
-        return {
-          ok: false,
-          message: 'Wait for the caller to agree before sending — do not set callerConsented true yourself.',
-        };
-      }
-      const ud = readCaraUserData(ctx);
-      const resolved = resolveRouteOrFail(ud.routingLinks, routeId);
-      if (!resolved.ok) {
-        return resolved;
-      }
-      if (!isBookingRoute(resolved.route)) {
-        return { ok: false, message: 'Not a booking route — use sendDirectionsLink or sendRoutingLink.' };
-      }
-      ud.sessionFlags.bookingRouteId = routeId;
-      const result = await sendBookingLinkSmsForRoute(ud, routeId);
-      return { ok: result.ok, message: result.detail };
-    },
-  });
-
   readonly sendDirectionsLink = llm.tool({
     description:
-      'Directions / maps links only — not for booking appointments (use sendBookingLink). Say the address first, ask consent, then send.',
+      'Directions / maps links only. Say the address first, ask consent, then send.',
     parameters: z.object({
       routeId: z.string().min(1).describe('The routing_links id for the route'),
       channel: z
@@ -441,12 +387,6 @@ export class CaraTools {
         return resolved;
       }
       const { route } = resolved;
-      if (isBookingRoute(route)) {
-        return {
-          ok: false,
-          message: `Use sendBookingLink for booking routes (routeId ${route.id}).`,
-        };
-      }
       if (!_callerConsented) {
         return {
           ok: false,
@@ -484,14 +424,14 @@ export class CaraTools {
               'This line cannot receive texts. Ask for a mobile number, or offer email instead.',
           };
         }
-        const sms = await sendBookingLinkSmsForRoute(ud, routeId, mobilePhone);
+        const sms = await sendCallerLinkSms(ud, route, mobilePhone, 'sendDirectionsLink');
         if (!sms.ok) {
           return {
             ok: false,
             message: SMS_FAILURE_MESSAGE,
           };
         }
-        messages.push(isLocationRoute(route) ? 'Maps link sent by text.' : 'Booking link sent by text.');
+        messages.push('Maps link sent by text.');
         console.info('sendDirectionsLink', {
           orgId: ud.organizationId,
           routeId,
@@ -515,10 +455,8 @@ export class CaraTools {
             message: SMS_FAILURE_MESSAGE,
           };
         }
-        const subject = isLocationRoute(route) ? 'Directions' : 'Booking link';
-        const body = isLocationRoute(route)
-          ? `Here are directions to ${ud.businessName}:\n\n${linkUrl}`
-          : `Here is your booking link for ${ud.businessName}:\n\n${linkUrl}`;
+        const subject = 'Directions';
+        const body = `Here are directions to ${ud.businessName}:\n\n${linkUrl}`;
         const mail = await postSendCallerEmail({
           called_number: ud.calledNumber,
           to: toEmail,
@@ -656,7 +594,7 @@ export class CaraTools {
             'Provide a fuller staffSummary (at least a short sentence with what they need and any details).',
         };
       }
-      playTypingSound(ctx.session as voice.AgentSession<CaraAgentUserData>);
+      playTypingSound(ctx.session);
       return createCallbackViaWebhook(ud, text, {
         ...(callbackPhone?.trim() ? { phone: callbackPhone } : {}),
         callerName: name,
@@ -842,6 +780,119 @@ export class CaraTools {
     },
   });
 
+  readonly searchWeeklyOffers = llm.tool({
+    description:
+      'Look up whether a product is on offer this week and get the synced price. Use when the caller asks if something is on offer, this week\'s price, or butcher specials. Quote only what this tool returns.',
+    parameters: z.object({
+      query: z
+        .string()
+        .min(2)
+        .max(120)
+        .describe('Product to search — e.g. "striploin steak" or "chicken fillets"'),
+    }),
+    execute: async ({ query }, { ctx }) => {
+      const ud = readCaraUserData(ctx);
+      if (!voiceWebhooksConfigured()) {
+        return {
+          ok: false,
+          message:
+            'Weekly offer lookup is not available on this call. Do not guess a price — offer the butcher or take a message.',
+        };
+      }
+
+      const payload: SearchWeeklyOffersPayload = {
+        called_number: ud.calledNumber,
+        query: query.trim(),
+      };
+      const result = await postSearchWeeklyOffers(payload);
+
+      if (!result.ok) {
+        return {
+          ok: false,
+          message:
+            result.error ??
+            'Could not search weekly offers right now. Offer the butcher department or take a message — do not guess.',
+        };
+      }
+
+      if (result.matches.length === 0) {
+        return {
+          ok: true,
+          message:
+            'No matching offer found in this week\'s sync. Say you do not have that offer on the list — offer the butcher or take a message. Do not invent a price.',
+          matches: [],
+        };
+      }
+
+      const formatted = result.matches
+        .map((match) => match.quote_text.trim())
+        .join('\n\n');
+
+      return {
+        ok: true,
+        message: `Use only these synced offer quotes:\n\n${formatted}`,
+        matches: result.matches,
+      };
+    },
+  });
+
+  readonly searchSuperValuProducts = llm.tool({
+    description:
+      'Check whether a product is part of the SuperValu range we carry. Use when the caller asks if you stock, sell, or carry something — e.g. "do you stock Heinz ketchup?". Quote only what this tool returns.',
+    parameters: z.object({
+      query: z
+        .string()
+        .min(2)
+        .max(120)
+        .describe('Product to search — e.g. "Heinz ketchup" or "semi-skimmed milk"'),
+    }),
+    execute: async ({ query }, { ctx }) => {
+      const ud = readCaraUserData(ctx);
+      if (!voiceWebhooksConfigured()) {
+        return {
+          ok: false,
+          message:
+            'Product lookup is not available on this call. Do not guess — offer a team callback captured in speech.',
+        };
+      }
+
+      const payload: SearchSupervaluProductsPayload = {
+        called_number: ud.calledNumber,
+        query: query.trim(),
+      };
+      const result = await postSearchSupervaluProducts(payload);
+
+      if (!result.ok) {
+        return {
+          ok: false,
+          message:
+            result.error ??
+            'Could not search the SuperValu range right now. Offer a team callback captured in speech — do not guess.',
+        };
+      }
+
+      if (result.matches.length === 0) {
+        return {
+          ok: true,
+          message:
+            result.noMatchQuote ??
+            'No matching product found on the SuperValu range — do not claim we stock it. Offer a team callback to confirm.',
+          matches: [],
+        };
+      }
+
+      const formatted = result.matches
+        .map((match) => match.quote_text.trim())
+        .join('\n\n');
+
+      return {
+        ok: true,
+        message: `Use this guidance — speak it naturally in your own words:\n\n${formatted}`,
+        matches: result.matches,
+      };
+    },
+  });
+
   readonly endPhoneCall = llm.tool({
     description:
       'End the call after a warm Irish goodbye (e.g. "Lovely — thanks for calling Kavanaghs SuperValu Donegal Town. Take care." or "Lovely — thanks for calling Murphy\'s SuperValu. Take care."). Invoke in the same turn as your farewell — never abrupt "ok bye", bare "bye", or "grand". On the Hello Cara demo line: after "is that everything?" and they confirm, give the outro ("Lovely, {name} — thanks for calling Hello Cara today. Have a good day/evening. Bye for now.") then call this tool in that same turn; never say "grand" or "sound"; do not ask another question after they wind down. On Kavanaghs 9508 (conversational retail): any spoken farewell ("have a great day", "take care", "thanks for calling") MUST invoke this tool in that same turn — never leave a dangling goodbye. After beat 1, if the caller is done → outro + this tool; no third question.',
@@ -850,7 +901,7 @@ export class CaraTools {
       const ud = readCaraUserData(ctx);
       if (ud.demoLine) {
         return disconnectCallerLeg(
-          ctx.session as voice.AgentSession<EndCallUserData>,
+          ctx.session,
           ud,
           async () => {
             try {
@@ -863,7 +914,7 @@ export class CaraTools {
       }
       if (ud.conversationalRetailLine) {
         return disconnectCallerLeg(
-          ctx.session as voice.AgentSession<EndCallUserData>,
+          ctx.session,
           ud,
           async () => {
             try {
@@ -885,7 +936,7 @@ export class CaraTools {
         };
       }
       return disconnectCallerLeg(
-        ctx.session as voice.AgentSession<EndCallUserData>,
+        ctx.session,
         ud,
         async () => {
           try {
@@ -911,6 +962,8 @@ export class CaraTools {
     if (options?.conversationalRetailLine) {
       return {
         endPhoneCall: this.endPhoneCall,
+        searchWeeklyOffers: this.searchWeeklyOffers,
+        searchSuperValuProducts: this.searchSuperValuProducts,
       };
     }
     return {

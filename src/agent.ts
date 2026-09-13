@@ -1,6 +1,5 @@
 import 'dotenv/config';
 
-import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 import * as lkTurn from '@livekit/agents-plugin-livekit';
 import { createCaraLlm } from './lib/llm_provider.js';
 import * as silero from '@livekit/agents-plugin-silero';
@@ -48,27 +47,15 @@ import {
   waitForSpeechHandlePlayout,
 } from './lib/end_call.js';
 import {
-  resolveElevenVoiceSettings,
-  voiceSettingsCacheFingerprint,
-} from './lib/call_participant.js';
-import { createElevenLabsTts, isElevenV3Model } from './lib/elevenlabs-v3-http-tts.js';
-import { prewarmConfiguredGreetingCaches } from './lib/greeting_prewarm.js';
-import {
   classifySttPipelineError,
   isSttRateLimitOrTransientError,
   resolveCallOutcomeWithSttFailure,
   STT_RECOVERY_SPEECH_LINE,
 } from './lib/resilient_inference_stt.js';
 import { prewarmInferenceStt } from './lib/stt_warmup.js';
-import { resolveTtsConfig, CARTESIA_SIOBHAN_VOICE_ID, DEFAULT_ELEVEN_TTS_MODEL } from './lib/tts_config.js';
+import { resolveTtsConfig } from './lib/tts_config.js';
+import { assertExpectedStack } from './lib/pipeline_stack.js';
 import { greetingIncludesAiDisclosure } from './lib/greeting_compliance.js';
-import {
-  ensureGreetingPcmCached,
-  greetingAudioCacheKey,
-  loadCachedGreetingPcm,
-  pcmSampleRateFromEncoding,
-  pcmToAudioFrameStream,
-} from './lib/greeting_audio_cache.js';
 import { maskPhone, redactPii } from './lib/gdpr.js';
 import { assertOrgCallable } from './lib/org_gate.js';
 import {
@@ -126,11 +113,7 @@ import {
   callerSoundsLikeCallerFrustration,
   assistantSoundsLikeCorporateAssist,
 } from './lib/speech_triggers.js';
-import {
-  detectLikelySttGarble,
-  soundsLikeBookingIntent,
-  soundsLikeCancelOrChangeAppointment,
-} from './lib/stt_garble.js';
+import { detectLikelySttGarble } from './lib/stt_garble.js';
 import { callerSoundsLikeRetailStaffQuestion } from './lib/retail_staff_questions.js';
 import {
   buildRetailHoursSpokenReply,
@@ -145,10 +128,8 @@ import {
   resolveOrgVoiceId,
 } from './lib/supabase.js';
 import {
-  bufferTtsStreamBySentence,
   buildTtsNodeInputStream,
   prepareHardcodedSpeechForTts,
-  prepareTextForTtsStreaming,
   setActiveTtsModelForSanitizer,
 } from './lib/tts_text_sanitize.js';
 import {
@@ -158,7 +139,6 @@ import {
   buildSttKeyterms,
   endpointingDefaults,
   isAssemblyAiSttModel,
-  isU3RtProSttModel,
   resolveSttLatencyProfile,
 } from './lib/stt_keyterms.js';
 import {
@@ -199,34 +179,11 @@ const SLOW_TOOL_ACK_NAMES = new Set([
   'sendRoutingLink',
   'sendRoutingFile',
   'searchBusinessFile',
+  'searchWeeklyOffers',
+  'searchSuperValuProducts',
   'takeCallbackMessage',
   'transferToTeam',
 ]);
-
-/** Debug-mode runtime telemetry — also visible in Railway logs via console.info. */
-function debugSessionLog(
-  hypothesisId: string,
-  location: string,
-  message: string,
-  data: Record<string, unknown>,
-): void {
-  const payload = {
-    sessionId: '0f50f3',
-    hypothesisId,
-    location,
-    message,
-    data,
-    timestamp: Date.now(),
-  };
-  console.info('[agent][debug]', payload);
-  // #region agent log
-  fetch('http://127.0.0.1:7662/ingest/95496c05-1739-4e32-b7be-319b56b1c5b5', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '0f50f3' },
-    body: JSON.stringify(payload),
-  }).catch(() => {});
-  // #endregion
-}
 
 function tapLlmTextStreamForTranscript(
   source: ReadableStream<string>,
@@ -331,7 +288,7 @@ function parseMetadataRouting(metadata: string): RoutingHint {
   if (!metadata.trim()) return {};
   try {
     const p = JSON.parse(metadata) as Record<string, unknown>;
-    const slugRaw = p.organization_slug ?? p.salon_slug ?? p.slug;
+    const slugRaw = p.organization_slug ?? p.slug;
     const slug = typeof slugRaw === 'string' ? slugRaw.trim() : undefined;
     const phoneRaw =
       p.phone_number ?? p.dialedNumber ?? p.trunkPhoneNumber ?? p.trunk_phone_number;
@@ -347,7 +304,7 @@ function parseMetadataRouting(metadata: string): RoutingHint {
 
 function routingFromParticipantAttributes(attrs: Record<string, string>): RoutingHint {
   let slug: string | undefined;
-  for (const key of ['organization_slug', 'salon_slug', 'slug'] as const) {
+  for (const key of ['organization_slug', 'slug'] as const) {
     const v = attrs[key];
     if (v?.trim()) {
       slug = v.trim();
@@ -372,7 +329,6 @@ function resolveOrgRouting(job: JobContext['job'], participant: RemoteParticipan
     roomM.slug ??
     part.slug ??
     process.env.DEFAULT_ORG_SLUG?.trim() ??
-    process.env.DEFAULT_SALON_SLUG?.trim() ??
     undefined;
 
   const phone =
@@ -380,7 +336,6 @@ function resolveOrgRouting(job: JobContext['job'], participant: RemoteParticipan
     jobM.phone ??
     roomM.phone ??
     process.env.DEFAULT_ORG_PHONE?.trim() ??
-    process.env.DEFAULT_SALON_PHONE?.trim() ??
     DEFAULT_TEST_PHONE;
 
   const hint: RoutingHint = {};
@@ -435,9 +390,6 @@ async function disconnectParticipant(
 export default defineAgent({
   prewarm: async (proc: JobProcess) => {
     proc.userData.vad = await silero.VAD.load();
-    void prewarmConfiguredGreetingCaches().catch((e) => {
-      console.warn('[agent] greeting_prewarm_failed', e);
-    });
     try {
       await prewarmInferenceStt();
     } catch (e) {
@@ -559,11 +511,11 @@ export default defineAgent({
     const custom = org.custom_prompt?.trim() || 'Be professional, concise, and helpful.';
     const now = new Date();
     const nowUtcIso = now.toISOString();
-    const bookingTz = resolveOrgTimeZone(org);
+    const orgTz = resolveOrgTimeZone(org);
     let todayLocal = nowUtcIso;
     try {
       todayLocal = now.toLocaleDateString('en-GB', {
-        timeZone: bookingTz,
+        timeZone: orgTz,
         weekday: 'long',
         year: 'numeric',
         month: 'long',
@@ -577,27 +529,12 @@ export default defineAgent({
     const hasCallerIdOnFile =
       callerLine.kind !== 'unknown' && Boolean(callerLine.e164);
 
-    const ttsConfig = (() => {
-      if (factoryFreshLine) {
-        return {
-          provider: 'cartesia-inference' as const,
-          model: process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3.6',
-          voiceId: process.env.LIVEKIT_INFERENCE_TTS_VOICE?.trim() || CARTESIA_SIOBHAN_VOICE_ID,
-          language: process.env.LIVEKIT_INFERENCE_TTS_LANGUAGE?.trim() || 'en',
-          label: `factory-fresh:${process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3.6'}:siobhan`,
-        };
-      }
-      return resolveTtsConfig({
-        testProfile,
-        orgVoiceId: resolveOrgVoiceId(org),
-      });
-    })();
-    const useCartesiaInference = ttsConfig.provider === 'cartesia-inference';
+    const ttsConfig = resolveTtsConfig({
+      testProfile,
+      orgVoiceId: resolveOrgVoiceId(org),
+    });
     const activeTtsModel = ttsConfig.model;
     const activeVoiceId = ttsConfig.voiceId;
-    const elevenModel = useCartesiaInference
-      ? activeTtsModel
-      : (activeTtsModel as elevenlabs.TTSModels);
 
     const greetingText = org.greeting?.trim() ?? '';
     const spokenBusinessName = resolveSpokenBusinessName({
@@ -607,7 +544,7 @@ export default defineAgent({
 
     const structuredHoursBlock =
       org.niche === 'retail'
-        ? formatStructuredHoursForLivePrompt(org.business_hours, bookingTz, todayLocal)
+        ? formatStructuredHoursForLivePrompt(org.business_hours, orgTz, todayLocal)
         : null;
 
     const orgVertical = orgVerticalLabel({
@@ -623,7 +560,7 @@ export default defineAgent({
         new Intl.DateTimeFormat('en-IE', {
           hour: 'numeric',
           hour12: false,
-          timeZone: bookingTz,
+          timeZone: orgTz,
         }).format(new Date()),
         10,
       );
@@ -649,39 +586,6 @@ export default defineAgent({
               }),
             )
           : greetingText;
-    const skipGreetingCache = useDemoPersonaGreeting && Boolean(playbackGreetingText);
-    let greetingCacheWarmPromise: Promise<void> | null = null;
-    if (
-      conversationalRetailLine &&
-      !useCartesiaInference &&
-      playbackGreetingText &&
-      !skipGreetingCache
-    ) {
-      const retailGreetingApiKey =
-        process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
-      if (retailGreetingApiKey) {
-        greetingCacheWarmPromise = ensureGreetingPcmCached({
-          orgId: org.id,
-          greetingText: playbackGreetingText,
-          apiKey: retailGreetingApiKey,
-          voiceId: activeVoiceId,
-          encoding: process.env.ELEVEN_TTS_ENCODING?.trim() || 'pcm_24000',
-          baseURL:
-            process.env.ELEVENLABS_BASE_URL?.trim() || 'https://api.elevenlabs.io/v1',
-          voiceSettings: resolveElevenVoiceSettings(),
-        })
-          .then((pcm) => {
-            console.info('[agent] greeting_pcm_warm', {
-              orgId: org.id,
-              bytes: pcm.byteLength,
-              early: true,
-            });
-          })
-          .catch((e) => {
-            console.error('[agent] greeting pcm early warmup failed', e);
-          });
-      }
-    }
     console.info('[agent] call_persona', {
       variant: callPersona.variant,
       demoLine: testCall,
@@ -700,7 +604,7 @@ export default defineAgent({
       customPrompt: custom,
       callerLine,
       routingLinks,
-      bookingTimeZone: bookingTz,
+      orgTimeZone: orgTz,
       nowUtcIso,
       todayLocal,
       ttsModel: activeTtsModel,
@@ -822,8 +726,6 @@ export default defineAgent({
         awaitingAnythingElseReply: false,
         anythingElseAskCount: 0,
         callerRespondedAfterAnythingElse: false,
-        bookingRouteId: null,
-        bookingLinkSendInFlight: false,
         closingCall: false,
         likelySttGarble: false,
         demoScenarioSlug: null,
@@ -845,14 +747,6 @@ export default defineAgent({
       ...(endCallTarget ? { endCallTarget } : {}),
     };
 
-    const elevenApiKey =
-      process.env.ELEVEN_API_KEY?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || '';
-    if (!useCartesiaInference && !elevenApiKey) {
-      console.error('[agent] ELEVENLABS_API_KEY (or ELEVEN_API_KEY) is required for ElevenLabs TTS');
-      ctx.shutdown('missing_elevenlabs_key');
-      return;
-    }
-
     const inferenceSttModel =
       testProfile?.stt_model?.trim() ||
       process.env.LIVEKIT_INFERENCE_STT_MODEL?.trim() ||
@@ -864,60 +758,7 @@ export default defineAgent({
       (demoExperienceStack ? 'openai/gpt-5.6-luna' : 'google/gemma-4-31b-it');
     const useBuilderDemoStack = demoExperienceStack;
 
-    const elevenVoiceId = activeVoiceId;
-    const elevenEncoding = process.env.ELEVEN_TTS_ENCODING?.trim() || 'pcm_24000';
-    const elevenBaseUrl =
-      process.env.ELEVENLABS_BASE_URL?.trim() || 'https://api.elevenlabs.io/v1';
-    const elevenVoiceSettings = resolveElevenVoiceSettings();
-    const greetingCacheKey =
-      !useCartesiaInference && playbackGreetingText && !skipGreetingCache
-        ? greetingAudioCacheKey(
-            org.id,
-            playbackGreetingText,
-            elevenVoiceId,
-            voiceSettingsCacheFingerprint(elevenVoiceSettings),
-          )
-        : null;
-
-    if (
-      !greetingCacheWarmPromise &&
-      !useCartesiaInference &&
-      playbackGreetingText &&
-      !skipGreetingCache &&
-      elevenApiKey
-    ) {
-      greetingCacheWarmPromise = ensureGreetingPcmCached({
-        orgId: org.id,
-        greetingText: playbackGreetingText,
-        apiKey: elevenApiKey,
-        voiceId: elevenVoiceId,
-        encoding: elevenEncoding,
-        baseURL: elevenBaseUrl,
-        voiceSettings: elevenVoiceSettings,
-      })
-        .then((pcm) => {
-          console.info('[agent] greeting_pcm_warm', {
-            orgId: org.id,
-            bytes: pcm.byteLength,
-            msSinceCallStart: Date.now() - callStartedAt,
-          });
-          diag.push('info', 'greeting_pcm_warm', {
-            bytes: pcm.byteLength,
-            msSinceCallStart: Date.now() - callStartedAt,
-          });
-        })
-        .catch((e) => {
-          console.error('[agent] greeting pcm warmup failed', e);
-          diag.push('error', 'greeting_pcm_warm_failed', {
-            message: e instanceof Error ? e.message : String(e),
-          });
-        });
-    }
-
-    const isU3RtProStt = isU3RtProSttModel(inferenceSttModel);
-    // u3-rt-pro: LiveKit turn detector + tuned silence — STT-owned EOT interrupts TTS mid-reply.
-    const useSttNeuralTurnDetection =
-      !isU3RtProStt && process.env.LIVEKIT_STT_NEURAL_TURN?.trim() === '1';
+    const useSttNeuralTurnDetection = process.env.LIVEKIT_STT_NEURAL_TURN?.trim() === '1';
     const latencyProfile = resolveSttLatencyProfile(
       useBuilderDemoStack
         ? process.env.LIVEKIT_TEST_STT_LATENCY_PROFILE?.trim() ||
@@ -997,7 +838,7 @@ export default defineAgent({
     const sttDomainPrompt =
       process.env.LIVEKIT_STT_DOMAIN_PROMPT?.trim() ||
       (testCall
-        ? 'Irish English phone calls to Hello Cara. Callers explore the AI assistant — no real shop hours, bookings, or business facts.'
+        ? 'Irish English phone calls to Hello Cara. Callers explore the AI assistant — no real shop hours or business facts.'
         : buildSttDomainPrompt(org.name, {
             niche: org.niche,
             businessType: org.agent_business_type,
@@ -1012,18 +853,6 @@ export default defineAgent({
     )
       ? Number.parseInt(process.env.LIVEKIT_STT_MAX_TURN_SILENCE_MS ?? '', 10)
       : silenceDefaults.maxTurnSilenceMs;
-    if (testCall && isU3RtProStt && !useBuilderDemoStack && !process.env.LIVEKIT_STT_MIN_TURN_SILENCE_MS?.trim()) {
-      sttMinTurnSilenceMs = Number.parseInt(
-        process.env.LIVEKIT_TEST_STT_MIN_TURN_SILENCE_MS ?? '400',
-        10,
-      );
-    }
-    if (testCall && isU3RtProStt && !useBuilderDemoStack && !process.env.LIVEKIT_STT_MAX_TURN_SILENCE_MS?.trim()) {
-      sttMaxTurnSilenceMs = Number.parseInt(
-        process.env.LIVEKIT_TEST_STT_MAX_TURN_SILENCE_MS ?? '1400',
-        10,
-      );
-    }
     const sttEotConfidence = Number.isFinite(
       Number.parseFloat(process.env.LIVEKIT_STT_EOT_CONFIDENCE ?? ''),
     )
@@ -1039,8 +868,6 @@ export default defineAgent({
     const resolvedLlm = createCaraLlm({
       inferenceLlmModel,
       profileLlmProvider: testProfile?.llm_provider ?? null,
-      // LiveKit Inference models (Gemma 4, gpt-5.6-luna, etc.) must not route via OpenRouter.
-      forceGateway: useBuilderDemoStack || bareLiveKitRetailLane,
       reasoningEffort: useBuilderDemoStack ? 'low' : undefined,
       temperature: llmTemperature,
       maxCompletionTokens: llmMaxCompletionTokens,
@@ -1075,10 +902,14 @@ export default defineAgent({
       llm: resolvedLlm.label,
       tts: ttsConfig.label,
       voiceId: activeVoiceId,
-      ttsProvider: ttsConfig.provider,
+      ttsProvider: 'cartesia-inference',
       endpointMinMs: endpointMinMs ?? null,
       endpointMaxMs: endpointMaxMs ?? null,
     };
+
+    if (conversationalRetailLine) {
+      assertExpectedStack(pipelineLabel);
+    }
 
     const configSnapshot = {
       testProfile: testProfile
@@ -1095,14 +926,10 @@ export default defineAgent({
       llmProvider: resolvedLlm.provider,
       llmTemperature,
       llmMaxCompletionTokens,
-      elevenStreamingLatency:
-        Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '1', 10) || 1,
-      elevenEncoding,
       endpointMode,
       interruptionMode,
       latencyProfile,
       sttLanguage: inferenceSttLanguage,
-      greetingCacheKey: greetingCacheKey ?? null,
     };
 
     console.info('[agent] pipeline', pipelineLabel);
@@ -1124,21 +951,11 @@ export default defineAgent({
 
     setActiveTtsModelForSanitizer(activeTtsModel);
 
-    const sessionTts = useCartesiaInference
-      ? new inference.TTS({
-          model: ttsConfig.model,
-          voice: ttsConfig.voiceId,
-          language: ttsConfig.language,
-        })
-      : createElevenLabsTts({
-          apiKey: elevenApiKey,
-          voiceId: elevenVoiceId,
-          model: elevenModel as elevenlabs.TTSModels,
-          encoding: elevenEncoding as elevenlabs.TTSEncoding,
-          baseURL: elevenBaseUrl,
-          streamingLatency: Number.parseInt(process.env.ELEVEN_STREAMING_LATENCY ?? '1', 10) || 1,
-          voiceSettings: resolveElevenVoiceSettings(),
-        });
+    const sessionTts = new inference.TTS({
+      model: ttsConfig.model,
+      voice: ttsConfig.voiceId,
+      language: ttsConfig.language,
+    });
 
     const session = new voice.AgentSession<CaraAgentUserData>({
       stt: sessionStt,
@@ -1211,9 +1028,8 @@ export default defineAgent({
     let replyRetryUsedForTurn = false;
     let generateReplyInFlight = false;
     let generateReplyStartedAt = 0;
-    let allowBookingAutomation = false;
+    let conversationStarted = false;
     let greetingPlaybackStarted = false;
-    let greetingAudioSpeechPending = 0;
     let greetingTranscriptLogged = false;
     let greetingPlayoutComplete = false;
     let lastAssistantSpeechHandle: {
@@ -1271,12 +1087,16 @@ export default defineAgent({
         const items = session.history.items;
         for (let i = items.length - 1; i >= 0; i -= 1) {
           const chatItem = items[i];
-          if (chatItem.type !== 'message' || chatItem.role !== 'assistant') continue;
+          if (!chatItem || chatItem.type !== 'message') continue;
+          const message = chatItem as {
+            role?: string;
+            textContent?: string;
+            rawTextContent?: string;
+          };
+          if (message.role !== 'assistant') continue;
           const text =
-            chatItem.textContent?.trim() ||
-            ('rawTextContent' in chatItem
-              ? (chatItem as { rawTextContent?: string }).rawTextContent?.trim()
-              : undefined);
+            message.textContent?.trim() ||
+            message.rawTextContent?.trim();
           if (text && text.length > 3) return text;
         }
       } catch {
@@ -1324,10 +1144,6 @@ export default defineAgent({
       if (isDuplicateAssistantUtterance(key, at)) return false;
       const note = interrupted ? ' [cut off]' : '';
       appendTranscriptLine(at, `Assistant: ${trimmed}${note}`);
-      debugSessionLog('E', 'agent.ts:appendAssistantTranscriptLine', 'assistant_transcript_appended', {
-        textLen: trimmed.length,
-        interrupted,
-      });
       return true;
     };
 
@@ -1497,7 +1313,7 @@ export default defineAgent({
           errorMessage: msg,
           modelLabel:
             stage === 'tts'
-              ? String(elevenModel)
+              ? String(activeTtsModel)
               : stage === 'llm'
                 ? resolvedLlm.label
                 : inferenceSttModel,
@@ -1520,7 +1336,7 @@ export default defineAgent({
     const scheduleCallerReplyNudge = () => {
       if (bareLiveKitRetailLane) return;
       clearCallerReplyNudgeTimer();
-      if (testCall || !allowBookingAutomation || isCallEnding()) return;
+      if (testCall || !conversationStarted || isCallEnding()) return;
       if (conversationalRetailLine && !session.userData.sessionFlags.retailOpeningComplete) return;
       const epoch = replyTurnEpoch;
       const utterance = lastCallerUtterance.trim();
@@ -1564,8 +1380,8 @@ export default defineAgent({
     };
 
     const settleGreetingPhase = (reason: string) => {
-      if (allowBookingAutomation) return;
-      allowBookingAutomation = true;
+      if (conversationStarted) return;
+      conversationStarted = true;
       const graceMs =
         reason === 'greeting_interrupted'
           ? postGreetingInterruptGraceMs
@@ -1614,7 +1430,7 @@ export default defineAgent({
           const handle = sayPrepared(
             session,
             buildDemoCallClosingLine(
-              callSidAttr,
+              callSidAttr ?? '',
               inferDemoCallerFirstName(callerLines),
               localHour,
             ),
@@ -1671,8 +1487,8 @@ export default defineAgent({
       opts?: { correcting?: boolean; apologise?: boolean },
     ): boolean => {
       if (session.userData.sessionFlags.endPhoneCallUsed) return false;
-      const reply = buildRetailHoursSpokenReply(org.business_hours, questionText, bookingTz, {
-        correcting: opts?.correcting,
+      const reply = buildRetailHoursSpokenReply(org.business_hours, questionText, orgTz, {
+        ...(opts?.correcting !== undefined ? { correcting: opts.correcting } : {}),
       });
       if (!reply) return false;
       let line = reply;
@@ -1701,9 +1517,6 @@ export default defineAgent({
       noteCallerTurnNeedsReply(text);
       if (session.userData.sessionFlags.awaitingAnythingElseReply) {
         session.userData.sessionFlags.callerRespondedAfterAnythingElse = true;
-      }
-      if (soundsLikeCancelOrChangeAppointment(text)) {
-        session.userData.sessionFlags.bookingRouteId = null;
       }
       if (testCall) {
         const flags = session.userData.sessionFlags;
@@ -1755,16 +1568,13 @@ export default defineAgent({
         !testCall &&
         !bareLiveKitRetailLane &&
         session.userData.sessionFlags.likelySttGarble &&
-        soundsLikeBookingIntent(text) &&
-        allowBookingAutomation
+        conversationStarted
       ) {
         void safeGenerateReply(
-          'That last utterance may be STT garble — do not treat it as a confirmed booking request. Ask one short clarifying question about what they need.',
+          'That last utterance may be STT garble — ask one short clarifying question about what they need.',
         );
       }
-      if (callerPivotedFromSmsConsent(text, { awaitingSmsConsent: session.userData.sessionFlags.bookingLinkSendInFlight })) {
-        session.userData.sessionFlags.bookingRouteId = null;
-        diag.push('warn', 'booking_consent_pivot', { snippet: text.slice(0, 120) });
+      if (callerPivotedFromSmsConsent(text, { awaitingSmsConsent: false })) {
         if (!conversationalRetailLine) {
           steerReply(
             'The caller pivoted away from SMS consent — stop treating their last line as yes/no to texting. Answer their new question or offer a callback.',
@@ -1799,12 +1609,11 @@ export default defineAgent({
     const shouldSuppressFillers = () => {
       const f = session.userData.sessionFlags;
       return (
-        !allowBookingAutomation ||
+        !conversationStarted ||
         isCallEnding() ||
         f.askedAnythingElse ||
         f.awaitingAnythingElseReply ||
-        f.closingCall ||
-        f.bookingLinkSendInFlight
+        f.closingCall
       );
     };
 
@@ -1851,7 +1660,6 @@ export default defineAgent({
     const maybeCloseAfterAnythingElse = (text: string) => {
       const flags = session.userData.sessionFlags;
       if (testCall || conversationalRetailLine || !flags.askedAnythingElse || !callerWindingDownCall(text)) return;
-      if (flags.bookingLinkSendInFlight) return;
       if (flags.endPhoneCallUsed) return;
 
       flags.callerRespondedAfterAnythingElse = true;
@@ -1953,7 +1761,6 @@ export default defineAgent({
       if (isCallEnding()) return;
       const f = session.userData.sessionFlags;
       if (f.askedAnythingElse && f.callerRespondedAfterAnythingElse) return;
-      if (f.bookingLinkSendInFlight) return;
       if (callerAwaitingReply) return;
       if (inListenGrace() && !demoExperienceStack) return;
       deadAirTimer = setTimeout(() => {
@@ -1964,7 +1771,6 @@ export default defineAgent({
           if (inListenGrace() && !demoExperienceStack) return;
           if (session.agentState !== 'listening' || session.userState === 'speaking') return;
           if (deadAirPromptCount >= deadAirMaxPrompts) {
-            if (session.agentState === 'speaking' || session.agentState === 'thinking') return;
             if (callerAwaitingReply) return;
             gracefulDisconnect();
             return;
@@ -2005,7 +1811,7 @@ export default defineAgent({
       }
       if (ev.newState === 'speaking') {
         userStoppedSpeakingAt = null;
-        if (ev.oldState !== 'speaking' && allowBookingAutomation) {
+        if (ev.oldState !== 'speaking' && conversationStarted) {
           if (session.agentState === 'thinking' || session.agentState === 'speaking') {
             bumpReplyTurn('caller_barge_in');
           } else if (session.agentState === 'listening') {
@@ -2023,7 +1829,7 @@ export default defineAgent({
       } else if (ev.newState === 'listening') {
         clearResponseFillerTimer();
         clearCallerReplyNudgeTimer();
-        if (ev.oldState === 'speaking' && allowBookingAutomation) {
+        if (ev.oldState === 'speaking' && conversationStarted) {
           flushPendingAssistantTranscript(Date.now());
         }
       }
@@ -2072,14 +1878,14 @@ export default defineAgent({
           return;
         }
         if (sh.interrupted) {
-          if (!allowBookingAutomation) {
+          if (!conversationStarted) {
             settleGreetingPhase('greeting_interrupted');
           } else if (programmaticSpeechPending > 0) {
             programmaticSpeechPending -= 1;
           }
           return;
         }
-        if (!allowBookingAutomation) {
+        if (!conversationStarted) {
           settleGreetingPhase('greeting_completed');
         }
         const handle = sh as unknown as { text?: string; source?: string };
@@ -2090,10 +1896,6 @@ export default defineAgent({
               ? handle.source
               : '';
         if (!spoken.trim()) {
-          if (greetingAudioSpeechPending > 0) {
-            greetingAudioSpeechPending -= 1;
-            return;
-          }
           if (programmaticSpeechPending > 0) {
             programmaticSpeechPending -= 1;
             return;
@@ -2101,9 +1903,6 @@ export default defineAgent({
           if (pendingLlmTtsTranscript.trim()) {
             appendAssistantTranscriptLine(pendingLlmTtsTranscript.trim(), Date.now());
             pendingLlmTtsTranscript = '';
-            debugSessionLog('B', 'agent.ts:SpeechCreated', 'transcript_from_tts_tap', {
-              source: 'pendingLlmTtsTranscript',
-            });
             return;
           }
           // SpeechHandle text/source can be empty even when TTS played; chat ctx has the line.
@@ -2113,27 +1912,11 @@ export default defineAgent({
             return;
           }
           if (flushPendingAssistantTranscript(Date.now())) {
-            debugSessionLog('C', 'agent.ts:SpeechCreated', 'transcript_flushed', {
-              source: 'flushPendingAssistantTranscript',
-            });
             return;
           }
           if (lastAssistantSpokeAt > 0 && Date.now() - lastAssistantSpokeAt < 8000) {
-            debugSessionLog('D', 'agent.ts:SpeechCreated', 'empty_speech_suppressed_recent_speak', {
-              msSinceSpeak: Date.now() - lastAssistantSpokeAt,
-              pendingTtsLen: pendingLlmTtsTranscript.length,
-              historyAssistantLen: getLatestAssistantChatText().length,
-            });
             return;
           }
-          debugSessionLog('A', 'agent.ts:SpeechCreated', 'empty_speech_handle', {
-            pendingTtsLen: pendingLlmTtsTranscript.length,
-            lastAssistantLen: lastAssistantChatText.length,
-            historyAssistantLen: getLatestAssistantChatText().length,
-            historyAssistantCount: session.history.items.filter(
-              (i) => i.type === 'message' && i.role === 'assistant',
-            ).length,
-          });
           console.warn('[agent] empty_speech_handle', {
             userState: session.userState,
             agentState: session.agentState,
@@ -2167,10 +1950,6 @@ export default defineAgent({
       const text = (item.textContent?.trim() || rawAssistantText || '').trim();
       if (!text) {
         if (role === 'assistant') {
-          debugSessionLog('A', 'agent.ts:ConversationItemAdded', 'assistant_item_empty_text', {
-            hasTextContent: Boolean(item.textContent?.trim()),
-            rawLen: rawAssistantText?.length ?? 0,
-          });
         }
         return;
       }
@@ -2211,10 +1990,6 @@ export default defineAgent({
         flags.anythingElseAskCount += 1;
         flags.callerRespondedAfterAnythingElse = false;
         clearAllGuardTimers();
-        debugSessionLog('F', 'agent.ts:ConversationItemAdded', 'anything_else_asked', {
-          count: flags.anythingElseAskCount,
-          snippet: text.slice(0, 80),
-        });
       }
       if (
         role === 'assistant' &&
@@ -2333,7 +2108,7 @@ export default defineAgent({
         if (lineMatchesGreeting(text, playbackGreetingText) && greetingTranscriptLogged) {
           return;
         }
-        if (!allowBookingAutomation && lineMatchesGreeting(text, playbackGreetingText)) {
+        if (!conversationStarted && lineMatchesGreeting(text, playbackGreetingText)) {
           return;
         }
         appendAssistantTranscriptLine(text, ev.createdAt, item.interrupted);
@@ -2346,9 +2121,6 @@ export default defineAgent({
         if (call.name === 'endPhoneCall') {
           session.userData.sessionFlags.closingCall = true;
           clearAllGuardTimers();
-          debugSessionLog('G', 'agent.ts:FunctionToolsExecuted', 'endPhoneCall_invoked', {
-            conversationalRetailLine,
-          });
         } else if (SLOW_TOOL_ACK_NAMES.has(call.name)) {
           scheduleResponseFillerForSlowWork();
         }
@@ -2418,9 +2190,6 @@ export default defineAgent({
         flushPendingAssistantTranscript(Date.now());
         const syncedFromHistory = syncAssistantTranscriptFromHistory(Date.now());
         if (syncedFromHistory > 0) {
-          debugSessionLog('C', 'agent.ts:call_close', 'history_sync_appended', {
-            count: syncedFromHistory,
-          });
         }
 
         durationSeconds = Math.max(0, Math.round((Date.now() - callStartedAt) / 1000));
@@ -2449,10 +2218,6 @@ export default defineAgent({
         ) {
           console.warn('[agent] transcript_capture_incomplete', transcriptCompleteness);
           diag.push('warn', 'transcript_capture_incomplete', transcriptCompleteness);
-          debugSessionLog('E', 'agent.ts:call_close', 'transcript_capture_incomplete', {
-            ...transcriptCompleteness,
-            transcriptLineCount: transcriptParts.length,
-          });
         }
 
         mirrorLatestCall({
@@ -2588,8 +2353,8 @@ export default defineAgent({
             inferenceLlmModel,
             actionTicketCreated: ud.sessionFlags.actionTicketCreated,
             businessHours: org.business_hours,
-            conversationalRetailLine,
-            routesCatalog: retailRoutesCatalog,
+            ...(conversationalRetailLine ? { conversationalRetailLine: true } : {}),
+            ...(retailRoutesCatalog !== undefined ? { routesCatalog: retailRoutesCatalog } : {}),
           });
           transcriptReview = pp.transcriptReview ? redactPii(pp.transcriptReview) : null;
           aiSummary = pp.aiSummary ? redactPii(pp.aiSummary) : presetAiSummary;
@@ -2744,7 +2509,7 @@ export default defineAgent({
                     type: action.type,
                     callerName: action.callerName,
                     summary: action.summary,
-                    routeId: action.routeId,
+                    ...(action.routeId !== undefined ? { routeId: action.routeId } : {}),
                   }
                 : {
                     type: action.type,
@@ -2828,20 +2593,11 @@ export default defineAgent({
           ? tapLlmTextStreamForTranscript(text, (spoken) => {
               pendingLlmTtsTranscript = spoken;
               lastAssistantChatText = spoken;
-              debugSessionLog('B', 'agent.ts:ttsNode', 'llm_tts_text_captured', {
-                textLen: spoken.length,
-              });
             })
           : text;
         return voice.Agent.default.ttsNode(
           this,
-          buildTtsNodeInputStream(ttsInput, {
-            provider: useCartesiaInference ? 'cartesia-inference' : 'elevenlabs',
-            ttsModel: activeTtsModel,
-            // Sentence-only buffering — comma early-flush caused staccato / letter-by-letter turbo TTS on demo line.
-            earlyFlush: false,
-            singleUtterance,
-          }),
+          buildTtsNodeInputStream(ttsInput, { singleUtterance }),
           modelSettings,
         );
       }
@@ -2855,17 +2611,6 @@ export default defineAgent({
         conversationalRetailLine,
       }),
     });
-
-    if (conversationalRetailLine && greetingCacheWarmPromise) {
-      try {
-        await Promise.race([
-          greetingCacheWarmPromise,
-          new Promise<void>((resolve) => setTimeout(resolve, 2500)),
-        ]);
-      } catch {
-        /* greeting warm is best-effort */
-      }
-    }
 
     await session.start({ agent, room: ctx.room });
     if (!bareLiveKitRetailLane) {
@@ -2909,151 +2654,49 @@ export default defineAgent({
       if (openingPauseMs > 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, openingPauseMs));
       }
-      const greetingTtsModel =
-        process.env.GREETING_TTS_MODEL?.trim() || activeTtsModel;
-      const greetingUsesV3 = isElevenV3Model(greetingTtsModel);
-      const GREETING_CACHE_WAIT_MS = conversationalRetailLine
-        ? 2000
-        : greetingUsesV3
-          ? 500
-          : 450;
-      void greetingCacheWarmPromise?.catch(() => undefined);
 
-      const resolveGreetingPcm = async (): Promise<Buffer | null> => {
-        if (!greetingCacheKey) return null;
-        const cached = await loadCachedGreetingPcm(greetingCacheKey);
-        if (cached?.byteLength) return cached;
-        if (!greetingCacheWarmPromise) return null;
-        try {
-          await Promise.race([
-            greetingCacheWarmPromise,
-            new Promise<void>((_, reject) =>
-              setTimeout(() => reject(new Error('greeting_cache_wait_timeout')), GREETING_CACHE_WAIT_MS),
-            ),
-          ]);
-        } catch {
-          return null;
-        }
-        return loadCachedGreetingPcm(greetingCacheKey);
-      };
-
-      const playLiveTtsGreeting = async () => {
-        if (greetingPlayoutComplete || greetingPlaybackStarted || !callerStillConnected()) return;
+      if (callerStillConnected()) {
         greetingPlaybackStarted = true;
         try {
-        agent.singleUtteranceTtsNext = true;
-        const handle = sayPrepared(session, playbackGreetingText, {
-          greeting: true,
-          greetingCommaFlow: false,
-          greetingRetailOpening: conversationalRetailLine,
-          addToChatCtx: false,
-          allowInterruptions: demoExperienceStack,
-        });
-        greetingPlayedFlag = true;
-        greetingSource = 'live_tts';
-        latencyTracker.recordGreetingPlayback();
-        console.info('[agent] greeting_playback', {
-          source: 'live_tts',
-          msSinceCallStart: Date.now() - callStartedAt,
-        });
-        diag.push('info', 'greeting_playback', {
-          source: 'live_tts',
-          msSinceCallStart: Date.now() - callStartedAt,
-        });
-        try {
-          await waitForSpeechHandlePlayout(handle);
-        } catch {
-          /* playout wait best-effort */
-        }
-        greetingPlayoutComplete = true;
-        speakOptionalAiDisclosure();
+          agent.singleUtteranceTtsNext = true;
+          const handle = sayPrepared(session, playbackGreetingText, {
+            greeting: true,
+            greetingCommaFlow: false,
+            greetingRetailOpening: conversationalRetailLine,
+            addToChatCtx: false,
+            allowInterruptions: demoExperienceStack,
+          });
+          greetingPlayedFlag = true;
+          greetingSource = 'live_tts';
+          latencyTracker.recordGreetingPlayback();
+          console.info('[agent] greeting_playback', {
+            source: 'live_tts',
+            msSinceCallStart: Date.now() - callStartedAt,
+          });
+          diag.push('info', 'greeting_playback', {
+            source: 'live_tts',
+            msSinceCallStart: Date.now() - callStartedAt,
+          });
+          try {
+            await waitForSpeechHandlePlayout(handle);
+          } catch {
+            /* playout wait best-effort */
+          }
+          greetingPlayoutComplete = true;
+          speakOptionalAiDisclosure();
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           if (!msg.includes('not running')) {
             console.error('[agent] live greeting play failed', e);
           }
         }
-      };
-
-      const cachedPcm = await resolveGreetingPcm();
-
-      if (cachedPcm?.byteLength) {
-        let fallbackUsed = false;
-        try {
-          if (!callerStillConnected()) {
-            console.warn('[agent] greeting_skipped — caller disconnected before playback');
-          } else {
-          const sampleRate = pcmSampleRateFromEncoding(elevenEncoding);
-          // PCM-only playback — never pass spoken text or TTS runs in parallel (echoey double audio).
-          const handle = session.say('', {
-            audio: pcmToAudioFrameStream(cachedPcm, sampleRate),
-            addToChatCtx: false,
-            allowInterruptions: demoExperienceStack,
-          });
-          greetingAudioSpeechPending += 1;
-          greetingPlaybackStarted = true;
-          greetingPlayedFlag = true;
-          greetingSource = 'cached_pcm';
-          latencyTracker.recordGreetingPlayback();
-          console.info('[agent] greeting_playback', {
-            source: 'cached_pcm',
-            msSinceCallStart: Date.now() - callStartedAt,
-          });
-          diag.push('info', 'greeting_playback', {
-            source: 'cached_pcm',
-            msSinceCallStart: Date.now() - callStartedAt,
-          });
-
-          const watchdog = setTimeout(() => {
-            if (greetingPlayoutComplete || fallbackUsed) return;
-            if (handle.done()) {
-              greetingPlayoutComplete = true;
-              return;
-            }
-            if (session.agentState !== 'speaking' && !fallbackUsed) {
-              fallbackUsed = true;
-              console.warn('[agent] greeting_playback_fallback', {
-                reason: 'no_speaking_state',
-                msSinceCallStart: Date.now() - callStartedAt,
-              });
-              try {
-                session.interrupt();
-              } catch {
-                /* ignore */
-              }
-              playLiveTtsGreeting();
-            }
-          }, GREETING_PLAYBACK_FALLBACK_MS);
-
-          try {
-            await waitForSpeechHandlePlayout(handle);
-            greetingPlayoutComplete = true;
-            speakOptionalAiDisclosure();
-          } catch (e) {
-            console.error('[agent] cached greeting playout failed — live TTS fallback', e);
-            if (!fallbackUsed && !greetingPlayoutComplete && session.agentState !== 'speaking') {
-              fallbackUsed = true;
-              await playLiveTtsGreeting();
-            }
-          } finally {
-            clearTimeout(watchdog);
-          }
-          }
-        } catch (e) {
-          console.error('[agent] cached greeting play failed — live TTS fallback', e);
-          if (callerStillConnected()) {
-            await playLiveTtsGreeting();
-          }
-        }
-      } else if (callerStillConnected()) {
-        await playLiveTtsGreeting();
       }
 
       if (greetingIncludesAiDisclosure(greetingText) || aiDisclosure.disabled) {
         session.userData.disclosureConfirmed = true;
       }
     } else {
-      allowBookingAutomation = true;
+      conversationStarted = true;
       const openInstructions = callPersona
         ? `The caller just connected. Open with ONE short greeting: "${callPersona.greeting}". Include the AI and call-recording notice exactly as specified in your instructions. Max 35 words.`
         : `The caller just connected. Speak first with ONE short greeting for ${org.name}. Max 35 words. Include the AI and call-recording notice exactly as specified in your instructions.`;
