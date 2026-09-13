@@ -782,7 +782,7 @@ export class CaraTools {
 
   readonly searchWeeklyOffers = llm.tool({
     description:
-      'Look up whether a product is on offer this week and get the synced price. Use when the caller asks if something is on offer, this week\'s price, or butcher specials. Quote only what this tool returns.',
+      'Look up synced **meat** weekly promotions (butcher counter or pre-pack meat aisle). Use for steak, chicken, rashers, sausages, butcher specials — NOT for grocery (cereal, Weetabix, mayo, crisps). For grocery use searchSuperValuProducts. Quote only what this tool returns.',
     parameters: z.object({
       query: z
         .string()
@@ -792,6 +792,21 @@ export class CaraTools {
     }),
     execute: async ({ query }, { ctx }) => {
       const ud = readCaraUserData(ctx);
+      const trimmed = query.trim();
+      if (
+        /weetabix|cereal|bread|milk|yogurt|crisps|tayto|mayo|mayonnaise|ketchup|tea|coffee|biscuits|grocery/i.test(
+          trimmed,
+        ) &&
+        !/meat|steak|striploin|sirloin|chicken|lamb|pork|butcher|rashers|sausage|pudding|beef/i.test(
+          trimmed,
+        )
+      ) {
+        return {
+          ok: false,
+          message:
+            'Weekly offers sync is meat promotions only — not grocery. Use searchSuperValuProducts for this product instead.',
+        };
+      }
       if (!voiceWebhooksConfigured()) {
         return {
           ok: false,
@@ -802,11 +817,11 @@ export class CaraTools {
 
       const payload: SearchWeeklyOffersPayload = {
         called_number: ud.calledNumber,
-        query: query.trim(),
+        query: trimmed,
         channel:
-          /butcher|meat counter|the counter|butchers/i.test(query)
+          /butcher|meat counter|the counter|butchers/i.test(trimmed)
             ? 'butcher_counter'
-            : /pre\s*-?\s*pack|packaged|quick fry|meat aisle/i.test(query)
+            : /pre\s*-?\s*pack|packaged|quick fry|meat aisle/i.test(trimmed)
               ? 'prepack'
               : undefined,
       };
