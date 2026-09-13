@@ -137,7 +137,7 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /after hang-up/i);
     assert.match(prompt, /Every turn must include spoken words/i);
     assert.match(prompt, /Never.*would you like to place an order/i);
-    assert.match(prompt, /searchWeeklyOffers.*searchSuperValuProducts.*endPhoneCall/s);
+    assert.match(prompt, /searchSuperValuProducts.*endPhoneCall/s);
     assert.match(prompt, /Ignore takeCallbackMessage, transferToTeam/i);
     assert.doesNotMatch(prompt, /Hello Cara demo line/i);
     assert.doesNotMatch(prompt, /## Your manner on this call/i);

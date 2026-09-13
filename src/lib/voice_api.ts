@@ -320,7 +320,7 @@ export type SearchWeeklyOffersPayload = {
   called_number: string;
   query: string;
   channel?: 'butcher_counter' | 'prepack';
-  service_area?: 'butcher' | 'deli' | 'produce' | 'bakery' | 'off_licence' | 'grocery';
+  service_area?: 'butcher' | 'deli' | 'fish' | 'produce' | 'bakery' | 'off_licence' | 'grocery';
   fulfilment?: 'counter' | 'prepack';
 };
 
@@ -387,6 +387,9 @@ export type SearchSupervaluProductsMatch = {
   score: number;
   quote_text: string;
   is_on_offer?: boolean;
+  is_alcohol?: boolean;
+  service_area?: string | null;
+  fulfilment?: string | null;
 };
 
 export async function postSearchSupervaluProducts(

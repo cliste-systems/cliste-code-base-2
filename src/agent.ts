@@ -180,7 +180,6 @@ const SLOW_TOOL_ACK_NAMES = new Set([
   'sendRoutingLink',
   'sendRoutingFile',
   'searchBusinessFile',
-  'searchWeeklyOffers',
   'searchSuperValuProducts',
   'takeCallbackMessage',
   'transferToTeam',

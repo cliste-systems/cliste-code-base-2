@@ -9,7 +9,6 @@ describe('CaraTools.toolContext', () => {
     assert.deepEqual(Object.keys(tools).sort(), [
       'endPhoneCall',
       'searchSuperValuProducts',
-      'searchWeeklyOffers',
     ]);
   });
 

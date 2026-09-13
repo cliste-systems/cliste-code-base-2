@@ -31,7 +31,6 @@ import {
   staffSummaryLooksLikeSpeechOnlyQuestion,
 } from './conversational_retail_policy.js';
 import {
-  inferWeeklyOffersListIntent,
   resolveCatalogSearchIntent,
   type CatalogSearchIntent,
 } from './catalog_search_intent.js';
@@ -41,12 +40,10 @@ import {
   postSendCallerEmail,
   postSearchBusinessFile,
   postSearchSupervaluProducts,
-  postSearchWeeklyOffers,
   postSendSms,
   voiceWebhooksConfigured,
   type SearchBusinessFilePayload,
   type SearchSupervaluProductsPayload,
-  type SearchWeeklyOffersPayload,
 } from './voice_api.js';
 
 const SMS_FAILURE_MESSAGE =
@@ -792,143 +789,22 @@ export class CaraTools {
     },
   });
 
-  readonly searchWeeklyOffers = llm.tool({
-    description:
-      'Look up synced SuperValu weekly promotions. Use when they ask ON OFFER / this week / on special / list offers. Set service_area and fulfilment from what the caller means (deli counter vs butcher/meat counter are different). Quote only what this tool returns — €/kg for counter, pack price for pre-pack.',
-    parameters: z.object({
-      query: z
-        .string()
-        .min(2)
-        .max(120)
-        .describe(
-          'Product name or browse term — e.g. "ham", "striploin", "wine", or "weekly offers" to list',
-        ),
-      service_area: z
-        .enum(['butcher', 'deli', 'produce', 'bakery', 'off_licence', 'grocery'])
-        .optional()
-        .describe(
-          'Store area the caller means: deli = deli counter/sliced meats; butcher = fresh meat counter (steaks, rashers, etc.); off_licence = wine/beer/spirits',
-        ),
-      fulfilment: z
-        .enum(['counter', 'prepack'])
-        .optional()
-        .describe(
-          'ONLY set when caller explicitly says counter / by weight / sliced OR pre-pack / packets / packaged. Omit for broad product questions like "steaks on offer".',
-        ),
-    }),
-    execute: async ({ query, service_area, fulfilment }, { ctx }) => {
-      const ud = readCaraUserData(ctx);
-      const trimmed = query.trim();
-      if (!voiceWebhooksConfigured()) {
-        return {
-          ok: false,
-          message:
-            'Weekly offer lookup is not available on this call. Do not guess a price — offer a team callback or take a message.',
-        };
-      }
-
-      const payload: SearchWeeklyOffersPayload = {
-        called_number: ud.calledNumber,
-        query: trimmed,
-        ...(service_area ? { service_area } : {}),
-        ...(fulfilment ? { fulfilment } : {}),
-      };
-      let result = await postSearchWeeklyOffers(payload);
-
-      if (
-        result.ok &&
-        result.matches.length === 0 &&
-        fulfilment &&
-        !inferWeeklyOffersListIntent(trimmed)
-      ) {
-        // #region agent log
-        fetch('http://127.0.0.1:7662/ingest/95496c05-1739-4e32-b7be-319b56b1c5b5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0f50f3'},body:JSON.stringify({sessionId:'0f50f3',runId:'steak-fix',hypothesisId:'FULFILMENT',location:'cara_tools.ts:searchWeeklyOffers-retry',message:'retry weekly offers without fulfilment filter',data:{query:trimmed,service_area:service_area??null,fulfilment,firstMatchCount:0},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
-        result = await postSearchWeeklyOffers({
-          ...payload,
-          fulfilment: undefined,
-        });
-      }
-
-      if (
-        result.ok &&
-        result.matches.length === 0 &&
-        !inferWeeklyOffersListIntent(trimmed) &&
-        !service_area &&
-        !fulfilment
-      ) {
-        result = await postSearchWeeklyOffers({
-          ...payload,
-          query: 'weekly offers',
-        });
-      }
-
-      if (!result.ok) {
-        return {
-          ok: false,
-          message:
-            result.error ??
-            'Could not search weekly offers right now. Offer a team callback — do not guess.',
-        };
-      }
-
-      if (result.clarificationHint) {
-        return {
-          ok: true,
-          message: result.clarificationHint,
-          matches: [],
-        };
-      }
-
-      if (result.matches.length === 0) {
-        const areaLabel = service_area
-          ? `${service_area}${fulfilment ? ` (${fulfilment})` : ''}`
-          : null;
-        const channelHint = areaLabel
-          ? `No matching offer found for ${areaLabel} in this week's sync.`
-          : inferWeeklyOffersListIntent(trimmed)
-            ? 'No weekly offers are synced right now.'
-            : `No matching offer found for "${trimmed}" in this week's sync. If they asked generally what offers you have, retry with query "weekly offers".`;
-        return {
-          ok: true,
-          message: `${channelHint} Do not invent a price — offer a team callback if needed.`,
-          matches: [],
-        };
-      }
-
-      const formatted = result.matches
-        .map((match) => match.quote_text.trim())
-        .join('\n\n');
-
-      const hasAlcohol = result.matches.some((match) => match.is_alcohol === true);
-      let alcoholNote = '';
-      if (hasAlcohol && !ud.sessionFlags.alcoholAgeDisclaimerGiven) {
-        ud.sessionFlags.alcoholAgeDisclaimerGiven = true;
-        alcoholNote = `\n\n${CARA_ALCOHOL_AGE_DISCLAIMER_ONCE}`;
-      }
-
-      return {
-        ok: true,
-        message: `Use only these synced offer quotes — speak prices in natural Irish words exactly as given (e.g. four euro, three for ten euro, was six euro). Do not mention payment on the phone.${alcoholNote ? ' Include the one-time age reminder once in your reply.' : ''}\n\n${formatted}${alcoholNote}`,
-        matches: result.matches,
-      };
-    },
-  });
-
   readonly searchSuperValuProducts = llm.tool({
     description:
-      'Look up SuperValu national range products — stock, sizes, and regular pricing. Use for "do you stock / do you sell / how much is it" when they are NOT asking about weekly offers. If they ask ON OFFER / this week / on special, use searchWeeklyOffers instead. Quote exactly what this tool returns.',
+      'Look up SuperValu products — stock, regular price, and synced weekly offers. Use for do you stock / how much / on offer / this week / on special. Pass the caller\'s product words (e.g. "steak", "salmon darnes", "McVitie\'s biscuits") — never generic "weekly offers". Quote only what this tool returns; if it asks you to clarify counter vs pre-pack, ask one short question before quoting.',
     parameters: z.object({
       query: z
         .string()
         .min(2)
         .max(120)
-        .describe('Product to search — e.g. "McVitie\'s biscuits" or "Weetabix"'),
+        .describe(
+          'Caller\'s product words — e.g. "steak", "salmon darnes", "Skyr yogurt", "meat counter ham"',
+        ),
       intent: z
         .enum(['offer', 'price', 'stock'])
         .optional()
         .describe(
-          'offer = caller asking if on offer/this week/special; price = how much/cost; stock = do you stock/carry',
+          'offer = on offer/this week/special; price = how much/cost; stock = do you stock/carry',
         ),
     }),
     execute: async ({ query, intent: explicitIntent }, { ctx }) => {
@@ -947,6 +823,9 @@ export class CaraTools {
         explicitIntent: explicitIntent as CatalogSearchIntent | undefined,
         callerAskedAboutOffers: ud.sessionFlags.callerAskedAboutOffers,
       });
+      if (resolvedIntent === 'offer') {
+        ud.sessionFlags.callerAskedAboutOffers = true;
+      }
 
       const payload: SearchSupervaluProductsPayload = {
         called_number: ud.calledNumber,
@@ -977,7 +856,7 @@ export class CaraTools {
           ok: true,
           message:
             result.noMatchQuote ??
-            'No matching product found on the SuperValu range — do not claim we stock it. Offer a team callback to confirm.',
+            'No matching product found on the SuperValu range — do not claim we stock it or quote an offer from memory. Call this tool again with different product words if the caller clarifies.',
           matches: [],
         };
       }
@@ -986,9 +865,21 @@ export class CaraTools {
         .map((match) => match.quote_text.trim())
         .join('\n\n');
 
+      const hasAlcohol = result.matches.some((match) => match.is_alcohol === true);
+      let alcoholNote = '';
+      if (hasAlcohol && !ud.sessionFlags.alcoholAgeDisclaimerGiven) {
+        ud.sessionFlags.alcoholAgeDisclaimerGiven = true;
+        alcoholNote = `\n\n${CARA_ALCOHOL_AGE_DISCLAIMER_ONCE}`;
+      }
+
+      const offerPrefix =
+        resolvedIntent === 'offer'
+          ? 'Use only these synced offer quotes — speak prices in natural Irish words exactly as given. Do not mention payment on the phone. Never quote offers from memory.'
+          : 'Use this guidance — speak prices in natural Irish words exactly as given, in your own words. Never quote offers from memory.';
+
       return {
         ok: true,
-        message: `Use this guidance — speak prices in natural Irish words exactly as given (e.g. four euro seventy nine, three for ten euro), in your own words:\n\n${formatted}`,
+        message: `${offerPrefix}${alcoholNote ? ' Include the one-time age reminder once in your reply.' : ''}\n\n${formatted}${alcoholNote}`,
         matches: result.matches,
       };
     },
@@ -1063,7 +954,6 @@ export class CaraTools {
     if (options?.conversationalRetailLine) {
       return {
         endPhoneCall: this.endPhoneCall,
-        searchWeeklyOffers: this.searchWeeklyOffers,
         searchSuperValuProducts: this.searchSuperValuProducts,
       };
     }
