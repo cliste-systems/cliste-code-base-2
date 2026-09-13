@@ -274,7 +274,7 @@ ${routesBlock}
 3. **Confirm** — one warm line summarising what you captured for their errand.
 4. **Finish** — **Ending calls** above (yes/no check-in → thanks-for-calling + **endPhoneCall** when they are sorted).
 
-**Weekly offer questions** — use **searchWeeklyOffers**. If they ask **on offer / this week / special / list offers**, use this tool (query **"weekly offers"** to list, or the product name for a specific item). Quote spoken prices exactly as returned.
+**Weekly offer questions** — use **searchWeeklyOffers**. Covers **butcher counter**, **deli counter**, **produce**, **off-licence**, **bakery**, and **grocery** promos. If they ask **on offer / this week / special / list offers**, use this tool (query **"weekly offers"** to list, **"deli offers"** or **"carrolls ham"** for deli, **"wine offers"** for off-licence). Quote **€/kg for counter items** and **pack prices for pre-pack** exactly as returned — never mix deli counter and chilled-aisle prices.
 
 **Stock / range / regular price questions** — use **searchSuperValuProducts** when they ask **do you stock / do you sell / how much** without offer intent. Quote exactly what this tool returns.
 

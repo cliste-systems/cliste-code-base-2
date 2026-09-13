@@ -320,13 +320,18 @@ export type SearchWeeklyOffersPayload = {
   called_number: string;
   query: string;
   channel?: 'butcher_counter' | 'prepack';
+  service_area?: 'butcher' | 'deli' | 'produce' | 'bakery' | 'off_licence' | 'grocery';
+  fulfilment?: 'counter' | 'prepack';
 };
 
 export type SearchWeeklyOffersMatch = {
   id: string;
   product_name: string;
   department: string;
-  offer_channel?: 'butcher_counter' | 'prepack';
+  offer_channel?: 'butcher_counter' | 'prepack' | 'grocery';
+  service_area?: string;
+  fulfilment?: string;
+  is_alcohol?: boolean;
   current_price_eur: number;
   was_price_eur: number | null;
   discount_label: string | null;
