@@ -120,7 +120,8 @@ function normalizeGoodbyeText(text: string): string {
 export { buildWarmCallClosingLine, softenSpokenFarewell } from './natural_phrasing.js';
 
 export async function waitForAgentSpeechPlayout(
-  session: voice.AgentSession<EndCallUserData>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  session: voice.AgentSession<any>,
   recentHandle?: {
     done(): boolean;
     addDoneCallback: (cb: (sh: unknown) => void) => void;
@@ -151,13 +152,15 @@ export type EndCallUserData = {
 };
 
 export async function waitForSessionPlayout(
-  session: voice.AgentSession<EndCallUserData>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  session: voice.AgentSession<any>,
 ): Promise<void> {
   await waitForAgentSpeechPlayout(session);
 }
 
 export async function disconnectCallerLeg(
-  session: voice.AgentSession<EndCallUserData>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  session: voice.AgentSession<any>,
   ud: EndCallUserData,
   beforeAudio: () => Promise<void>,
 ): Promise<{ ok: boolean; message: string }> {

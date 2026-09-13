@@ -25,6 +25,7 @@ import {
 } from './supabase.js';
 import { insertActionTicket } from './action_tickets.js';
 import { playTypingSound } from './callback_audio.js';
+import { disconnectCallerLeg } from './end_call.js';
 import {
   isPlaceholderCallerName,
   staffSummaryLooksLikeSpeechOnlyQuestion,
@@ -884,7 +885,7 @@ export class CaraTools {
 
   readonly searchSuperValuProducts = llm.tool({
     description:
-      'Look up SuperValu national range products — prices, offer status, and stock guidance. When the caller asks if something is ON OFFER / this week / on special, set intent to "offer". When they ask HOW MUCH / price, set intent to "price". Otherwise use "stock". Quote exactly what this tool returns.',
+      'Look up SuperValu national range products — prices, offer status, and stock guidance. When the caller asks if something is ON OFFER / this week / on special, set intent to "offer". When they ask to LIST several grocery offers (milk, bread, crisps, chocolate, fruit), pass all categories in one query with intent "offer". Quote exactly what this tool returns.',
     parameters: z.object({
       query: z
         .string()
@@ -925,6 +926,10 @@ export class CaraTools {
         intent: resolvedIntent,
       };
       const result = await postSearchSupervaluProducts(payload);
+
+      // #region agent log
+      fetch('http://127.0.0.1:7662/ingest/95496c05-1739-4e32-b7be-319b56b1c5b5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0f50f3'},body:JSON.stringify({sessionId:'0f50f3',runId:'grocery-browse',hypothesisId:'H1',location:'cara_tools.ts:searchSuperValuProducts',message:'catalog tool result',data:{query:trimmed,resolvedIntent,matchCount:result.ok?result.matches.length:0,browseCategories:result.browseCategories??null,firstMatch:result.ok&&result.matches[0]?{productName:result.matches[0].product_name,isOnOffer:result.matches[0].is_on_offer}:null},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
 
       if (!result.ok) {
         return {
