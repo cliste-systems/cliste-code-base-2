@@ -863,7 +863,7 @@ export class CaraTools {
 
   readonly searchSuperValuProducts = llm.tool({
     description:
-      'Look up a product on the SuperValu national range — stock, price, and availability guidance. Use when the caller asks price, if you stock/sell/carry something — e.g. "what is Weetabix?" or "do you stock Heinz ketchup?". Quote prices and details only from what this tool returns.',
+      'Look up SuperValu national range products — prices, offer status, and stock guidance. Use for grocery questions: "is Weetabix on offer?", "how much is Cadbury Snack?", "do you stock Heinz ketchup?". Returns spoken offer prices (on offer at X, was Y) or regular prices — quote exactly what this tool returns.',
     parameters: z.object({
       query: z
         .string()
