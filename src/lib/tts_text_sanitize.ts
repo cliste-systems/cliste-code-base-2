@@ -32,8 +32,8 @@ const LEADING_ACK_BEFORE_NAME =
 
 /** Tricky terms → TTS-friendly spellings (word-boundary replacements). */
 const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
-  [/\bHello Cara\b/gi, 'Hello Kara'],
-  [/\bCara\b/g, 'Kara'],
+  [/\bHello Cara\b/gi, 'Hello Car-ah'],
+  [/\bCara\b/g, 'Car-ah'],
   [/\bKavanaghs\b/gi, 'Kavanahs'],
   [/\bGrafton\b/gi, 'Graft-on'],
   [/\bDublin\b/gi, 'Dub-lin'],

@@ -57,11 +57,12 @@ describe('tts_text_sanitize', () => {
     assert.doesNotMatch(out, /\bgarage\b/i);
   });
 
-  it('maps Cara to Irish Kara for TTS', () => {
+  it('maps Cara to Irish Car-ah for TTS', () => {
     setActiveTtsModelForSanitizer('cartesia/sonic-3.6');
     const out = prepareHardcodedSpeechForTts("Hello, you're through to Cara.");
-    assert.match(out, /Kara/);
+    assert.match(out, /Car-ah/);
     assert.doesNotMatch(out, /\bCara\b/);
+    assert.doesNotMatch(out, /\bKara\b/);
   });
 
   it('flushes unpunctuated short replies through sentence buffer', async () => {
