@@ -803,6 +803,12 @@ export class CaraTools {
       const payload: SearchWeeklyOffersPayload = {
         called_number: ud.calledNumber,
         query: query.trim(),
+        channel:
+          /butcher|meat counter|the counter|butchers/i.test(query)
+            ? 'butcher_counter'
+            : /pre\s*-?\s*pack|packaged|quick fry|meat aisle/i.test(query)
+              ? 'prepack'
+              : undefined,
       };
       const result = await postSearchWeeklyOffers(payload);
 
@@ -816,10 +822,14 @@ export class CaraTools {
       }
 
       if (result.matches.length === 0) {
+        const channelHint = payload.channel === 'butcher_counter'
+          ? 'No butcher counter offer found in this week\'s sync — do not quote pre-pack meat aisle deals. Offer the butcher team to confirm counter specials like multi-buy deals.'
+          : payload.channel === 'prepack'
+            ? 'No matching pre-pack offer found in this week\'s sync.'
+            : 'No matching offer found in this week\'s sync.';
         return {
           ok: true,
-          message:
-            'No matching offer found in this week\'s sync. Say you do not have that offer on the list — offer the butcher or take a message. Do not invent a price.',
+          message: `${channelHint} Do not invent a price — offer the butcher or take a message.`,
           matches: [],
         };
       }

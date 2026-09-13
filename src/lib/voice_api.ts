@@ -319,12 +319,14 @@ export async function postSearchBusinessFile(
 export type SearchWeeklyOffersPayload = {
   called_number: string;
   query: string;
+  channel?: 'butcher_counter' | 'prepack';
 };
 
 export type SearchWeeklyOffersMatch = {
   id: string;
   product_name: string;
   department: string;
+  offer_channel?: 'butcher_counter' | 'prepack';
   current_price_eur: number;
   was_price_eur: number | null;
   discount_label: string | null;

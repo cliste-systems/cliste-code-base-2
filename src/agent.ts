@@ -1334,7 +1334,7 @@ export default defineAgent({
     };
 
     const scheduleCallerReplyNudge = () => {
-      if (bareLiveKitRetailLane) return;
+      if (bareLiveKitRetailLane && !conversationalRetailLine) return;
       clearCallerReplyNudgeTimer();
       if (testCall || !conversationStarted || isCallEnding()) return;
       if (conversationalRetailLine && !session.userData.sessionFlags.retailOpeningComplete) return;
