@@ -846,10 +846,18 @@ export class CaraTools {
       }
 
       if (result.clarificationHint) {
+        const exampleLabels = result.matches
+          .slice(0, 4)
+          .map((match) => match.product_name?.trim() || match.quote_text?.trim())
+          .filter(Boolean)
+          .join('; ');
+        const prefix = exampleLabels
+          ? `Matching products were found (e.g. ${exampleLabels}). Do NOT say nothing is on offer or not on the list. `
+          : '';
         return {
           ok: true,
-          message: result.clarificationHint,
-          matches: [],
+          message: `${prefix}${result.clarificationHint}`,
+          matches: result.matches,
         };
       }
 
