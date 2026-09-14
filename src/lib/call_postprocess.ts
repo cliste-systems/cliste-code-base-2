@@ -12,6 +12,8 @@ import {
   normalizePostCallActions,
   type PostCallAction,
 } from './post_call_actions.js';
+import { POST_CALL_ACTION_SUMMARY_GUIDANCE } from './intake_guidance.js';
+import { stripToolLinesFromTranscript } from './transcript_display.js';
 
 /** Avoid overwhelming inference context on very long calls. */
 const MAX_VERBATIM_FOR_LLM = 48_000;
@@ -178,10 +180,11 @@ async function runPostprocessLlm(input: {
   Only include actions when intake clearly finished (caller gave name + details, or Cara verbally confirmed she logged it).
   **Do NOT** emit actions for opening-hours-only calls.
   Types:
-  - {"type":"action_ticket","callerName":"first name they gave","summary":"2-4 sentences: cake order, stock check, complaint, etc.","routeId":"optional route id e.g. retail-bakery-cake"}
+  - {"type":"action_ticket","callerName":"first name they gave (or \\"Unknown caller\\" if they never said their name — caller ID is on file)","summary":"structured staff note (see below)","routeId":"best matching route id from catalog"}
   - {"type":"manager_callback","callerName":"first name","reason":"why they want the manager"}
+  ${POST_CALL_ACTION_SUMMARY_GUIDANCE}
   Use caller names from the transcript only — never invent "caller" or placeholders.
-  Example cake order: {"type":"action_ticket","callerName":"Timmy","summary":"Birthday cake for Mary on the 12th of next month, 7 servings, message Happy Birthday Mary.","routeId":"retail-bakery-cake"}
+  Infer routeId from the catalog when the errand clearly matches; omit if unclear.
 ${input.routesCatalog?.trim() ? `\nActive routes catalog:\n${input.routesCatalog.trim()}` : ''}`
     : '';
 
@@ -196,7 +199,7 @@ VERBATIM TRANSCRIPT:
 ${input.verbatimForLlm}
 
 Return ONLY valid JSON with keys ${jsonKeys} (no markdown outside JSON).
-- transcriptReview: Full conversation with the same line prefixes (Caller:, Assistant:, [Tool], etc.). Fix obvious speech-to-text mistakes. Include every turn and tool step — do not drop filler lines or omit lines. Do not invent facts.
+- transcriptReview: Full conversation with Caller: and Assistant: line prefixes only. Fix obvious speech-to-text mistakes. Include every caller and assistant turn — do not drop filler lines or omit lines. Do not include [Tool], [Tool result], or [Tool error] lines. Do not invent facts.
 - summary: 2–4 short sentences in Irish/British English for the business owner: what the caller wanted, what happened, and the result.
 - knowledgeGaps: Array (may be empty). Include an item when the caller asked about a service or topic Cara could not answer from the business menu/instructions, or Cara took a message because something was unlisted or unknown. Each item: {"topic":"short label","caller_context":"optional staff excerpt","cara_question":"optional owner question","suggested_section":"faq|services|services_not_offered|business_rules"}. Omit payment/health/ID details. Do not emit gaps for opening hours, bank holidays, or St Patrick's Day when structured hours exist — those are handled programmatically. Do not duplicate routine Action Inbox handoffs already covered by the outcome. Max 3 items.${postCallActionsBlock}`;
 
@@ -222,7 +225,7 @@ Return ONLY valid JSON with keys ${jsonKeys} (no markdown outside JSON).
       postCallActions = fallbackExtractPostCallActions(input.verbatimForLlm);
     }
     return {
-      transcriptReview: parsed.transcriptReview.trim(),
+      transcriptReview: stripToolLinesFromTranscript(parsed.transcriptReview.trim()),
       aiSummary: parsed.summary.trim(),
       knowledgeGaps: normalizePostprocessKnowledgeGaps(parsed.knowledgeGaps),
       postCallActions,
@@ -244,7 +247,7 @@ export async function postprocessCallTranscript(input: {
   conversationalRetailLine?: boolean;
   routesCatalog?: string;
 }): Promise<CallPostprocessResult> {
-  const verbatim = input.verbatim?.trim() ?? '';
+  const verbatim = stripToolLinesFromTranscript(input.verbatim?.trim() ?? '');
   const emptyGaps: PostprocessKnowledgeGap[] = [];
   const emptyActions: PostCallAction[] = [];
 
@@ -301,11 +304,11 @@ export async function postprocessCallTranscript(input: {
         knowledgeGaps,
         input.businessHours,
       );
+      let postCallActions = result.postCallActions;
+      if (input.conversationalRetailLine && postCallActions.length === 0) {
+        postCallActions = fallbackExtractPostCallActions(verbatim);
+      }
       if (verbatimLines > 0 && reviewLines < Math.ceil(verbatimLines * 0.7)) {
-        const postCallActions =
-          input.conversationalRetailLine && result.postCallActions.length === 0
-            ? fallbackExtractPostCallActions(verbatim)
-            : result.postCallActions;
         return {
           transcriptReview: verbatim,
           aiSummary: result.aiSummary,
@@ -313,7 +316,7 @@ export async function postprocessCallTranscript(input: {
           postCallActions,
         };
       }
-      return { ...result, knowledgeGaps };
+      return { ...result, knowledgeGaps, postCallActions };
     }
   } catch (e) {
     console.error('postprocessCallTranscript LLM failed', e);

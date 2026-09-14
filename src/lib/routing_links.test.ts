@@ -42,10 +42,11 @@ describe('routing_links conversational retail', () => {
     assert.equal(filtered[0]?.id, 'retail-bakery-cake');
   });
 
-  it('does not render retail-hours as takeCallbackMessage in filtered prompt', () => {
+  it('includes intake hints for callback routes in prompt catalog', () => {
     const block = formatRoutesForPrompt(routesForConversationalRetailPrompt([hoursRoute, cakeRoute]));
     assert.doesNotMatch(block, /retail-hours/);
     assert.match(block, /retail-bakery-cake/);
+    assert.match(block, /staff may need:/);
     assert.match(block, /takeCallbackMessage/);
   });
 });

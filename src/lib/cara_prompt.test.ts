@@ -136,7 +136,10 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /Kavanaghs SuperValu Donegal Town/);
     assert.match(prompt, /after hang-up/i);
     assert.match(prompt, /Every turn must include spoken words/i);
-    assert.match(prompt, /Never.*would you like to place an order/i);
+    assert.match(prompt, /Thoughtful intake/i);
+    assert.match(prompt, /what would a staff member actually need/i);
+    assert.match(prompt, /What's the first name/i);
+    assert.match(prompt, /not the person the cake is for/i);
     assert.match(prompt, /searchSuperValuProducts.*endPhoneCall/s);
     assert.match(prompt, /Ignore takeCallbackMessage, transferToTeam/i);
     assert.doesNotMatch(prompt, /Hello Cara demo line/i);
@@ -164,7 +167,7 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /## Confirm once/i);
     assert.match(prompt, /Never.*ask the same confirmation twice/i);
     assert.match(prompt, /Beat 1.*exactly once per call/i);
-    assert.match(prompt, /Cake close:/i);
+    assert.match(prompt, /Order close:/i);
     assert.match(prompt, /banned slop phrase.*failure/i);
     assert.match(prompt, /never.*ask them to confirm.*phone number/i);
     assert.doesNotMatch(prompt, /best number to contact you on/i);

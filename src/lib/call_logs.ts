@@ -1,6 +1,7 @@
 import type { CallCostEstimateRecord } from './call_cost_estimate.js';
 import { redactPii } from './gdpr.js';
 import { getSupabaseClient, isOfflinePlayground } from './supabase.js';
+import { stripToolLinesFromTranscript } from './transcript_display.js';
 
 function directDbFallbackAllowed(): boolean {
   return Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY?.trim());
@@ -29,8 +30,14 @@ export async function insertCallLog(input: {
   }
 
   const supabase = getSupabaseClient();
-  const transcript = input.transcript ? redactPii(input.transcript) : null;
-  const transcriptReview = input.transcriptReview ? redactPii(input.transcriptReview) : null;
+  const transcriptRaw = input.transcript
+    ? stripToolLinesFromTranscript(input.transcript)
+    : null;
+  const transcriptReviewRaw = input.transcriptReview
+    ? stripToolLinesFromTranscript(input.transcriptReview)
+    : null;
+  const transcript = transcriptRaw ? redactPii(transcriptRaw) : null;
+  const transcriptReview = transcriptReviewRaw ? redactPii(transcriptReviewRaw) : null;
   const aiSummary = input.aiSummary ? redactPii(input.aiSummary) : null;
   const { data, error } = await supabase
     .from('call_logs')
@@ -76,7 +83,7 @@ export async function updateCallLogEnrichment(
   const patch: Record<string, unknown> = {};
   if (input.transcriptReview !== undefined) {
     patch.transcript_review = input.transcriptReview
-      ? redactPii(input.transcriptReview)
+      ? redactPii(stripToolLinesFromTranscript(input.transcriptReview))
       : null;
   }
   if (input.aiSummary !== undefined) {

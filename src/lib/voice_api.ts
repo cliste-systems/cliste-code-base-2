@@ -51,6 +51,8 @@ export type ActionTicketPayload = {
   caller_number: string;
   caller_name?: string | null;
   summary: string;
+  department_slug?: string | null;
+  route_id?: string | null;
 };
 
 export type SendSmsPayload = {

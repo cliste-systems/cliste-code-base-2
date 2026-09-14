@@ -19,6 +19,13 @@ import { fileURLToPath } from 'node:url';
 import { buildCaraCallPrompt } from './lib/cara_prompt.js';
 import { resolveAiDisclosure } from './lib/ai_disclosure.js';
 import { CaraTools, type CaraAgentUserData } from './lib/cara_tools.js';
+import {
+  LOOKUP_FILLER_COOLDOWN_MS,
+  looksLikeLookupFillerSpeech,
+  nextLookupFillerPhrase,
+  resolveLookupFillerDelayMs,
+  resolveLookupFillerMaxPerCall,
+} from './lib/lookup_filler.js';
 import { trackCallerCatalogSearchIntent } from './lib/catalog_search_intent.js';
 import {
   countAssistantTranscriptChars,
@@ -29,6 +36,7 @@ import { assessTranscriptCompleteness } from './lib/transcript_completeness.js';
 import { insertCallLog, updateCallLogEnrichment, updateCallLogOutcome } from './lib/call_logs.js';
 import { executePostCallActions, type PostCallAction } from './lib/post_call_actions.js';
 import {
+  formatRoutesForPostCallCatalog,
   formatRoutesForPrompt,
   routesForConversationalRetailPrompt,
 } from './lib/routing_links.js';
@@ -168,8 +176,7 @@ const GREETING_INTERRUPT_FALLBACK_MS = 1500;
 const GREETING_PLAYBACK_FALLBACK_MS = 800;
 const CALLER_REPLY_NUDGE_MS = 2200;
 
-/** Optional slow-tool stall phrases — disabled by default (see LIVEKIT_RESPONSE_FILLER_MS). */
-const RESPONSE_FILLER_PHRASES = ['Let me see now…'] as const;
+/** Slow-tool lookup phrases — spoken programmatically; see lookup_filler.ts. */
 
 const REPLY_RETRY_INSTRUCTIONS =
   'Your last reply did not reach the caller. React like a person to a dropped line — vary the wording (e.g. "Sorry, you went quiet there — are you still with me?" or "Ah, the line dipped on me — where were we?"). One short warm line that acknowledges what they asked, then continue. No service menu.';
@@ -777,18 +784,22 @@ export default defineAgent({
       Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '', 10),
     )
       ? Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '', 10)
-      : useBuilderDemoStack
-        ? 250
-        : endpointDefaults.minDelayMs;
+      : conversationalRetailLine
+        ? 550
+        : useBuilderDemoStack
+          ? 250
+          : endpointDefaults.minDelayMs;
     const endpointMaxMs = Number.isFinite(
       Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '', 10),
     )
       ? Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '', 10)
-      : useBuilderDemoStack
-        ? Number.parseInt(process.env.LIVEKIT_TEST_ENDPOINTING_MAX_MS ?? '2000', 10)
-        : testCall
-          ? Number.parseInt(process.env.LIVEKIT_TEST_ENDPOINTING_MAX_MS ?? '1200', 10)
-          : endpointDefaults.maxDelayMs;
+      : conversationalRetailLine
+        ? 2400
+        : useBuilderDemoStack
+          ? Number.parseInt(process.env.LIVEKIT_TEST_ENDPOINTING_MAX_MS ?? '2000', 10)
+          : testCall
+            ? Number.parseInt(process.env.LIVEKIT_TEST_ENDPOINTING_MAX_MS ?? '1200', 10)
+            : endpointDefaults.maxDelayMs;
     const endpointMode = (process.env.LIVEKIT_ENDPOINTING_MODE?.trim() || 'dynamic') as
       | 'fixed'
       | 'dynamic';
@@ -816,10 +827,14 @@ export default defineAgent({
 
     const interruptionMinMs = Number.parseInt(
       process.env.LIVEKIT_INTERRUPTION_MIN_MS ??
-        (demoExperienceStack ? '450' : '200'),
+        (conversationalRetailLine ? '450' : demoExperienceStack ? '450' : '200'),
       10,
     );
-    const interruptionMinWords = Number.parseInt(process.env.LIVEKIT_INTERRUPTION_MIN_WORDS ?? '1', 10);
+    const interruptionMinWords = Number.parseInt(
+      process.env.LIVEKIT_INTERRUPTION_MIN_WORDS ??
+        (conversationalRetailLine ? '2' : '1'),
+      10,
+    );
     const interruptionModeRaw = process.env.LIVEKIT_INTERRUPTION_MODE?.trim().toLowerCase();
     const interruptionMode: 'adaptive' | 'vad' | undefined =
       interruptionModeRaw === 'vad' ? 'vad' : interruptionModeRaw === 'auto' ? undefined : 'adaptive';
@@ -997,14 +1012,11 @@ export default defineAgent({
       : Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MS ?? '10000', 10);
     const deadAirCloseMs = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_CLOSE_MS ?? '8000', 10);
     const deadAirMaxPrompts = Number.parseInt(process.env.LIVEKIT_DEAD_AIR_MAX_PROMPTS ?? '2', 10);
-    const responseFillerMs = Number.parseInt(
-      process.env.LIVEKIT_RESPONSE_FILLER_MS ?? (demoExperienceStack ? '1000' : '0'),
-      10,
-    );
-    const responseFillerMaxPerCall = Number.parseInt(
-      process.env.LIVEKIT_RESPONSE_FILLER_MAX_PER_CALL ?? '3',
-      10,
-    );
+    const responseFillerMs = resolveLookupFillerDelayMs({
+      conversationalRetailLine,
+      demoExperienceStack,
+    });
+    const responseFillerMaxPerCall = resolveLookupFillerMaxPerCall();
     const postGreetingGraceMs = conversationalRetailLine
       ? 0
       : demoExperienceStack
@@ -1021,6 +1033,7 @@ export default defineAgent({
     let deadAirPromptCount = 0;
     let responseFillerTimer: ReturnType<typeof setTimeout> | null = null;
     let responseFillerCount = 0;
+    let lastLookupFillerAt = 0;
     let greetingInterruptFallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let callerReplyNudgeTimer: ReturnType<typeof setTimeout> | null = null;
     let callerAwaitingReply = false;
@@ -1587,7 +1600,7 @@ export default defineAgent({
       if (!testCall && !conversationalRetailLine) {
         maybeCloseAfterAnythingElse(text);
       }
-      if (!testCall && !handledWithProgrammaticReply) {
+      if (!testCall && !conversationalRetailLine && !handledWithProgrammaticReply) {
         scheduleCallerReplyNudge();
       }
       return true;
@@ -1737,14 +1750,23 @@ export default defineAgent({
     const scheduleResponseFillerForSlowWork = () => {
       clearResponseFillerTimer();
       if (responseFillerMs <= 0 || shouldSuppressFillers() || isCallEnding()) return;
+      if (conversationalRetailLine) return;
+      if (session.agentState === 'speaking') return;
+      const recentAssistant = `${lastAssistantChatText}\n${pendingLlmTtsTranscript}`.trim();
+      if (recentAssistant && looksLikeLookupFillerSpeech(recentAssistant)) return;
+      if (Date.now() - lastLookupFillerAt < LOOKUP_FILLER_COOLDOWN_MS) return;
+
       responseFillerTimer = setTimeout(() => {
         responseFillerTimer = null;
         if (!canPlayResponseFiller()) return;
+        if (session.agentState === 'speaking') return;
+        const assistantNow = `${lastAssistantChatText}\n${pendingLlmTtsTranscript}`.trim();
+        if (assistantNow && looksLikeLookupFillerSpeech(assistantNow)) return;
+        if (Date.now() - lastLookupFillerAt < LOOKUP_FILLER_COOLDOWN_MS) return;
+
         responseFillerCount += 1;
-        const phrase =
-          RESPONSE_FILLER_PHRASES[
-            (responseFillerCount - 1) % RESPONSE_FILLER_PHRASES.length
-          ]!;
+        lastLookupFillerAt = Date.now();
+        const phrase = nextLookupFillerPhrase(responseFillerCount - 1);
         sayProgrammatic(phrase, { addToChatCtx: false, allowInterruptions: true });
       }, responseFillerMs);
     };
@@ -2130,17 +2152,7 @@ export default defineAgent({
         if (out) {
           clearResponseFillerTimer();
         }
-        appendTranscriptLine(
-          call.createdAt ?? ev.createdAt,
-          `[Tool] ${call.name} ${truncateForTranscript(call.args, MAX_TOOL_SNIPPET_CHARS)}`,
-        );
-        if (out) {
-          const prefix = out.isError ? '[Tool error] ' : '[Tool result] ';
-          appendTranscriptLine(
-            out.createdAt,
-            `${prefix}${truncateForTranscript(out.output, MAX_TOOL_SNIPPET_CHARS)}`,
-          );
-        }
+        // Tool RPC is internal — keep it out of staff-facing transcripts.
       }
     });
 
@@ -2346,7 +2358,7 @@ export default defineAgent({
         }> = [];
         const presetAiSummary = aiSummary;
         const retailRoutesCatalog = conversationalRetailLine
-          ? formatRoutesForPrompt(routesForConversationalRetailPrompt(routingLinks))
+          ? formatRoutesForPostCallCatalog(routesForConversationalRetailPrompt(routingLinks))
           : undefined;
         if (verbatim) {
           const pp = await postprocessCallTranscript({

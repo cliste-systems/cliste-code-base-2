@@ -63,12 +63,20 @@ Caller: 7.
 
 Caller: Happy birthday, Mary.`;
 
-  it('extracts cake order from Timmy fixture transcript', () => {
-    const actions = fallbackExtractPostCallActions(timmyTranscript);
+  it('extracts cake order without caller name when errand was confirmed', () => {
+    const jamieTranscript = `Assistant: Brilliant — and what date do you need that for?
+
+Caller: And he's off Tuesday the 15th.
+
+Assistant: Lovely — so that's a birthday cake for Jamie for tomorrow, Tuesday the 15th, with blue icing and "Happy Birthday Jamie" on it, for 13 people. Is that all correct?
+
+Caller: Yeah, that's everything.`;
+
+    const actions = fallbackExtractPostCallActions(jamieTranscript);
     assert.equal(actions.length, 1);
     assert.equal(actions[0]?.type, 'action_ticket');
-    assert.equal(actions[0]?.callerName, 'Timmy');
-    assert.match(actions[0]?.summary ?? '', /Birthday cake/i);
+    assert.match(actions[0]?.summary ?? '', /Birthday cake order/i);
+    assert.match(actions[0]?.summary ?? '', /Jamie/i);
   });
 });
 

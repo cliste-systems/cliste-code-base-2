@@ -553,7 +553,7 @@ export class CaraTools {
 
   readonly takeCallbackMessage = llm.tool({
     description:
-      'Log a cake order, stock check, complaint, or manager callback for the team. Requires the caller first name. When caller ID is on file, omit callbackPhone. Always speak to the caller in the same turn or immediately after — never a silent tool-only turn.',
+      'Log an order, stock check, complaint, or callback for the team. Requires the caller first name. staffSummary must include every practical detail gathered (timing, size, quantity, packaging, special requests) — not just a headline. When caller ID is on file, omit callbackPhone. Always speak to the caller in the same turn or immediately after — never a silent tool-only turn.',
     parameters: z.object({
       callerName: z
         .string()
@@ -562,7 +562,9 @@ export class CaraTools {
       staffSummary: z
         .string()
         .min(1)
-        .describe('2–5 sentences: what the caller wanted, details captured, callback preference.'),
+        .describe(
+          'Structured note for staff: short header line, then Label: value lines for every detail (Order, When, Size, Quantity, Packaging, Message, Issue, etc.). Only facts from the call.',
+        ),
       callbackPhone: z
         .string()
         .optional()
@@ -856,7 +858,7 @@ export class CaraTools {
           ok: true,
           message:
             result.noMatchQuote ??
-            'No matching product found on the SuperValu range — do not claim we stock it or quote an offer from memory. Call this tool again with different product words if the caller clarifies.',
+            'No matching product found on the SuperValu range — do not claim we never stock it or that SuperValu does not make it. Say it is not on the national list you checked; call this tool again with simpler product words (e.g. "SuperValu egg noodles" not "SuperValu own brand dried egg noodles").',
           matches: [],
         };
       }

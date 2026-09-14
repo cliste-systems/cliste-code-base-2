@@ -171,6 +171,19 @@ export function routeToolForPrompt(link: RoutingLink): string {
   }
 }
 
+export function routeIntakeHint(link: RoutingLink): string | null {
+  const url = link.url.trim();
+  const description = link.description?.trim() ?? '';
+  const isCallbackLike =
+    link.targetType === 'callback' ||
+    link.targetType === 'note' ||
+    link.targetType === 'phone';
+  if (!isCallbackLike) return null;
+  if (url && !/^https?:\/\//i.test(url)) return url;
+  if (description) return description;
+  return null;
+}
+
 /** Compact route catalog for the live-call prompt — exact routeIds for tools. */
 export function formatRoutesForPrompt(links: RoutingLink[]): string {
   const routes = activeRoutes(links);
@@ -185,7 +198,28 @@ export function formatRoutesForPrompt(links: RoutingLink[]): string {
       const tool = routeToolForPrompt(r);
       const linkHint =
         r.url.trim() && isLocationRoute(r) ? ` | link: ${r.url.trim()}` : '';
-      return `- routeId: ${r.id} | trigger: ${trigger} | type: ${r.targetType}${delivery}${linkHint} | tool: ${tool}`;
+      const intakeHint = routeIntakeHint(r);
+      const intake =
+        intakeHint && tool === 'takeCallbackMessage'
+          ? ` | staff may need: ${intakeHint}`
+          : '';
+      return `- routeId: ${r.id} | trigger: ${trigger} | type: ${r.targetType}${delivery}${linkHint}${intake} | tool: ${tool}`;
+    })
+    .join('\n');
+}
+
+/** Route catalog for post-call extraction — emphasises intake hints, not live tools. */
+export function formatRoutesForPostCallCatalog(links: RoutingLink[]): string {
+  const routes = activeRoutes(links).filter((r) => !isSpeechOnlyRetailRoute(r));
+  if (routes.length === 0) {
+    return '- (No callback routes — infer errand type from transcript.)';
+  }
+  return routes
+    .map((r) => {
+      const trigger = routeTrigger(r) || r.intent || r.label || 'route';
+      const intakeHint = routeIntakeHint(r);
+      const intake = intakeHint ? ` | capture: ${intakeHint}` : '';
+      return `- routeId: ${r.id} | trigger: ${trigger}${intake}`;
     })
     .join('\n');
 }
