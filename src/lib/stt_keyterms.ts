@@ -81,6 +81,7 @@ const STATIC_RETAIL_KEYTERMS = [
   'Main Street',
   'Eircode',
   'Garreth Ferry',
+  "Mark O'Toole",
   'Mark OToole',
   'Paul Gallagher',
 ];
