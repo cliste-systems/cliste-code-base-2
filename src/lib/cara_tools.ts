@@ -884,7 +884,7 @@ export class CaraTools {
 
       const offerPrefix =
         resolvedIntent === 'offer'
-          ? 'Use only these synced offer quotes — speak prices in natural Irish words exactly as given. Do not mention payment on the phone. Never quote offers from memory.'
+          ? 'Use only these synced offer quotes. Lead with the saving, then the offer price, then the usual price — one short sentence each, spoken clearly with a pause between them. Do not mention payment on the phone. Never quote offers from memory.'
           : 'Use this guidance — speak prices in natural Irish words exactly as given, in your own words. Never quote offers from memory.';
 
       return {
