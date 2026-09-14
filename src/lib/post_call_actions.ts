@@ -127,12 +127,61 @@ function callerConfirmedErrand(lines: string[]): boolean {
 }
 
 function extractCallerNameFromTranscript(lines: string[]): string | null {
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? '';
+    const prev = lines[i - 1] ?? '';
+    if (
+      /^Assistant:/i.test(prev) &&
+      /\b(your first name for collection|name for collection|who(?:'ll| will) be collecting|your name for the order)\b/i.test(
+        prev,
+      ) &&
+      /^Caller:/i.test(line)
+    ) {
+      const collectingMatch = line.match(
+        /^Caller:\s*(?:my name is\s+|i'm\s+|this is\s+)?([A-Za-z][A-Za-z'-]{1,30})\.?$/i,
+      );
+      if (collectingMatch?.[1] && !isPlaceholderCallerName(collectingMatch[1])) {
+        return collectingMatch[1];
+      }
+    }
     const nameMatch = line.match(
-      /^Caller:\s*(?:my name is\s+|i'm\s+|this is\s+)?([A-Za-z][A-Za-z'-]{1,30})\.?$/i,
+      /^Caller:\s*(?:my name is\s+|i'm\s+|this is\s+)([A-Za-z][A-Za-z'-]{1,30})\.?$/i,
     );
     if (nameMatch?.[1] && !isPlaceholderCallerName(nameMatch[1])) {
       return nameMatch[1];
+    }
+  }
+  return null;
+}
+
+function extractCakeNameFromTranscript(lines: string[], confirm: string): string | null {
+  const blob = lines
+    .filter((line) => line.startsWith('Caller:'))
+    .map((line) => line.replace(/^Caller:\s*/i, ''))
+    .join(' ');
+  const happyBirthdayMatch =
+    blob.match(/\bhappy birthday ([A-Za-z][A-Za-z'-]{1,24})\b/i) ??
+    confirm.match(/\bhappy birthday ([A-Za-z][A-Za-z'-]{1,24})\b/i);
+  if (happyBirthdayMatch?.[1]) return happyBirthdayMatch[1];
+
+  const cakeForMatch =
+    confirm.match(/\bbirthday cake for ([A-Za-z][A-Za-z'-]{1,24})\b/i) ??
+    confirm.match(/\bcake for ([A-Za-z][A-Za-z'-]{1,24})\b/i);
+  if (cakeForMatch?.[1]) return cakeForMatch[1];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const prev = lines[i - 1] ?? '';
+    if (
+      /^Assistant:/i.test(prev) &&
+      /\b(name on the cake|who is it for|what name.*on the cake)\b/i.test(prev) &&
+      /^Caller:/i.test(lines[i] ?? '')
+    ) {
+      const nameMatch = (lines[i] ?? '').match(
+        /^Caller:\s*(?:my name is\s+|i'm\s+|this is\s+)?([A-Za-z][A-Za-z'-]{1,30})\.?$/i,
+      );
+      if (nameMatch?.[1] && !isPlaceholderCallerName(nameMatch[1])) {
+        return nameMatch[1];
+      }
     }
   }
   return null;
@@ -191,16 +240,19 @@ function inferFallbackActionFromTranscript(
 
   if (/\bbirthday cake\b|\bcake order\b|\border for a cake\b/.test(blob) || /\bbirthday cake\b/i.test(assistantConfirm ?? '')) {
     const confirm = assistantConfirm ?? callerLines.join(' ').trim();
-    const forMatch = confirm.match(/\bfor ([A-Za-z][A-Za-z'-]{1,24})\b/i);
+    const cakeForName = extractCakeNameFromTranscript(lines, confirm);
     const whenMatch = confirm.match(/\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)[^,.]*/i);
     const peopleMatch = confirm.match(/\bfor (\d{1,3}) people\b/i);
     const messageMatch = confirm.match(/"([^"]+)"/);
     const icingMatch = confirm.match(/\b(blue|pink|white|chocolate|vanilla)[^,.]*icing\b/i);
+    const collectingName =
+      callerName !== DEFAULT_POST_CALL_CALLER_NAME ? callerName : null;
     return {
       type: 'action_ticket',
-      callerName,
+      callerName: collectingName ?? DEFAULT_POST_CALL_CALLER_NAME,
       summary: buildStructuredSummary('Birthday cake order', [
-        forMatch?.[1] ? `For: ${forMatch[1]}` : '',
+        cakeForName ? `For: ${cakeForName}` : '',
+        collectingName ? `Collecting: ${collectingName}` : '',
         whenMatch?.[0] ? `When: ${whenMatch[0].trim()}` : '',
         peopleMatch?.[1] ? `Size: ${peopleMatch[1]} people` : '',
         messageMatch?.[1] ? `Message: ${messageMatch[1]}` : '',

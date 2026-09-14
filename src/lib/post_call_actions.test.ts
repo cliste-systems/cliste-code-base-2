@@ -76,7 +76,27 @@ Caller: Yeah, that's everything.`;
     assert.equal(actions.length, 1);
     assert.equal(actions[0]?.type, 'action_ticket');
     assert.match(actions[0]?.summary ?? '', /Birthday cake order/i);
-    assert.match(actions[0]?.summary ?? '', /Jamie/i);
+    assert.match(actions[0]?.summary ?? '', /For: Jamie/i);
+  });
+
+  it('keeps cake name and collecting name separate when both were given', () => {
+    const brandonTranscript = `Assistant: Gotcha — and what name would you like on the cake?
+
+Caller: Brandon.
+
+Assistant: And your first name for collection?
+
+Caller: Brendan.
+
+Assistant: Lovely — so that's a vanilla birthday cake for Brandon for tomorrow, Tuesday, with blue icing and "Happy Birthday" on it — collecting under Brendan. Is that all correct?
+
+Caller: That's perfect.`;
+
+    const actions = fallbackExtractPostCallActions(brandonTranscript);
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0]?.callerName, 'Brendan');
+    assert.match(actions[0]?.summary ?? '', /For: Brandon/i);
+    assert.match(actions[0]?.summary ?? '', /Collecting: Brendan/i);
   });
 });
 
