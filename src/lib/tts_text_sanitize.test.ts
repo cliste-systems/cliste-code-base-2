@@ -65,6 +65,15 @@ describe('tts_text_sanitize', () => {
     assert.doesNotMatch(out, /\bKara\b/);
   });
 
+  it('speaks Real Rewards and SuperValu web addresses naturally', () => {
+    const out = prepareHardcodedSpeechForTts(
+      'Find the Real Rewards app on the App Store or head to supervalu.ie/rewards.',
+    );
+    assert.match(out, /Real Re-wards/i);
+    assert.match(out, /SuperValu dot ie slash rewards/i);
+    assert.doesNotMatch(out, /supervalu\.ie/i);
+  });
+
   it('flushes unpunctuated short replies through sentence buffer', async () => {
     const source = new ReadableStream<string>({
       start(controller) {

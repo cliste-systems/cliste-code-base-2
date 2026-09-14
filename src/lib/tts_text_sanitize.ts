@@ -42,6 +42,18 @@ const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
   [/\bSt\.?\s+Patrick'?s?\s+Day\b/gi, "Saint Patrick's Day"],
   [/\bgarages\b/gi, 'gar-idges'],
   [/\bgarage\b/gi, 'gar-idge'],
+  [/\bReal Rewards\b/gi, 'Real Re-wards'],
+  [/\bRail Rewards\b/gi, 'Real Re-wards'],
+];
+
+/** Bare domains and paths Cartesia reads as gibberish — map to speakable Irish phone form. */
+const SPOKEN_WEB_ADDRESS_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
+  [/\bhttps?:\/\/(?:www\.)?shop\.supervalu\.ie\/?\S*/gi, 'shop dot SuperValu dot ie'],
+  [/\bhttps?:\/\/(?:www\.)?supervalu\.ie\/rewards\/?\S*/gi, 'SuperValu dot ie slash rewards'],
+  [/\bhttps?:\/\/(?:www\.)?supervalu\.ie\/?\S*/gi, 'SuperValu dot ie'],
+  [/\bshop\.supervalu\.ie\b/gi, 'shop dot SuperValu dot ie'],
+  [/\bsupervalu\.ie\/rewards\b/gi, 'SuperValu dot ie slash rewards'],
+  [/\bsupervalu\.ie\b/gi, 'SuperValu dot ie'],
 ];
 
 let activeTtsModel = process.env.LIVEKIT_INFERENCE_TTS_MODEL?.trim() || 'cartesia/sonic-3.6';
@@ -58,6 +70,14 @@ export function getActiveTtsModelForSanitizer(): string {
 function applyPronunciationMap(text: string): string {
   let out = text;
   for (const [pattern, replacement] of PRONUNCIATION_REPLACEMENTS) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+
+function normalizeSpokenWebAddresses(text: string): string {
+  let out = text;
+  for (const [pattern, replacement] of SPOKEN_WEB_ADDRESS_REPLACEMENTS) {
     out = out.replace(pattern, replacement);
   }
   return out;
@@ -147,6 +167,7 @@ function normalizeTtsChunk(text: string, ttsModel = activeTtsModel): string {
     .replace(EMOJI_PATTERN, '')
     .replace(ALL_CAPS_WORD, (word) => (word === 'AI' ? word : word.toLowerCase()));
   normalized = insertLeadingAckComma(normalized);
+  normalized = normalizeSpokenWebAddresses(normalized);
   const stripped = normalized
     .replace(URL_PATTERN, '')
     .replace(FORBIDDEN_SPOKEN, '')
