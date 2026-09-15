@@ -4,7 +4,44 @@ import { describe, it } from 'node:test';
 import {
   callRecordingStagingPath,
   callRecordingStoragePath,
+  isSupabaseS3Endpoint,
+  resolveEgressS3Config,
+  resolveSupabaseStorageS3Endpoint,
 } from './call_recording.js';
+
+describe('resolveSupabaseStorageS3Endpoint', () => {
+  it('uses the storage hostname for hosted Supabase projects', () => {
+    assert.equal(
+      resolveSupabaseStorageS3Endpoint('https://rtoebbwzwxcnscsxghww.supabase.co'),
+      'https://rtoebbwzwxcnscsxghww.storage.supabase.co/storage/v1/s3',
+    );
+  });
+});
+
+describe('isSupabaseS3Endpoint', () => {
+  it('detects Supabase storage endpoints', () => {
+    assert.equal(
+      isSupabaseS3Endpoint('https://abc.storage.supabase.co/storage/v1/s3'),
+      true,
+    );
+    assert.equal(isSupabaseS3Endpoint('https://abc.r2.cloudflarestorage.com'), false);
+  });
+});
+
+describe('resolveEgressS3Config', () => {
+  it('rejects Supabase endpoints for LiveKit egress', () => {
+    const original = { ...process.env };
+    try {
+      process.env.CALL_RECORDING_S3_ACCESS_KEY = 'test-access-key';
+      process.env.CALL_RECORDING_S3_SECRET_KEY = 'test-secret-key';
+      process.env.CALL_RECORDING_S3_ENDPOINT =
+        'https://abc.storage.supabase.co/storage/v1/s3';
+      assert.equal(resolveEgressS3Config(), null);
+    } finally {
+      process.env = original;
+    }
+  });
+});
 
 describe('call_recording paths', () => {
   it('builds final storage paths', () => {

@@ -5,6 +5,7 @@ import {
   EgressStatus,
   S3Upload,
 } from 'livekit-server-sdk';
+import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 import { getSupabaseClient, isOfflinePlayground } from './supabase.js';
 import { updateCallLogAudioPath } from './call_logs.js';
@@ -34,33 +35,101 @@ export function callRecordingStagingPath(
   return `${org}/.staging/${safeRoom || 'room'}.mp3`;
 }
 
-export function resolveCallRecordingS3Upload(): S3Upload | null {
+export function isSupabaseS3Endpoint(endpoint: string | null | undefined): boolean {
+  return Boolean(endpoint?.trim() && /supabase\.co/i.test(endpoint));
+}
+
+/** Supabase Storage S3 API — not compatible with LiveKit egress (SignatureDoesNotMatch). */
+export function resolveSupabaseStorageS3Endpoint(
+  supabaseUrl: string | null | undefined,
+): string | null {
+  const raw = supabaseUrl?.trim().replace(/\/$/, '');
+  if (!raw) return null;
+
+  const projectHostMatch = raw.match(/^https:\/\/([a-z0-9-]+)\.supabase\.co$/i);
+  if (projectHostMatch) {
+    return `https://${projectHostMatch[1]}.storage.supabase.co/storage/v1/s3`;
+  }
+
+  return `${raw}/storage/v1/s3`;
+}
+
+type EgressS3Config = {
+  accessKey: string;
+  secret: string;
+  bucket: string;
+  region: string;
+  endpoint: string;
+};
+
+function readEnv(key: string): string | null {
+  const value = process.env[key]?.trim();
+  return value || null;
+}
+
+/** LiveKit egress needs a real S3-compatible provider (R2, AWS S3, etc.) — not Supabase. */
+export function resolveEgressS3Config(): EgressS3Config | null {
   const accessKey =
-    process.env.CALL_RECORDING_S3_ACCESS_KEY?.trim() ||
-    process.env.SUPABASE_S3_ACCESS_KEY?.trim();
+    readEnv('CALL_RECORDING_EGRESS_S3_ACCESS_KEY') ||
+    readEnv('CALL_RECORDING_S3_ACCESS_KEY') ||
+    readEnv('SUPABASE_S3_ACCESS_KEY');
   const secret =
-    process.env.CALL_RECORDING_S3_SECRET_KEY?.trim() ||
-    process.env.SUPABASE_S3_SECRET_KEY?.trim();
+    readEnv('CALL_RECORDING_EGRESS_S3_SECRET_KEY') ||
+    readEnv('CALL_RECORDING_S3_SECRET_KEY') ||
+    readEnv('SUPABASE_S3_SECRET_KEY');
   const bucket =
-    process.env.CALL_RECORDING_S3_BUCKET?.trim() || CALL_RECORDINGS_BUCKET;
-  const supabaseUrl = process.env.SUPABASE_URL?.trim().replace(/\/$/, '');
+    readEnv('CALL_RECORDING_EGRESS_S3_BUCKET') ||
+    readEnv('CALL_RECORDING_S3_BUCKET') ||
+    CALL_RECORDINGS_BUCKET;
   const endpoint =
-    process.env.CALL_RECORDING_S3_ENDPOINT?.trim() ||
-    (supabaseUrl ? `${supabaseUrl}/storage/v1/s3` : '');
+    readEnv('CALL_RECORDING_EGRESS_S3_ENDPOINT') ||
+    readEnv('CALL_RECORDING_S3_ENDPOINT') ||
+    resolveSupabaseStorageS3Endpoint(process.env.SUPABASE_URL);
   const region =
-    process.env.CALL_RECORDING_S3_REGION?.trim() ||
-    process.env.SUPABASE_S3_REGION?.trim() ||
-    'eu-west-1';
+    readEnv('CALL_RECORDING_EGRESS_S3_REGION') ||
+    readEnv('CALL_RECORDING_S3_REGION') ||
+    readEnv('SUPABASE_S3_REGION') ||
+    'auto';
 
   if (!accessKey || !secret || !endpoint) return null;
 
+  if (isSupabaseS3Endpoint(endpoint)) {
+    console.warn(
+      '[call_recording] LiveKit egress cannot upload to Supabase Storage S3 (SignatureDoesNotMatch). ' +
+        'Set CALL_RECORDING_EGRESS_S3_* to Cloudflare R2 or AWS S3; recordings are copied into Supabase after each call.',
+    );
+    return null;
+  }
+
+  return { accessKey, secret, bucket, region, endpoint };
+}
+
+export function resolveEgressS3Upload(): S3Upload | null {
+  const config = resolveEgressS3Config();
+  if (!config) return null;
+
   return new S3Upload({
-    accessKey,
-    secret,
-    bucket,
-    region,
-    endpoint,
+    accessKey: config.accessKey,
+    secret: config.secret,
+    bucket: config.bucket,
+    region: config.region,
+    endpoint: config.endpoint,
     forcePathStyle: true,
+  });
+}
+
+function getEgressS3Client(): S3Client | null {
+  const config = resolveEgressS3Config();
+  if (!config) return null;
+
+  return new S3Client({
+    region: config.region,
+    endpoint: config.endpoint,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: config.accessKey,
+      secretAccessKey: config.secret,
+    },
   });
 }
 
@@ -74,7 +143,7 @@ function callRecordingEnabled(): boolean {
       process.env.LIVEKIT_API_KEY?.trim() &&
       process.env.LIVEKIT_API_SECRET?.trim() &&
       process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() &&
-      resolveCallRecordingS3Upload(),
+      resolveEgressS3Upload(),
   );
 }
 
@@ -96,11 +165,31 @@ type EgressFileResult = {
 function fileDownloadUrl(info: {
   fileResults?: EgressFileResult[];
   file?: EgressFileResult;
+  result?: { case?: string; value?: EgressFileResult };
 }): string | null {
   const fromResults = info.fileResults?.[0]?.location?.trim();
   if (fromResults) return fromResults;
   const legacy = info.file?.location?.trim();
-  return legacy || null;
+  if (legacy) return legacy;
+  if (info.result?.case === 'file') {
+    return info.result.value?.location?.trim() || null;
+  }
+  return null;
+}
+
+function egressFilename(info: {
+  fileResults?: EgressFileResult[];
+  file?: EgressFileResult;
+  result?: { case?: string; value?: EgressFileResult };
+}): string | null {
+  const fromResults = info.fileResults?.[0]?.filename?.trim();
+  if (fromResults) return fromResults;
+  const legacy = info.file?.filename?.trim();
+  if (legacy) return legacy;
+  if (info.result?.case === 'file') {
+    return info.result.value?.filename?.trim() || null;
+  }
+  return null;
 }
 
 export async function startCallRecording(input: {
@@ -113,11 +202,8 @@ export async function startCallRecording(input: {
   const organizationId = input.organizationId.trim();
   if (!room || !organizationId) return null;
 
-  const s3 = resolveCallRecordingS3Upload();
-  if (!s3) {
-    console.warn('[call_recording] missing Supabase S3 credentials for LiveKit egress');
-    return null;
-  }
+  const s3 = resolveEgressS3Upload();
+  if (!s3) return null;
 
   const stagingPath = callRecordingStagingPath(organizationId, room);
 
@@ -163,6 +249,26 @@ async function downloadRecordingFile(url: string): Promise<Buffer | null> {
   }
 }
 
+async function downloadFromEgressS3(objectKey: string): Promise<Buffer | null> {
+  const config = resolveEgressS3Config();
+  const client = getEgressS3Client();
+  if (!config || !client) return null;
+
+  try {
+    const response = await client.send(
+      new GetObjectCommand({
+        Bucket: config.bucket,
+        Key: objectKey,
+      }),
+    );
+    if (!response.Body) return null;
+    return Buffer.from(await response.Body.transformToByteArray());
+  } catch (error) {
+    console.warn('[call_recording] egress s3 download failed', { objectKey, error });
+    return null;
+  }
+}
+
 async function uploadRecordingToSupabase(
   storagePath: string,
   body: Buffer,
@@ -181,35 +287,27 @@ async function uploadRecordingToSupabase(
   return true;
 }
 
-async function promoteStagingRecording(
-  stagingPath: string,
-  finalPath: string,
-): Promise<boolean> {
-  const supabase = getSupabaseClient();
+async function storeRecordingBody(
+  callLogId: string,
+  storagePath: string,
+  body: Buffer,
+): Promise<string | null> {
+  if (body.length === 0) return null;
+  const uploaded = await uploadRecordingToSupabase(storagePath, body);
+  if (!uploaded) return null;
 
-  const { error: moveError } = await supabase.storage
-    .from(CALL_RECORDINGS_BUCKET)
-    .move(stagingPath, finalPath);
-  if (!moveError) return true;
-
-  const { data, error: downloadError } = await supabase.storage
-    .from(CALL_RECORDINGS_BUCKET)
-    .download(stagingPath);
-  if (downloadError || !data) {
-    console.warn('[call_recording] staging object missing', {
-      stagingPath,
-      moveError: moveError?.message,
-      downloadError: downloadError?.message,
-    });
-    return false;
+  const patched = await updateCallLogAudioPath(callLogId, storagePath);
+  if (!patched) {
+    console.warn('[call_recording] call_logs patch failed', { callLogId });
+    return null;
   }
 
-  const body = Buffer.from(await data.arrayBuffer());
-  const uploaded = await uploadRecordingToSupabase(finalPath, body);
-  if (!uploaded) return false;
-
-  await supabase.storage.from(CALL_RECORDINGS_BUCKET).remove([stagingPath]);
-  return true;
+  console.info('[call_recording] stored', {
+    callLogId,
+    storagePath,
+    bytes: body.length,
+  });
+  return storagePath;
 }
 
 export async function finalizeCallRecording(input: {
@@ -231,7 +329,11 @@ export async function finalizeCallRecording(input: {
 
   try {
     const client = getEgressClient();
-    await client.stopEgress(egressId);
+    const activeStatuses = new Set([
+      EgressStatus.EGRESS_STARTING,
+      EgressStatus.EGRESS_ACTIVE,
+      EgressStatus.EGRESS_ENDING,
+    ]);
 
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const list = await client.listEgress({ egressId });
@@ -242,56 +344,52 @@ export async function finalizeCallRecording(input: {
       }
 
       const status = info.status;
+      if (activeStatuses.has(status)) {
+        if (attempt === 0) {
+          try {
+            await client.stopEgress(egressId);
+          } catch (error) {
+            console.warn('[call_recording] stopEgress failed', error);
+          }
+        }
+        await sleep(2000);
+        continue;
+      }
+
       if (
         status === EgressStatus.EGRESS_FAILED ||
         status === EgressStatus.EGRESS_ABORTED ||
         status === EgressStatus.EGRESS_LIMIT_REACHED
       ) {
-        console.warn('[call_recording] egress failed', { egressId, status });
+        console.warn('[call_recording] egress failed', {
+          egressId,
+          status,
+          error: info.error?.trim() || null,
+          stagingPath,
+        });
         return null;
       }
 
       if (status === EgressStatus.EGRESS_COMPLETE) {
-        const promoted = await promoteStagingRecording(stagingPath, storagePath);
-        if (promoted) {
-          const patched = await updateCallLogAudioPath(callLogId, storagePath);
-          if (!patched) {
-            console.warn('[call_recording] call_logs patch failed', { callLogId });
-            return null;
+        const egressInfo = info as {
+          fileResults?: EgressFileResult[];
+          file?: EgressFileResult;
+          result?: { case?: string; value?: EgressFileResult };
+        };
+
+        const objectKey = egressFilename(egressInfo) || stagingPath;
+        let body =
+          (await downloadFromEgressS3(objectKey)) ||
+          (await downloadFromEgressS3(stagingPath));
+
+        if (!body) {
+          const downloadUrl = fileDownloadUrl(egressInfo);
+          if (downloadUrl) {
+            body = await downloadRecordingFile(downloadUrl);
           }
-          console.info('[call_recording] stored', { callLogId, storagePath });
-          return storagePath;
         }
 
-        const downloadUrl = fileDownloadUrl(
-          info as { fileResults?: EgressFileResult[]; file?: EgressFileResult },
-        );
-        if (!downloadUrl) {
-          console.warn('[call_recording] complete without staging object or download url', {
-            egressId,
-            stagingPath,
-          });
-          return null;
-        }
-
-        const body = await downloadRecordingFile(downloadUrl);
-        if (!body || body.length === 0) return null;
-
-        const uploaded = await uploadRecordingToSupabase(storagePath, body);
-        if (!uploaded) return null;
-
-        const patched = await updateCallLogAudioPath(callLogId, storagePath);
-        if (!patched) {
-          console.warn('[call_recording] call_logs patch failed', { callLogId });
-          return null;
-        }
-
-        console.info('[call_recording] stored', {
-          callLogId,
-          storagePath,
-          bytes: body.length,
-        });
-        return storagePath;
+        return body ? storeRecordingBody(callLogId, storagePath, body) : null;
       }
 
       await sleep(2000);
