@@ -220,6 +220,31 @@ function buildStructuredSummary(header: string, details: string[]): string {
   return body ? `${header}\n${body}` : header;
 }
 
+function extractCakeSizeFromText(...sources: Array<string | null | undefined>): string | null {
+  const blob = sources
+    .map((part) => String(part ?? '').trim())
+    .filter(Boolean)
+    .join(' ');
+
+  const inchMatch =
+    blob.match(/\b(\d{1,2})\s*[-]?\s*(?:inch|in)\b/i) ??
+    blob.match(/\b(?:size|about)\s*(\d{1,2})\s*[-]?\s*(?:inch|in)\b/i);
+  if (inchMatch?.[1]) return `${inchMatch[1]}-inch`;
+
+  const peopleMatch =
+    blob.match(/\bfor (\d{1,3}) people\b/i) ??
+    blob.match(/\b(\d{1,3})\s+(?:people|servings|serving)\b/i) ??
+    blob.match(/\bfeeds?\s+(\d{1,3})\b/i);
+  if (peopleMatch?.[1]) return `${peopleMatch[1]} people`;
+
+  const wordSizeMatch = blob.match(/\b(small|medium|large|family(?:\s+size)?)\b/i);
+  if (wordSizeMatch?.[1]) {
+    return wordSizeMatch[1].replace(/\s+size$/i, '').trim();
+  }
+
+  return null;
+}
+
 function inferFallbackActionFromTranscript(
   lines: string[],
   callerName: string,
@@ -251,7 +276,7 @@ function inferFallbackActionFromTranscript(
     const confirm = assistantConfirm ?? callerLines.join(' ').trim();
     const cakeForName = extractCakeNameFromTranscript(lines, confirm);
     const whenMatch = confirm.match(/\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)[^,.]*/i);
-    const peopleMatch = confirm.match(/\bfor (\d{1,3}) people\b/i);
+    const cakeSize = extractCakeSizeFromText(confirm, callerLines.join(' '));
     const messageMatch = confirm.match(/"([^"]+)"/);
     const icingMatch = confirm.match(/\b(blue|pink|white|chocolate|vanilla)[^,.]*icing\b/i);
     const collectingName =
@@ -263,7 +288,7 @@ function inferFallbackActionFromTranscript(
         cakeForName ? `For: ${cakeForName}` : '',
         collectingName ? `Collecting: ${collectingName}` : '',
         whenMatch?.[0] ? `When: ${whenMatch[0].trim()}` : '',
-        peopleMatch?.[1] ? `Size: ${peopleMatch[1]} people` : '',
+        cakeSize ? `Size: ${cakeSize}` : '',
         messageMatch?.[1] ? `Message: ${messageMatch[1]}` : '',
         icingMatch?.[0] ? `Notes: ${icingMatch[0]}` : confirm ? `Details: ${confirm.slice(0, 240)}` : '',
       ]),

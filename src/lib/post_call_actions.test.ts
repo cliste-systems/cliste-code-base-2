@@ -77,6 +77,16 @@ Caller: Yeah, that's everything.`;
     assert.equal(actions[0]?.type, 'action_ticket');
     assert.match(actions[0]?.summary ?? '', /Birthday cake order/i);
     assert.match(actions[0]?.summary ?? '', /For: Jamie/i);
+    assert.match(actions[0]?.summary ?? '', /Size: 13 people/i);
+  });
+
+  it('extracts inch cake size from confirmation summary', () => {
+    const transcript = `Assistant: Lovely — so that's an 8-inch chocolate birthday cake for Sean for Friday with "Happy Birthday Sean" on it. Is that all correct?
+Caller: Yeah, perfect.`;
+
+    const actions = fallbackExtractPostCallActions(transcript);
+    assert.equal(actions.length, 1);
+    assert.match(actions[0]?.summary ?? '', /Size: 8-inch/i);
   });
 
   it('keeps cake name and collecting name separate when both were given', () => {
