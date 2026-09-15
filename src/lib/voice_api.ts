@@ -15,6 +15,17 @@ export const MAX_WEBHOOK_TRANSCRIPT_CHARS = 100_000;
 
 import type { CallCloseDiagnosticsPayload } from './call_close_diagnostics.js';
 
+export type ActionTicketPayload = {
+  called_number: string;
+  caller_number: string;
+  caller_name?: string | null;
+  summary: string;
+  department_slug?: string | null;
+  route_id?: string | null;
+  call_log_id?: string | null;
+  delivery_status?: 'confirmed' | 'pending_review' | 'failed';
+};
+
 export type CallCompletePayload = {
   called_number: string;
   call_sid: string | null;
@@ -31,6 +42,9 @@ export type CallCompletePayload = {
   test_profile_id?: string | null;
   variant_label?: string | null;
   diagnostics?: CallCloseDiagnosticsPayload | null;
+  post_call_status?: 'pending' | 'complete' | 'partial' | 'failed';
+  post_call_errors?: Array<{ stage: string; message: string; at: string }>;
+  post_call_expected_ticket?: boolean;
   knowledge_gaps?: Array<{
     topic: string;
     caller_context?: string;
@@ -44,15 +58,6 @@ export type CallCompletePayload = {
     reason?: string;
     routeId?: string;
   }>;
-};
-
-export type ActionTicketPayload = {
-  called_number: string;
-  caller_number: string;
-  caller_name?: string | null;
-  summary: string;
-  department_slug?: string | null;
-  route_id?: string | null;
 };
 
 export type SendSmsPayload = {

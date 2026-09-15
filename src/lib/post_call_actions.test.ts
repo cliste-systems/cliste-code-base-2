@@ -94,9 +94,11 @@ Caller: That's perfect.`;
 
     const actions = fallbackExtractPostCallActions(brandonTranscript);
     assert.equal(actions.length, 1);
-    assert.equal(actions[0]?.callerName, 'Brendan');
-    assert.match(actions[0]?.summary ?? '', /For: Brandon/i);
-    assert.match(actions[0]?.summary ?? '', /Collecting: Brendan/i);
+    assert.equal(actions[0]?.type, 'action_ticket');
+    if (actions[0]?.type === 'action_ticket') {
+      assert.match(actions[0].summary ?? '', /For: Brandon/i);
+      assert.match(actions[0].summary ?? '', /Collecting: Brendan/i);
+    }
   });
 });
 

@@ -2,6 +2,10 @@ import { z } from 'zod';
 
 import { isPlaceholderCallerName } from './conversational_retail_policy.js';
 import { insertActionTicket } from './action_tickets.js';
+import {
+  PLACEHOLDER_TICKET_SUMMARY_PREFIX,
+  type PostCallErrorEntry,
+} from './post_call_processing.js';
 
 const actionTicketSchema = z.object({
   type: z.literal('action_ticket'),
@@ -27,6 +31,7 @@ export type ExecutePostCallActionsResult = {
   actionTicketCreated: boolean;
   executed: PostCallAction[];
   errors: string[];
+  postCallErrors: PostCallErrorEntry[];
 };
 
 const DEFAULT_POST_CALL_CALLER_NAME = 'Unknown caller';
@@ -68,6 +73,10 @@ export function normalizePostCallActions(raw: unknown): PostCallAction[] {
   }
 
   return out;
+}
+
+export function postCallActionsExpectTicket(actions: PostCallAction[]): boolean {
+  return actions.some((action) => action.type === 'action_ticket' || action.type === 'manager_callback');
 }
 
 function departmentSlugForPostCallAction(
@@ -290,14 +299,22 @@ export function fallbackExtractPostCallActions(verbatim: string): PostCallAction
   return action ? [action] : [];
 }
 
+function placeholderSummaryForAction(action: PostCallAction): string {
+  const { summary } = actionToTicketSummary(action);
+  const header = summary.split('\n')[0] ?? 'Customer request';
+  return `${PLACEHOLDER_TICKET_SUMMARY_PREFIX}\n${header}`;
+}
+
 export async function executePostCallActions(input: {
   organizationId: string;
   calledNumber: string;
   callerNumber: string;
+  callLogId?: string | null;
   actions: PostCallAction[];
 }): Promise<ExecutePostCallActionsResult> {
   const executed: PostCallAction[] = [];
   const errors: string[] = [];
+  const postCallErrors: PostCallErrorEntry[] = [];
   let actionTicketCreated = false;
 
   for (const action of input.actions) {
@@ -305,24 +322,66 @@ export async function executePostCallActions(input: {
       const { callerName, summary } = actionToTicketSummary(action);
       const routeId =
         action.type === 'action_ticket' ? action.routeId?.trim() : undefined;
+      const ticketCallerName =
+        callerName === DEFAULT_POST_CALL_CALLER_NAME ? undefined : callerName;
+      const departmentSlug = departmentSlugForPostCallAction(action, summary);
       await insertActionTicket({
         organizationId: input.organizationId,
         calledNumber: input.calledNumber,
         callerNumber: input.callerNumber,
-        callerName: callerName === DEFAULT_POST_CALL_CALLER_NAME ? undefined : callerName,
         summary,
-        routeId,
-        departmentSlug: departmentSlugForPostCallAction(action, summary),
+        ...(ticketCallerName ? { callerName: ticketCallerName } : {}),
+        ...(routeId ? { routeId } : {}),
+        ...(departmentSlug ? { departmentSlug } : {}),
         engineeringPriority: 'urgent',
+        callLogId: input.callLogId ?? null,
+        deliveryStatus: 'confirmed',
       });
       executed.push(action);
       actionTicketCreated = true;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(msg);
+      postCallErrors.push({
+        stage: 'action_ticket',
+        message: msg,
+        at: new Date().toISOString(),
+      });
       console.error('[post_call_actions] execute failed', { action, message: msg });
+
+      try {
+        const { callerName, summary } = actionToTicketSummary(action);
+        const ticketCallerName =
+          callerName === DEFAULT_POST_CALL_CALLER_NAME ? undefined : callerName;
+        const routeId =
+          action.type === 'action_ticket' ? action.routeId?.trim() : undefined;
+        const departmentSlug = departmentSlugForPostCallAction(action, summary);
+        await insertActionTicket({
+          organizationId: input.organizationId,
+          calledNumber: input.calledNumber,
+          callerNumber: input.callerNumber,
+          ...(ticketCallerName ? { callerName: ticketCallerName } : {}),
+          summary: placeholderSummaryForAction(action),
+          ...(routeId ? { routeId } : {}),
+          ...(departmentSlug ? { departmentSlug } : {}),
+          engineeringPriority: 'urgent',
+          callLogId: input.callLogId ?? null,
+          deliveryStatus: 'pending_review',
+        });
+        executed.push(action);
+        actionTicketCreated = true;
+      } catch (placeholderErr) {
+        const placeholderMsg =
+          placeholderErr instanceof Error ? placeholderErr.message : String(placeholderErr);
+        errors.push(placeholderMsg);
+        postCallErrors.push({
+          stage: 'action_ticket',
+          message: `placeholder failed: ${placeholderMsg}`,
+          at: new Date().toISOString(),
+        });
+      }
     }
   }
 
-  return { actionTicketCreated, executed, errors };
+  return { actionTicketCreated, executed, errors, postCallErrors };
 }

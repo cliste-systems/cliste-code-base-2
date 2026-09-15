@@ -1,5 +1,9 @@
 import type { CallCostEstimateRecord } from './call_cost_estimate.js';
 import { redactPii } from './gdpr.js';
+import type {
+  PostCallErrorEntry,
+  PostCallStatus,
+} from './post_call_processing.js';
 import { getSupabaseClient, isOfflinePlayground } from './supabase.js';
 import { stripToolLinesFromTranscript } from './transcript_display.js';
 
@@ -54,6 +58,9 @@ export async function insertCallLog(input: {
       ...(input.isTestCall === true ? { is_test_call: true } : {}),
       ...(input.callSid?.trim() ? { call_sid: input.callSid.trim() } : {}),
       ...(input.roomName?.trim() ? { room_name: input.roomName.trim() } : {}),
+      post_call_status: 'pending',
+      post_call_errors: [],
+      post_call_expected_ticket: false,
     })
     .select('id')
     .single();
@@ -116,6 +123,41 @@ export async function updateCallLogOutcome(callLogId: string, outcome: string): 
   const { error } = await supabase.from('call_logs').update({ outcome: outcome.trim() }).eq('id', id);
   if (error) {
     console.error('updateCallLogOutcome failed', error);
+    return false;
+  }
+  return true;
+}
+
+export async function updateCallLogPostCallProcessing(
+  callLogId: string,
+  input: {
+    postCallStatus: PostCallStatus;
+    postCallErrors?: PostCallErrorEntry[];
+    postCallExpectedTicket?: boolean;
+  },
+): Promise<boolean> {
+  if (isOfflinePlayground()) return false;
+  if (!directDbFallbackAllowed()) {
+    console.error('[call_logs] CRITICAL: post-call status update blocked — no service role');
+    return false;
+  }
+  const id = callLogId.trim();
+  if (!id) return false;
+
+  const patch: Record<string, unknown> = {
+    post_call_status: input.postCallStatus,
+  };
+  if (input.postCallErrors !== undefined) {
+    patch.post_call_errors = input.postCallErrors;
+  }
+  if (input.postCallExpectedTicket !== undefined) {
+    patch.post_call_expected_ticket = input.postCallExpectedTicket;
+  }
+
+  const supabase = getSupabaseClient();
+  const { error } = await supabase.from('call_logs').update(patch).eq('id', id);
+  if (error) {
+    console.error('updateCallLogPostCallProcessing failed', error);
     return false;
   }
   return true;

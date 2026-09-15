@@ -33,8 +33,16 @@ import {
 } from './lib/call_cost_estimate.js';
 import { postprocessCallTranscript } from './lib/call_postprocess.js';
 import { assessTranscriptCompleteness } from './lib/transcript_completeness.js';
-import { insertCallLog, updateCallLogEnrichment, updateCallLogOutcome } from './lib/call_logs.js';
-import { executePostCallActions, type PostCallAction } from './lib/post_call_actions.js';
+import { insertCallLog, updateCallLogEnrichment, updateCallLogOutcome, updateCallLogPostCallProcessing } from './lib/call_logs.js';
+import {
+  executePostCallActions,
+  postCallActionsExpectTicket,
+  type PostCallAction,
+} from './lib/post_call_actions.js';
+import {
+  PostCallProcessingTracker,
+  withRetry,
+} from './lib/post_call_processing.js';
 import {
   formatRoutesForPostCallCatalog,
   formatRoutesForPrompt,
@@ -2182,6 +2190,7 @@ export default defineAgent({
       let verbatim: string | null = null;
       let callLogId: string | null = null;
       let aiSummary: string | null = null;
+      const postCallTracker = new PostCallProcessingTracker();
 
       try {
         const ud = udSnapshot;
@@ -2292,17 +2301,40 @@ export default defineAgent({
             : {}),
         };
 
-        callLogId = await insertCallLog({
-          organizationId: ud.organizationId,
-          callerNumber: callerNumberRaw,
-          durationSeconds,
-          outcome,
-          transcript: verbatim,
-          calledNumber: persistCalledNumber || null,
-          isTestCall: testCall,
-          callSid: callSidAttr,
-          roomName: roomName || null,
-        });
+        callLogId = (
+          await withRetry('insertCallLog', () =>
+            insertCallLog({
+              organizationId: ud.organizationId,
+              callerNumber: callerNumberRaw,
+              durationSeconds,
+              outcome,
+              transcript: verbatim,
+              calledNumber: persistCalledNumber || null,
+              isTestCall: testCall,
+              callSid: callSidAttr,
+              roomName: roomName || null,
+            }),
+          )
+        ).value;
+
+        if (!callLogId && voiceWebhooksConfigured() && persistCalledNumber) {
+          const webhookCreate = await postCallComplete({
+            ...initialPayload,
+            post_call_status: 'pending',
+            post_call_errors: [],
+            post_call_expected_ticket: false,
+          });
+          if (webhookCreate.ok && webhookCreate.callLogId) {
+            callLogId = webhookCreate.callLogId;
+          } else {
+            postCallTracker.record(
+              'webhook',
+              webhookCreate.error ?? 'call-complete fallback insert failed',
+            );
+          }
+        } else if (!callLogId) {
+          postCallTracker.record('insert', 'insertCallLog returned no row');
+        }
 
         if (testCall && callLogId) {
           const reportSaved = await persistTestCallReportFromWorker({
@@ -2323,7 +2355,9 @@ export default defineAgent({
           }
         }
 
-        callLogWritten = true;
+        if (callLogId) {
+          callLogWritten = true;
+        }
         console.info('[agent] call_log_persisted', {
           callLogId,
           outcome,
@@ -2332,7 +2366,12 @@ export default defineAgent({
         });
 
         if (voiceWebhooksConfigured() && persistCalledNumber && callLogId) {
-          void postCallComplete(initialPayload).then((webhookResult) => {
+          void postCallComplete({
+            ...initialPayload,
+            post_call_status: 'pending',
+            post_call_errors: [],
+            post_call_expected_ticket: false,
+          }).then((webhookResult) => {
             if (!webhookResult.ok) {
               console.warn('[agent] call-complete webhook failed (call already in DB)', {
                 error: webhookResult.error,
@@ -2376,6 +2415,12 @@ export default defineAgent({
           knowledgeGaps = pp.knowledgeGaps;
           postCallActions = pp.postCallActions;
           didPostprocess = true;
+        } else if (verbatim) {
+          postCallTracker.record('postprocess', 'empty verbatim after close');
+        }
+
+        if (postCallActions.length > 0) {
+          postCallTracker.expectedTicket = postCallActionsExpectTicket(postCallActions);
         }
 
         if (
@@ -2387,8 +2432,10 @@ export default defineAgent({
             organizationId: ud.organizationId,
             calledNumber: persistCalledNumber,
             callerNumber: callerNumberRaw,
+            callLogId,
             actions: postCallActions,
           });
+          postCallTracker.errors.push(...exec.postCallErrors);
           if (exec.actionTicketCreated) {
             ud.sessionFlags.actionTicketCreated = true;
             outcome = 'action_created';
@@ -2409,6 +2456,9 @@ export default defineAgent({
               callLogId,
               errors: exec.errors,
             });
+            for (const err of exec.errors) {
+              postCallTracker.record('action_ticket', err);
+            }
           }
         }
 
@@ -2431,6 +2481,22 @@ export default defineAgent({
           });
           if (!enriched) {
             console.error('[agent] call log enrichment update failed', callLogId);
+            postCallTracker.record('enrichment', 'updateCallLogEnrichment failed');
+          }
+        }
+
+        const finalPostCallStatus = postCallTracker.finalize({
+          actionTicketCreated: ud.sessionFlags.actionTicketCreated,
+          callLogId,
+        });
+        if (callLogId) {
+          const statusSaved = await updateCallLogPostCallProcessing(callLogId, {
+            postCallStatus: finalPostCallStatus,
+            postCallErrors: postCallTracker.errors,
+            postCallExpectedTicket: postCallTracker.expectedTicket,
+          });
+          if (!statusSaved) {
+            console.error('[agent] post_call_status update failed', callLogId);
           }
         }
 
@@ -2468,6 +2534,9 @@ export default defineAgent({
             test_profile_id: testProfile?.id ?? null,
             variant_label: testProfile?.name ?? null,
             diagnostics: finalDiagnostics,
+            post_call_status: finalPostCallStatus,
+            post_call_errors: postCallTracker.errors,
+            post_call_expected_ticket: postCallTracker.expectedTicket,
           });
           if (!enrichResult.ok) {
             console.warn('[agent] test-call diagnostics enrichment webhook failed', {
@@ -2518,6 +2587,9 @@ export default defineAgent({
             transcript: verbatim,
             transcript_review: transcriptReview,
             ai_summary: aiSummary,
+            post_call_status: finalPostCallStatus,
+            post_call_errors: postCallTracker.errors,
+            post_call_expected_ticket: postCallTracker.expectedTicket,
             post_call_actions: postCallActions.map((action) =>
               action.type === 'action_ticket'
                 ? {
@@ -2560,6 +2632,20 @@ export default defineAgent({
         });
       } catch (err) {
         console.error('[AgentSession] close handler failed', err);
+        postCallTracker.record(
+          'close_handler',
+          err instanceof Error ? err.message : String(err),
+        );
+        if (callLogId) {
+          await updateCallLogPostCallProcessing(callLogId, {
+            postCallStatus: postCallTracker.finalize({
+              actionTicketCreated: udSnapshot.sessionFlags.actionTicketCreated,
+              callLogId,
+            }),
+            postCallErrors: postCallTracker.errors,
+            postCallExpectedTicket: postCallTracker.expectedTicket,
+          });
+        }
         if (verbatim) {
           mirrorLatestCall({
             ...mirrorBase(),
