@@ -34,6 +34,7 @@ import {
 import { postprocessCallTranscript } from './lib/call_postprocess.js';
 import { assessTranscriptCompleteness } from './lib/transcript_completeness.js';
 import { insertCallLog, updateCallLogEnrichment, updateCallLogOutcome, updateCallLogPostCallProcessing } from './lib/call_logs.js';
+import { finalizeCallRecording, startCallRecording } from './lib/call_recording.js';
 import {
   executePostCallActions,
   postCallActionsExpectTicket,
@@ -72,7 +73,12 @@ import {
 import { prewarmInferenceStt } from './lib/stt_warmup.js';
 import { resolveTtsConfig } from './lib/tts_config.js';
 import { assertExpectedStack } from './lib/pipeline_stack.js';
-import { greetingIncludesAiDisclosure } from './lib/greeting_compliance.js';
+import {
+  greetingDisclosesAi,
+  greetingIncludesAiDisclosure,
+  spokenTextIncludesLegalDisclosure,
+  spokenTextIncludesRecordingNotice,
+} from './lib/greeting_compliance.js';
 import { maskPhone, redactPii } from './lib/gdpr.js';
 import { assertOrgCallable } from './lib/org_gate.js';
 import {
@@ -160,6 +166,7 @@ import {
 } from './lib/stt_keyterms.js';
 import {
   canonicalCallOutcome,
+  type CallCompletePayload,
   postCallComplete,
   voiceWebhooksConfigured,
 } from './lib/voice_api.js';
@@ -752,9 +759,7 @@ export default defineAgent({
         pendingCallbackSummary: null,
         retailCallerName: null,
       },
-      disclosureConfirmed: conversationalRetailLine
-        ? true
-        : greetingIncludesAiDisclosure(greetingText),
+      disclosureConfirmed: false,
       demoLine: testCall,
       conversationalRetailLine,
       factoryFreshLine,
@@ -1057,6 +1062,10 @@ export default defineAgent({
       done(): boolean;
       addDoneCallback: (cb: (sh: unknown) => void) => void;
     } | null = null;
+    const callRecordingControl = {
+      tryStart: async (): Promise<void> => {},
+      confirmFromSpokenText: async (_text: string): Promise<void> => {},
+    };
     let listenGraceUntil = 0;
     let callerHasFinalTranscript = false;
     let lastAssistantChatText = '';
@@ -2144,6 +2153,9 @@ export default defineAgent({
         if (!conversationStarted && lineMatchesGreeting(text, playbackGreetingText)) {
           return;
         }
+        if (!session.userData.disclosureConfirmed) {
+          void callRecordingControl.confirmFromSpokenText(text);
+        }
         appendAssistantTranscriptLine(text, ev.createdAt, item.interrupted);
       }
     });
@@ -2280,7 +2292,7 @@ export default defineAgent({
           isTestCall: testCall,
         });
 
-        const initialPayload = {
+        let initialPayload: CallCompletePayload = {
           called_number: persistCalledNumber,
           call_sid: callSidAttr,
           room_name: roomName || null,
@@ -2316,6 +2328,23 @@ export default defineAgent({
             }),
           )
         ).value;
+
+        let audioStoragePath: string | null = null;
+        if (
+          callLogId &&
+          disclosureConfirmed &&
+          ud.callRecordingEgressId?.trim()
+        ) {
+          audioStoragePath = await finalizeCallRecording({
+            egressId: ud.callRecordingEgressId,
+            organizationId: ud.organizationId,
+            callLogId,
+          });
+        }
+
+        if (audioStoragePath) {
+          initialPayload.audio_storage_path = audioStoragePath;
+        }
 
         if (!callLogId && voiceWebhooksConfigured() && persistCalledNumber) {
           const webhookCreate = await postCallComplete({
@@ -2537,6 +2566,7 @@ export default defineAgent({
             post_call_status: finalPostCallStatus,
             post_call_errors: postCallTracker.errors,
             post_call_expected_ticket: postCallTracker.expectedTicket,
+            ...(audioStoragePath ? { audio_storage_path: audioStoragePath } : {}),
           });
           if (!enrichResult.ok) {
             console.warn('[agent] test-call diagnostics enrichment webhook failed', {
@@ -2590,6 +2620,7 @@ export default defineAgent({
             post_call_status: finalPostCallStatus,
             post_call_errors: postCallTracker.errors,
             post_call_expected_ticket: postCallTracker.expectedTicket,
+            ...(audioStoragePath ? { audio_storage_path: audioStoragePath } : {}),
             post_call_actions: postCallActions.map((action) =>
               action.type === 'action_ticket'
                 ? {
@@ -2732,10 +2763,50 @@ export default defineAgent({
       textLength: aiDisclosure.text.length,
     });
 
-    const speakOptionalAiDisclosure = () => {
+    const speakOptionalAiDisclosure = async (): Promise<void> => {
+      if (session.userData.disclosureConfirmed) return;
       if (aiDisclosure.disabled || !aiDisclosure.text.trim()) return;
-      sayPrepared(session, aiDisclosure.text, { allowInterruptions: true });
+      const handle = sayPrepared(session, aiDisclosure.text, { allowInterruptions: true });
+      try {
+        await waitForSpeechHandlePlayout(handle);
+        if (greetingDisclosesAi(aiDisclosure.text)) {
+          session.userData.disclosureConfirmed = true;
+          await callRecordingControl.tryStart();
+        }
+      } catch (error) {
+        console.warn('[agent] disclosure playout failed', error);
+      }
+    };
+
+    callRecordingControl.tryStart = async (): Promise<void> => {
+      if (session.userData.callRecordingEgressId || !session.userData.disclosureConfirmed) {
+        return;
+      }
+      if (!roomName) return;
+      const egressId = await startCallRecording(roomName);
+      if (egressId) {
+        session.userData.callRecordingEgressId = egressId;
+      }
+    };
+
+    callRecordingControl.confirmFromSpokenText = async (text: string): Promise<void> => {
+      if (session.userData.disclosureConfirmed) return;
+      const qualifies = testCall
+        ? spokenTextIncludesRecordingNotice(text)
+        : spokenTextIncludesLegalDisclosure(text);
+      if (!qualifies) return;
+      try {
+        await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
+      } catch {
+        /* best-effort playout wait */
+      }
+      if (session.userData.disclosureConfirmed) return;
       session.userData.disclosureConfirmed = true;
+      console.info('[agent] disclosure_confirmed_after_playout', {
+        demoLine: testCall,
+        snippet: text.slice(0, 120),
+      });
+      await callRecordingControl.tryStart();
     };
 
     const callerStillConnected = (): boolean => {
@@ -2784,7 +2855,12 @@ export default defineAgent({
             /* playout wait best-effort */
           }
           greetingPlayoutComplete = true;
-          speakOptionalAiDisclosure();
+          if (greetingDisclosesAi(playbackGreetingText)) {
+            session.userData.disclosureConfirmed = true;
+            await callRecordingControl.tryStart();
+          } else {
+            await speakOptionalAiDisclosure();
+          }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           if (!msg.includes('not running')) {
@@ -2792,17 +2868,12 @@ export default defineAgent({
           }
         }
       }
-
-      if (greetingIncludesAiDisclosure(greetingText) || aiDisclosure.disabled) {
-        session.userData.disclosureConfirmed = true;
-      }
     } else {
       conversationStarted = true;
       const openInstructions = callPersona
         ? `The caller just connected. Open with ONE short greeting: "${callPersona.greeting}". Include the AI and call-recording notice exactly as specified in your instructions. Max 35 words.`
         : `The caller just connected. Speak first with ONE short greeting for ${org.name}. Max 35 words. Include the AI and call-recording notice exactly as specified in your instructions.`;
       await session.generateReply({ instructions: openInstructions });
-      session.userData.disclosureConfirmed = true;
     }
   },
 });

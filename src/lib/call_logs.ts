@@ -128,6 +128,31 @@ export async function updateCallLogOutcome(callLogId: string, outcome: string): 
   return true;
 }
 
+export async function updateCallLogAudioPath(
+  callLogId: string,
+  audioStoragePath: string,
+): Promise<boolean> {
+  if (isOfflinePlayground()) return false;
+  if (!directDbFallbackAllowed()) {
+    console.error('[call_logs] CRITICAL: audio path update blocked — no service role');
+    return false;
+  }
+  const id = callLogId.trim();
+  const path = audioStoragePath.trim();
+  if (!id || !path) return false;
+
+  const supabase = getSupabaseClient();
+  const { error } = await supabase
+    .from('call_logs')
+    .update({ audio_storage_path: path })
+    .eq('id', id);
+  if (error) {
+    console.error('updateCallLogAudioPath failed', error);
+    return false;
+  }
+  return true;
+}
+
 export async function updateCallLogPostCallProcessing(
   callLogId: string,
   input: {

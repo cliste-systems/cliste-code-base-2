@@ -22,13 +22,14 @@ apply to it directly — the hardening for public surfaces lives in
 |---|---|---|
 | PII redaction before LLM post-processing and DB insert | `src/lib/gdpr.ts`, `src/lib/call_logs.ts`, `src/lib/action_tickets.ts` | Removes card numbers, CVV, IBANs, PPS numbers, spoken card numbers |
 | Phone number masking in logs | `src/lib/gdpr.ts` (`maskPhone`) applied in `src/lib/tools.ts` | Prevents full numbers landing in Railway log pipeline / third-party log processors |
-| AI / recording disclosure at call open | `src/agent.ts` — `CLISTE_AI_DISCLOSURE_OPENING` / `_TEXT` envs | GDPR Art 13 transparency obligation |
+| AI / recording disclosure at call open | `src/agent.ts`, `src/lib/greeting_compliance.ts`, `src/lib/ai_disclosure.ts` | Spoken disclosure must complete playout before LiveKit egress starts; demo line waits for recording-awareness line after caller name |
+| Call MP3 recording (30-day retention) | `src/lib/call_recording.ts`, `src/agent.ts` | LiveKit egress → Supabase `call-recordings/{orgId}/{callLogId}.mp3`; disable with `CALL_RECORDING_ENABLED=0`; full audio is **not** redacted like transcripts |
 | Caller-line classification | `src/lib/phone_classify.ts` | Detects landline vs mobile; never asks for a mobile if the caller ID already is one |
 | Tool-level caller verification for payment links | `src/lib/tools.ts` (`sendPaymentLink`) | Refuses to resend a payment link to a number other than the one on file |
 | Stripe Checkout Sessions (not card capture by voice) | `src/lib/payments.ts` | Card details never touch the agent or our logs — they go direct to Stripe |
 | In-process cache for org config | `src/lib/cache.ts`, `src/lib/supabase.ts` | Reduces repeated reads of org + service data |
-| GDPR right-to-erasure script | `scripts/gdpr-erase.ts`, `npm run gdpr:erase -- --phone="…"` | Wipes caller PII while preserving audit rows and references |
-| GDPR storage-limitation script | `scripts/gdpr-purge-transcripts.ts`, `npm run gdpr:purge-transcripts -- --days=30` | Nulls verbatim transcripts older than N days |
+| GDPR right-to-erasure script | `scripts/gdpr-erase.ts`, `npm run gdpr:erase -- --phone="…"` | Wipes caller PII, deletes `call-recordings` objects, nulls `audio_storage_path` |
+| GDPR storage-limitation script | `scripts/gdpr-purge-transcripts.ts`, `npm run gdpr:purge-transcripts -- --days=30` | Nulls verbatim transcripts older than N days; recording purge runs in code-base-1 cron |
 
 ## Railway checklist
 

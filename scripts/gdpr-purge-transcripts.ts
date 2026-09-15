@@ -10,6 +10,9 @@
  * Run as a daily/weekly cron in Railway:
  *   npx tsx scripts/gdpr-purge-transcripts.ts --days=30
  *   npx tsx scripts/gdpr-purge-transcripts.ts --days=30 --dry-run
+ *
+ * Call recording purge (Supabase `call-recordings` bucket) is handled by the
+ * dashboard cron `/api/cron/data-retention` in code-base-1 — not this script.
  */
 import 'dotenv/config';
 

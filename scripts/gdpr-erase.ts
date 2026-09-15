@@ -3,6 +3,8 @@
  *
  * Wipes per-caller PII for a phone number across the voice-agent tables:
  *   - call_logs.transcript / transcript_review / ai_summary  → null
+ *   - call_logs.audio_storage_path                           → null
+ *   - call-recordings Storage objects                        → deleted
  *   - call_logs.caller_number                                → 'erased'
  *   - action_tickets.caller_number                           → 'erased'
  *   - action_tickets.summary                                 → '[erased on request]'
@@ -20,6 +22,8 @@ import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
 
 import { normalizePhoneE164 } from '../src/lib/phone_normalize.js';
+
+const CALL_RECORDINGS_BUCKET = 'call-recordings';
 
 function usage(): never {
   console.error('Usage: tsx scripts/gdpr-erase.ts <phone> [--dry-run]');
@@ -59,13 +63,22 @@ async function main() {
 
   const callLogs = await supabase
     .from('call_logs')
-    .select('id, organization_id, created_at')
+    .select('id, organization_id, created_at, audio_storage_path')
     .in('caller_number', variants);
   if (callLogs.error) {
     console.error('call_logs lookup failed', callLogs.error);
     process.exit(1);
   }
   console.log(`call_logs matched: ${callLogs.data?.length ?? 0}`);
+
+  const recordingPaths = [
+    ...new Set(
+      (callLogs.data ?? [])
+        .map((row) => String(row.audio_storage_path ?? '').trim())
+        .filter(Boolean),
+    ),
+  ];
+  console.log(`call recordings matched: ${recordingPaths.length}`);
 
   const actionTickets = await supabase
     .from('action_tickets')
@@ -82,6 +95,17 @@ async function main() {
     return;
   }
 
+  if (recordingPaths.length > 0) {
+    const { error } = await supabase.storage
+      .from(CALL_RECORDINGS_BUCKET)
+      .remove(recordingPaths);
+    if (error) {
+      console.error('call-recordings storage remove failed', error.message);
+      process.exit(1);
+    }
+    console.log(`call-recordings: removed ${recordingPaths.length} object(s).`);
+  }
+
   // Wipe transcripts + caller_number on call_logs.
   if ((callLogs.data?.length ?? 0) > 0) {
     const { error } = await supabase
@@ -90,6 +114,7 @@ async function main() {
         transcript: null,
         transcript_review: null,
         ai_summary: null,
+        audio_storage_path: null,
         caller_number: 'erased',
       })
       .in('caller_number', variants);
@@ -97,7 +122,7 @@ async function main() {
       console.error('call_logs update failed', error);
       process.exit(1);
     }
-    console.log('call_logs: PII columns nulled, caller_number set to "erased".');
+    console.log('call_logs: PII columns nulled, recordings cleared, caller_number set to "erased".');
   }
 
   // Wipe summary + caller_number on action_tickets.

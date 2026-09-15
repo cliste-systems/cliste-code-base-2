@@ -58,6 +58,7 @@ export type CallCompletePayload = {
     reason?: string;
     routeId?: string;
   }>;
+  audio_storage_path?: string | null;
 };
 
 export type SendSmsPayload = {

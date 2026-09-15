@@ -41,7 +41,7 @@ describe('resolveAiDisclosure', () => {
     try {
       const result = resolveAiDisclosure({ greetingText: 'Hello, how can I help?' });
       assert.equal(result.disabled, false);
-      assert.match(result.text, /store/i);
+      assert.match(result.text, /recorded and transcribed/i);
       assert.doesNotMatch(result.text, /shop/i);
       assert.doesNotMatch(result.text, /link/i);
     } finally {

@@ -1,11 +1,11 @@
 import { greetingIncludesAiDisclosure } from './greeting_compliance.js';
+import { voiceLegalDisclosure } from './voice_legal_disclosure.js';
 import { isRetailNiche } from './org_vertical.js';
 
 const PROD_OVERRIDE_TOKEN = 'i-have-a-pre-call-ivr-and-accept-the-legal-risk';
 
-/** Default post-greeting disclosure — retail / grocery only (no link language). */
-const DEFAULT_BUSINESS_DISCLOSURE =
-  "Just so you know, I'm an AI assistant for the store and your call may be recorded to help with your enquiry.";
+/** Default post-greeting disclosure — matches code-base-1 voiceLegalDisclosure(). */
+const DEFAULT_BUSINESS_DISCLOSURE = voiceLegalDisclosure();
 
 export type ResolvedAiDisclosure = {
   text: string;
@@ -27,7 +27,11 @@ function isProductionEnv(): boolean {
 
 function isValidCustomDisclosure(text: string): boolean {
   const t = text.trim();
-  return t.length >= 24 && /\bai\b/i.test(t) && !/\bshop\b/i.test(t) && !/\blink\b/i.test(t);
+  if (t.length < 24) return false;
+  if (!/\bai\b/i.test(t)) return false;
+  if (!/\b(recorded|recording|transcribed|transcription)\b/i.test(t)) return false;
+  if (/\bshop\b/i.test(t) || /\blink\b/i.test(t)) return false;
+  return true;
 }
 
 /**

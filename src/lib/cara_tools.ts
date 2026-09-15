@@ -98,6 +98,8 @@ export type CaraAgentUserData = {
   disclosureConfirmed: boolean;
   /** Hello Cara demo line — stricter tool and closing rules. */
   demoLine?: boolean;
+  /** LiveKit room composite egress id when call recording is active. */
+  callRecordingEgressId?: string | null;
   /** Kavanaghs-style retail line — programmatic wind-down and close. */
   conversationalRetailLine?: boolean;
   /** Vanilla Cartesia Siobhan baseline — no demo orchestrator or TTS sanitization. */
