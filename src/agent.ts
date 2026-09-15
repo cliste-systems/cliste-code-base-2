@@ -2339,6 +2339,7 @@ export default defineAgent({
             egressId: ud.callRecordingEgressId,
             organizationId: ud.organizationId,
             callLogId,
+            roomName: roomName || '',
           });
         }
 
@@ -2782,8 +2783,11 @@ export default defineAgent({
       if (session.userData.callRecordingEgressId || !session.userData.disclosureConfirmed) {
         return;
       }
-      if (!roomName) return;
-      const egressId = await startCallRecording(roomName);
+      if (!roomName || !session.userData.organizationId) return;
+      const egressId = await startCallRecording({
+        roomName,
+        organizationId: session.userData.organizationId,
+      });
       if (egressId) {
         session.userData.callRecordingEgressId = egressId;
       }
