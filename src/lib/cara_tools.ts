@@ -100,6 +100,8 @@ export type CaraAgentUserData = {
   demoLine?: boolean;
   /** LiveKit room composite egress id when call recording is active. */
   callRecordingEgressId?: string | null;
+  /** Wall-clock ms when conversation recording stopped (farewell or caller left). */
+  callRecordingStoppedAtMs?: number | null;
   /** Kavanaghs-style retail line — programmatic wind-down and close. */
   conversationalRetailLine?: boolean;
   /** Vanilla Cartesia Siobhan baseline — no demo orchestrator or TTS sanitization. */
@@ -795,7 +797,7 @@ export class CaraTools {
 
   readonly searchSuperValuProducts = llm.tool({
     description:
-      'Look up SuperValu products — stock, regular price, and synced weekly offers. Use for do you stock / how much / on offer / this week / on special. Pass the caller\'s product words (e.g. "steak", "salmon darnes", "McVitie\'s biscuits") — never generic "weekly offers". Quote only what this tool returns; if it asks you to clarify counter vs pre-pack, ask one short question before quoting.',
+      'Look up SuperValu products — stock, regular price, and synced weekly offers. Use for do you stock / how much / on offer / this week / on special. Pass the caller\'s product words (e.g. "steak", "salmon darnes", "McVitie\'s biscuits") — never generic "weekly offers". Quote only what this tool returns. If it asks you to clarify first — counter vs pre-pack (butcher, fish, deli), or which type/brand when several match — ask ONE short question and do NOT say nothing is on offer.',
     parameters: z.object({
       query: z
         .string()

@@ -7,6 +7,7 @@ import {
   isSupabaseS3Endpoint,
   resolveEgressS3Config,
   resolveSupabaseStorageS3Endpoint,
+  stopActiveCallRecording,
 } from './call_recording.js';
 
 describe('resolveSupabaseStorageS3Endpoint', () => {
@@ -62,5 +63,21 @@ describe('call_recording paths', () => {
       ),
       '11111111-1111-4111-8111-111111111111/.staging/RM_abc-123.mp3',
     );
+  });
+});
+
+describe('stopActiveCallRecording', () => {
+  it('is idempotent when already stopped', async () => {
+    const state = {
+      callRecordingEgressId: 'eg_test',
+      callRecordingStoppedAtMs: 1_700_000_000_000,
+    };
+    assert.equal(await stopActiveCallRecording(state, 'test'), 1_700_000_000_000);
+    assert.equal(state.callRecordingEgressId, 'eg_test');
+  });
+
+  it('returns null when no egress id', async () => {
+    const state = { callRecordingEgressId: null, callRecordingStoppedAtMs: null };
+    assert.equal(await stopActiveCallRecording(state, 'test'), null);
   });
 });

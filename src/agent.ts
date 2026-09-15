@@ -13,6 +13,7 @@ import {
   voice,
 } from '@livekit/agents';
 import type { RemoteParticipant } from '@livekit/rtc-node';
+import { RoomEvent } from '@livekit/rtc-node';
 import { RoomServiceClient } from 'livekit-server-sdk';
 import { fileURLToPath } from 'node:url';
 
@@ -37,7 +38,7 @@ import { insertCallLog, updateCallLogEnrichment, updateCallLogOutcome, updateCal
 import {
   finalizeCallRecording,
   startCallRecording,
-  stopCallRecording,
+  stopActiveCallRecording,
 } from './lib/call_recording.js';
 import {
   executePostCallActions,
@@ -2225,10 +2226,6 @@ export default defineAgent({
       });
 
       const udSnapshot = session.userData;
-      const recordingEgressId = udSnapshot?.callRecordingEgressId?.trim();
-      if (recordingEgressId) {
-        void stopCallRecording(recordingEgressId);
-      }
       callFinalizePromise = (async () => {
       let durationSeconds = 0;
       let outcome = 'answered';
@@ -2243,9 +2240,15 @@ export default defineAgent({
           console.error('[agent] call log skipped — missing organizationId on close');
           return;
         }
+
+        if (ud.callRecordingEgressId?.trim() && !ud.callRecordingStoppedAtMs) {
+          await stopActiveCallRecording(ud, 'session_close');
+        }
+
         console.info('[agent] call_close_finalize_start', {
           organizationId: ud.organizationId,
           transcriptLines: transcriptParts.length,
+          callRecordingStoppedAtMs: ud.callRecordingStoppedAtMs ?? null,
         });
 
         const transcriptFlushMs = Number.parseInt(
@@ -2261,7 +2264,12 @@ export default defineAgent({
         if (syncedFromHistory > 0) {
         }
 
-        durationSeconds = Math.max(0, Math.round((Date.now() - callStartedAt) / 1000));
+        durationSeconds = Math.max(
+          0,
+          Math.round(
+            ((ud.callRecordingStoppedAtMs ?? Date.now()) - callStartedAt) / 1000,
+          ),
+        );
         outcome = canonicalCallOutcome({
           linkSent: ud.sessionFlags.linkSent,
           actionTicketCreated: ud.sessionFlags.actionTicketCreated,
@@ -2782,6 +2790,11 @@ export default defineAgent({
     });
 
     await session.start({ agent, room: ctx.room });
+    const callerIdentity = participant.identity;
+    ctx.room.on(RoomEvent.ParticipantDisconnected, (left) => {
+      if (left.identity !== callerIdentity) return;
+      void stopActiveCallRecording(session.userData, 'caller_participant_disconnected');
+    });
     if (!bareLiveKitRetailLane) {
       resetDeadAirTimer();
     }

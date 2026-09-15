@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { phoneHangupToneFrameStream } from './hangup_tone.js';
+import { stopActiveCallRecording, type CallRecordingStopState } from './call_recording.js';
 
 function livekitServiceHttpsHost(): string | null {
   const u = process.env.LIVEKIT_URL?.trim();
@@ -146,7 +147,7 @@ export async function waitForAgentSpeechPlayout(
   }
 }
 
-export type EndCallUserData = {
+export type EndCallUserData = CallRecordingStopState & {
   sessionFlags: { endPhoneCallUsed: boolean };
   endCallTarget?: { roomName: string; callerIdentity: string };
 };
@@ -191,6 +192,7 @@ export async function disconnectCallerLeg(
   try {
     await beforeAudio();
     await waitForAgentSpeechPlayout(session);
+    await stopActiveCallRecording(ud, 'end_phone_call_farewell');
 
     const resolvedPath = resolveHangupSoundPath();
 

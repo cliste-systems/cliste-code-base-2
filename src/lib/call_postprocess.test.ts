@@ -6,6 +6,7 @@ import {
   normalizePostprocessKnowledgeGaps,
   parsePostprocessJsonPayload,
   postprocessCallTranscript,
+  sanitizeOwnerFacingCallSummary,
 } from './call_postprocess.js';
 import { normalizePostCallActions } from './post_call_actions.js';
 
@@ -102,6 +103,21 @@ describe('parsePostprocessJsonPayload', () => {
     const actions = normalizePostCallActions(parsed?.postCallActions);
     assert.equal(actions.length, 1);
     assert.equal(actions[0]?.callerName, 'Timmy');
+  });
+});
+
+describe('sanitizeOwnerFacingCallSummary', () => {
+  it('replaces AI assistant phrasing with Cara in owner summaries', () => {
+    assert.equal(
+      sanitizeOwnerFacingCallSummary(
+        'The call was connected, but the caller disconnected immediately after the AI assistant\'s greeting.',
+      ),
+      'The call was connected, but the caller disconnected immediately after Cara\'s greeting.',
+    );
+    assert.equal(
+      sanitizeOwnerFacingCallSummary('The AI assistant answered and took a message.'),
+      'Cara answered and took a message.',
+    );
   });
 });
 

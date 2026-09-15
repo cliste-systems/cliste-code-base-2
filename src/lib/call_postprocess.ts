@@ -162,7 +162,7 @@ function fallbackSummary(outcome: string): string {
     return 'The caller received a routing link by SMS during the call.';
   }
   if (o.includes('action_required') || o.includes('action_created')) {
-    return 'The AI logged a follow-up for your team (Action Inbox).';
+    return 'Cara logged a follow-up for your team (Action Inbox).';
   }
   if (o.includes('callback')) {
     return 'The caller asked for a callback or transfer; the team was notified.';
@@ -170,7 +170,22 @@ function fallbackSummary(outcome: string): string {
   if (o.includes('blocked')) {
     return 'The call was blocked by the business blocklist.';
   }
+  if (o.includes('voicemail') || o.includes('no_speech')) {
+    return 'The call connected, but the caller hung up right after Cara\'s greeting.';
+  }
   return 'The caller spoke with Cara. See the transcript for details.';
+}
+
+/** Owner-facing summaries should say Cara — callers already heard AI disclosure in the greeting. */
+export function sanitizeOwnerFacingCallSummary(summary: string): string {
+  return summary
+    .replace(/\bthe AI assistant's\b/gi, "Cara's")
+    .replace(/\bthe AI assistant\b/gi, 'Cara')
+    .replace(/\bAI assistant's\b/gi, "Cara's")
+    .replace(/\bAI assistant\b/gi, 'Cara')
+    .replace(/\bthe AI's\b/gi, "Cara's")
+    .replace(/\bvirtual assistant's\b/gi, "Cara's")
+    .replace(/\bvirtual assistant\b/gi, 'Cara');
 }
 
 async function runPostprocessLlm(input: {
@@ -213,7 +228,7 @@ ${input.verbatimForLlm}
 
 Return ONLY valid JSON with keys ${jsonKeys} (no markdown outside JSON).
 - transcriptReview: Full conversation with Caller: and Assistant: line prefixes only. Fix obvious speech-to-text mistakes. Include every caller and assistant turn — do not drop filler lines or omit lines. Do not include [Tool], [Tool result], or [Tool error] lines. Do not invent facts.
-- summary: 2–4 short sentences in Irish/British English for the business owner: what the caller wanted, what happened, and the result.
+- summary: 2–4 short sentences in Irish/British English for the business owner: what the caller wanted, what happened, and the result. Say **Cara**, not "AI" or "AI assistant" — callers already heard that disclosure in the live greeting. For hang-ups after the opening only, e.g. "The caller hung up right after Cara's greeting."
 - callResolution: exactly one of "resolved", "incomplete", "needs_follow_up" — judge from the full conversation:
   - resolved: the caller's question or errand was handled on the call (including simple hours/stock/directions answers with no further staff action).
   - incomplete: no shop errand was stated or completed — pleasantries only, abrupt hang-up, or the conversation never moved past small talk.
@@ -244,7 +259,7 @@ Return ONLY valid JSON with keys ${jsonKeys} (no markdown outside JSON).
     }
     return {
       transcriptReview: stripToolLinesFromTranscript(parsed.transcriptReview.trim()),
-      aiSummary: parsed.summary.trim(),
+      aiSummary: sanitizeOwnerFacingCallSummary(parsed.summary.trim()),
       callResolution: normalizeCallResolution(parsed.callResolution),
       knowledgeGaps: normalizePostprocessKnowledgeGaps(parsed.knowledgeGaps),
       postCallActions,
@@ -291,7 +306,9 @@ export async function postprocessCallTranscript(input: {
       : emptyActions;
     return {
       transcriptReview: verbatim,
-      aiSummary: `${fallbackSummary(input.outcome)} Assistant lines missing from live capture — review verbatim only.`,
+      aiSummary: sanitizeOwnerFacingCallSummary(
+        `${fallbackSummary(input.outcome)} Assistant lines missing from live capture — review verbatim only.`,
+      ),
       callResolution: null,
       knowledgeGaps: emptyGaps,
       postCallActions: fallbackActions,
@@ -350,7 +367,7 @@ export async function postprocessCallTranscript(input: {
 
   return {
     transcriptReview: verbatim,
-    aiSummary: fallbackSummary(input.outcome),
+    aiSummary: sanitizeOwnerFacingCallSummary(fallbackSummary(input.outcome)),
     callResolution: null,
     knowledgeGaps: emptyGaps,
     postCallActions: fallbackActions,

@@ -310,6 +310,33 @@ async function storeRecordingBody(
   return storagePath;
 }
 
+export type CallRecordingStopState = {
+  callRecordingEgressId?: string | null;
+  callRecordingStoppedAtMs?: number | null;
+};
+
+/** Stop room composite egress once — after farewell or when the caller leaves. Idempotent. */
+export async function stopActiveCallRecording(
+  state: CallRecordingStopState,
+  reason: string,
+): Promise<number | null> {
+  if (state.callRecordingStoppedAtMs) {
+    return state.callRecordingStoppedAtMs;
+  }
+  const id = state.callRecordingEgressId?.trim();
+  if (!id) return null;
+
+  await stopCallRecording(id);
+  const stoppedAtMs = Date.now();
+  state.callRecordingStoppedAtMs = stoppedAtMs;
+  state.callRecordingEgressId = null;
+  console.info('[call_recording] conversation_end', { reason, stoppedAtMs });
+  // #region agent log
+  fetch('http://127.0.0.1:7662/ingest/95496c05-1739-4e32-b7be-319b56b1c5b5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0f50f3'},body:JSON.stringify({sessionId:'0f50f3',location:'call_recording.ts:stopActiveCallRecording',message:'recording_stopped',data:{reason,stoppedAtMs,egressId:id.slice(0,12)},timestamp:Date.now(),hypothesisId:'R1-R3',runId:'post-fix'})}).catch(()=>{});
+  // #endregion
+  return stoppedAtMs;
+}
+
 /** Stop LiveKit egress as soon as the call ends so the MP3 does not include post-call silence. */
 export async function stopCallRecording(egressId: string): Promise<void> {
   if (isOfflinePlayground() || !callRecordingEnabled()) return;
