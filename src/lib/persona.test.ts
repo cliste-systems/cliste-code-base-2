@@ -66,10 +66,23 @@ describe('persona', () => {
       const a = pickCallPersona({ businessName: 'A', seed: 'one', localHour: 9 });
       const b = pickCallPersona({ businessName: 'B', seed: 'two', localHour: 21 });
       assert.equal(a.variant, b.variant);
-      assert.equal(a.variant, '0-0-0-0');
+      assert.equal(a.variant, '0-0-0-0-0');
     } finally {
       if (prev === undefined) delete process.env.CARA_PERSONA_VARIETY;
       else process.env.CARA_PERSONA_VARIETY = prev;
+    }
+  });
+
+  it('includes wellbeing reply shapes without leaking placeholders', () => {
+    const p = pickCallPersona({
+      businessName: 'Test Shop',
+      seed: 'org-1:+353871234567:room-wellbeing',
+      localHour: 11,
+    });
+    assert.equal(p.wellbeingReplyShapes.length, 4);
+    assert.ok(p.wellbeingReplyShapes.some((shape) => /\{ack\}/.test(shape)));
+    for (const shape of p.wellbeingReplyShapes) {
+      assert.ok(shape.trim().length > 0);
     }
   });
 

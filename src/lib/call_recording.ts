@@ -310,6 +310,22 @@ async function storeRecordingBody(
   return storagePath;
 }
 
+/** Stop LiveKit egress as soon as the call ends so the MP3 does not include post-call silence. */
+export async function stopCallRecording(egressId: string): Promise<void> {
+  if (isOfflinePlayground() || !callRecordingEnabled()) return;
+
+  const id = egressId.trim();
+  if (!id) return;
+
+  try {
+    const client = getEgressClient();
+    await client.stopEgress(id);
+    console.info('[call_recording] stopped', { egressId: id });
+  } catch (error) {
+    console.warn('[call_recording] stop failed', error);
+  }
+}
+
 export async function finalizeCallRecording(input: {
   egressId: string;
   organizationId: string;
@@ -346,11 +362,7 @@ export async function finalizeCallRecording(input: {
       const status = info.status;
       if (activeStatuses.has(status)) {
         if (attempt === 0) {
-          try {
-            await client.stopEgress(egressId);
-          } catch (error) {
-            console.warn('[call_recording] stopEgress failed', error);
-          }
+          await stopCallRecording(egressId);
         }
         await sleep(2000);
         continue;

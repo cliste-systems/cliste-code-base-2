@@ -77,6 +77,7 @@ export async function updateCallLogEnrichment(
     transcriptReview?: string | null;
     aiSummary?: string | null;
     costEstimate?: CallCostEstimateRecord | null;
+    callResolution?: string | null;
   },
 ): Promise<boolean> {
   if (isOfflinePlayground()) return false;
@@ -98,6 +99,9 @@ export async function updateCallLogEnrichment(
   }
   if (input.costEstimate !== undefined) {
     patch.cost_estimate = input.costEstimate;
+  }
+  if (input.callResolution !== undefined) {
+    patch.call_resolution = input.callResolution;
   }
   if (Object.keys(patch).length === 0) return true;
 

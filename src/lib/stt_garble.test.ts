@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  assistantReplyLooksLikeClarificationRequest,
   detectLikelySttGarble,
   isPhantomCallerTranscript,
   soundsLikeSubstantiveServiceAnswer,
@@ -26,6 +27,19 @@ describe('stt_garble', () => {
     assert.equal(
       soundsLikeSubstantiveServiceAnswer('I need to check stock on the bakery counter'),
       true,
+    );
+  });
+
+  it('detects warm clarification replies', () => {
+    assert.equal(
+      assistantReplyLooksLikeClarificationRequest(
+        "Sorry — I didn't quite catch that, say it again?",
+      ),
+      true,
+    );
+    assert.equal(
+      assistantReplyLooksLikeClarificationRequest('No bother at all, I\'m doing great!'),
+      false,
     );
   });
 });

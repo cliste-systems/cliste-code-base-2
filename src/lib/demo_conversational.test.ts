@@ -35,8 +35,8 @@ describe('demo conversational line', () => {
     assert.match(prompt, /how are you keeping/i);
     assert.match(prompt, /Scenario playbooks/i);
     assert.match(prompt, /endPhoneCall/i);
-    assert.ok(prompt.length < 12000, 'demo prompt should stay compact');
-    assert.doesNotMatch(prompt, /Sound human \(this is the whole job\)/i);
+    assert.match(prompt, /Sound human \(this is the whole job\)/i);
+    assert.match(prompt, /Social chitchat/i);
     assert.doesNotMatch(prompt, /spoken automatically/i);
   });
 

@@ -35,7 +35,20 @@ export type CallPostprocessResult = {
   aiSummary: string;
   knowledgeGaps: PostprocessKnowledgeGap[];
   postCallActions: PostCallAction[];
+  /** Post-call LLM judgment for owner dashboard badges. */
+  callResolution: CallResolution | null;
 };
+
+export type CallResolution = 'resolved' | 'incomplete' | 'needs_follow_up';
+
+export function normalizeCallResolution(value: unknown): CallResolution | null {
+  if (typeof value !== 'string') return null;
+  const v = value.trim().toLowerCase();
+  if (v === 'resolved' || v === 'incomplete' || v === 'needs_follow_up') {
+    return v;
+  }
+  return null;
+}
 
 function countTranscriptLines(text: string): number {
   return text.split('\n').filter((line) => line.trim().length > 0).length;
@@ -189,8 +202,8 @@ ${input.routesCatalog?.trim() ? `\nActive routes catalog:\n${input.routesCatalog
     : '';
 
   const jsonKeys = input.conversationalRetailLine
-    ? '"transcriptReview", "summary", "knowledgeGaps", and "postCallActions"'
-    : '"transcriptReview", "summary", and "knowledgeGaps"';
+    ? '"transcriptReview", "summary", "callResolution", "knowledgeGaps", and "postCallActions"'
+    : '"transcriptReview", "summary", "callResolution", and "knowledgeGaps"';
 
   const userPrompt = `Business name: ${input.businessName}
 Call outcome code: ${input.outcome}
@@ -201,6 +214,10 @@ ${input.verbatimForLlm}
 Return ONLY valid JSON with keys ${jsonKeys} (no markdown outside JSON).
 - transcriptReview: Full conversation with Caller: and Assistant: line prefixes only. Fix obvious speech-to-text mistakes. Include every caller and assistant turn — do not drop filler lines or omit lines. Do not include [Tool], [Tool result], or [Tool error] lines. Do not invent facts.
 - summary: 2–4 short sentences in Irish/British English for the business owner: what the caller wanted, what happened, and the result.
+- callResolution: exactly one of "resolved", "incomplete", "needs_follow_up" — judge from the full conversation:
+  - resolved: the caller's question or errand was handled on the call (including simple hours/stock/directions answers with no further staff action).
+  - incomplete: no shop errand was stated or completed — pleasantries only, abrupt hang-up, or the conversation never moved past small talk.
+  - needs_follow_up: staff must still act (callback, order logged verbally, unresolved complaint, etc.).
 - knowledgeGaps: Array (may be empty). Include an item when the caller asked about a service or topic Cara could not answer from the business menu/instructions, or Cara took a message because something was unlisted or unknown. Each item: {"topic":"short label","caller_context":"optional staff excerpt","cara_question":"optional owner question","suggested_section":"faq|services|services_not_offered|business_rules"}. Omit payment/health/ID details. Do not emit gaps for opening hours, bank holidays, or St Patrick's Day when structured hours exist — those are handled programmatically. Do not duplicate routine Action Inbox handoffs already covered by the outcome. Max 3 items.${postCallActionsBlock}`;
 
   const chatCtx = llm.ChatContext.empty();
@@ -214,6 +231,7 @@ Return ONLY valid JSON with keys ${jsonKeys} (no markdown outside JSON).
   const parsed = parsePostprocessJsonPayload<{
     transcriptReview?: string;
     summary?: string;
+    callResolution?: unknown;
     knowledgeGaps?: unknown;
     postCallActions?: unknown;
   }>(raw);
@@ -227,6 +245,7 @@ Return ONLY valid JSON with keys ${jsonKeys} (no markdown outside JSON).
     return {
       transcriptReview: stripToolLinesFromTranscript(parsed.transcriptReview.trim()),
       aiSummary: parsed.summary.trim(),
+      callResolution: normalizeCallResolution(parsed.callResolution),
       knowledgeGaps: normalizePostprocessKnowledgeGaps(parsed.knowledgeGaps),
       postCallActions,
     };
@@ -260,6 +279,7 @@ export async function postprocessCallTranscript(input: {
     return {
       transcriptReview: '',
       aiSummary: '',
+      callResolution: null,
       knowledgeGaps: emptyGaps,
       postCallActions: emptyActions,
     };
@@ -272,6 +292,7 @@ export async function postprocessCallTranscript(input: {
     return {
       transcriptReview: verbatim,
       aiSummary: `${fallbackSummary(input.outcome)} Assistant lines missing from live capture — review verbatim only.`,
+      callResolution: null,
       knowledgeGaps: emptyGaps,
       postCallActions: fallbackActions,
     };
@@ -312,6 +333,7 @@ export async function postprocessCallTranscript(input: {
         return {
           transcriptReview: verbatim,
           aiSummary: result.aiSummary,
+          callResolution: result.callResolution,
           knowledgeGaps,
           postCallActions,
         };
@@ -329,6 +351,7 @@ export async function postprocessCallTranscript(input: {
   return {
     transcriptReview: verbatim,
     aiSummary: fallbackSummary(input.outcome),
+    callResolution: null,
     knowledgeGaps: emptyGaps,
     postCallActions: fallbackActions,
   };

@@ -9,6 +9,8 @@ export type CallPersona = {
   greeting: string;
   acknowledgements: string[];
   signOff: string;
+  /** Template shapes for wellbeing replies — LLM paraphrases; never read verbatim. */
+  wellbeingReplyShapes: string[];
 };
 
 export type PickCallPersonaInput = {
@@ -53,7 +55,17 @@ const SIGN_OFF_TEMPLATES = [
   'Grand so, {name} — see you {date}. All the best!',
 ] as const;
 
-const BANK_PREFIXES = ['manner', 'greeting', 'ack', 'signoff'] as const;
+/** Wellbeing / small-talk reply shapes — {ack} = acknowledgement word from this call's set. */
+const WELLBEING_REPLY_SHAPE_SETS = [
+  ['{ack} — yourself?', 'Not too bad at all — {ack}.', 'Doing well thanks — go on.', 'Good thanks — yourself?'],
+  ['I\'m good thanks — {ack}.', '{ack} — how are you keeping?', 'Not too bad — {ack}.', 'Doing well — yourself?'],
+  ['{ack} — not too bad at all.', 'Good thanks — {ack}.', 'Keeping well — {ack}.', 'Not doing too bad — yourself?'],
+  ['Doing well thanks — {ack}.', '{ack} — go on.', 'I\'m alright — {ack}.', 'Not too bad — how are you keeping?'],
+  ['{ack} — doing well.', 'Good thanks — yourself?', '{ack} — keeping well.', 'Not too bad at all — go on.'],
+  ['I\'m good thanks — yourself?', '{ack} — doing well.', 'Not too bad — {ack}.', 'Keeping well — yourself?'],
+] as const;
+
+const BANK_PREFIXES = ['manner', 'greeting', 'ack', 'signoff', 'wellbeing'] as const;
 
 /** Hello Cara demo — fixed spoken opening (demo TTS only, not production). */
 export const DEMO_LINE_OPENING =
@@ -116,15 +128,19 @@ export function pickCallPersona(input: PickCallPersonaInput): CallPersona {
   const greetingIdx = pinned ? 0 : pickBankIndex(seed, BANK_PREFIXES[1], GREETING_TEMPLATES.length);
   const ackIdx = pinned ? 0 : pickBankIndex(seed, BANK_PREFIXES[2], ACKNOWLEDGEMENT_SETS.length);
   const signOffIdx = pinned ? 0 : pickBankIndex(seed, BANK_PREFIXES[3], SIGN_OFF_TEMPLATES.length);
+  const wellbeingIdx = pinned
+    ? 0
+    : pickBankIndex(seed, BANK_PREFIXES[4], WELLBEING_REPLY_SHAPE_SETS.length);
 
   const greeting = interpolateGreeting(GREETING_TEMPLATES[greetingIdx]!, businessName, timeOfDay);
 
   return {
-    variant: `${mannerIdx}-${greetingIdx}-${ackIdx}-${signOffIdx}`,
+    variant: `${mannerIdx}-${greetingIdx}-${ackIdx}-${signOffIdx}-${wellbeingIdx}`,
     manner: MANNERS[mannerIdx]!,
     greeting,
     acknowledgements: [...ACKNOWLEDGEMENT_SETS[ackIdx]!],
     signOff: SIGN_OFF_TEMPLATES[signOffIdx]!,
+    wellbeingReplyShapes: [...WELLBEING_REPLY_SHAPE_SETS[wellbeingIdx]!],
   };
 }
 

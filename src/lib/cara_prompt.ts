@@ -15,6 +15,9 @@ import {
 } from './intake_guidance.js';
 import { orgVerticalLabel } from './org_vertical.js';
 import type { CallPersona } from './persona.js';
+import { formatDemoConversationalBehaviourForPrompt } from './demo_personality.js';
+import { formatHelloCaraWebsiteFactsForPrompt } from './hello_cara_website_facts.js';
+import { formatSocialChitchatForPrompt } from './social_chitchat.js';
 
 export type BuildCaraCallPromptInput = {
   businessName: string;
@@ -71,10 +74,7 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
 
   const businessLabel = vertical === 'retail' ? 'retail store' : 'business';
   const personaBlock = input.persona
-    ? formatPersonaMannerBlock(
-        input.persona,
-        input.demoMode || input.conversationalRetailMode ? { demoMode: true } : {},
-      )
+    ? formatPersonaMannerBlock(input.persona, {})
     : '';
   const callerBlock = formatCallerLineBlock(input.callerLine);
   const hasCallerId = input.callerLine.kind !== 'unknown' && Boolean(input.callerLine.e164);
@@ -95,9 +95,11 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
 - takeCallbackMessage: **name** + **staffSummary** only — **omit callbackPhone**.`
     : `- Caller ID withheld — ask for a mobile or email when I need to send something or call back.`;
 
-  const socialChitchatBlock = input.conversationalRetailMode
-    ? `**After opening** — *how can I help you today?* was already asked in the greeting. Answer their errand; no social chitchat before they state what they need.`
-    : `**Social chitchat** — if they ask how you are / how you're keeping: one warm line back then pivot to help — **then stop and listen**. Never *"I'm here to assist"* or *"What can I assist you with today"*.`;
+  const socialChitchatBlock = formatSocialChitchatForPrompt({
+    mode: 'production',
+    openingAlreadyAskedHelp: Boolean(input.openingGreetingDelivered),
+    allowProactiveWellbeingQuestion: false,
+  });
 
   return `You are Cara, answering live phone calls for **${input.businessName}** (${businessLabel}).
 
@@ -225,6 +227,10 @@ function buildCaraConversationalRetailPrompt(input: BuildCaraCallPromptInput): s
 - You **already have** their number from caller ID — **never** ask them to confirm, read out, or give their phone number on this call. Post-call processing uses caller ID automatically.`
     : `- Caller ID withheld — ask for a mobile when taking a callback or order.`;
 
+  const personaBlock = input.persona
+    ? formatPersonaMannerBlock(input.persona, { retailMode: true, demoMode: true })
+    : '';
+
   return `You are Cara on the phone for **${input.businessName}** (retail store).
 
 ${formatRetailConversationalOpeningForPrompt()}
@@ -278,7 +284,7 @@ ${routesBlock}
 ## CALL FLOW
 
 1. **Listen** — opening already played.
-2. **Help** — answer in speech; collect order/callback details conversationally.
+2. **Help** — if unclear, **ask them to repeat once** before answering; otherwise answer in speech and collect order/callback details conversationally.
 3. **Confirm** — one warm line summarising what you captured for their errand.
 4. **Finish** — **Ending calls** above (yes/no check-in → thanks-for-calling + **endPhoneCall** when they are sorted).
 
@@ -292,11 +298,16 @@ ${routesBlock}
 ${callerIdPerCallBlock}
 
 ### Opening on this call
-- The full opening already played — listen first; do not repeat greeting or recording notice.`;
+- The full opening already played — listen first; do not repeat greeting or recording notice.
+${personaBlock}`;
 }
 
-function formatPersonaMannerBlock(persona: CallPersona, opts?: { demoMode?: boolean }): string {
-  const ackList = (opts?.demoMode
+function formatPersonaMannerBlock(
+  persona: CallPersona,
+  opts?: { demoMode?: boolean; retailMode?: boolean },
+): string {
+  const filterDemoAcks = opts?.demoMode || opts?.retailMode;
+  const ackList = (filterDemoAcks
     ? persona.acknowledgements.map((word) =>
         /^grand$/i.test(word) || /^ah grand$/i.test(word) || /^grand so$/i.test(word)
           ? 'Lovely'
@@ -309,15 +320,21 @@ function formatPersonaMannerBlock(persona: CallPersona, opts?: { demoMode?: bool
   const signOffNote = opts?.demoMode
     ? 'fill {name} with their first name when you have it; on demo close use the two-beat flow in **Ending calls** — never say "grand" or "sound"'
     : 'fill {name} with their first name when you have it; for general closes use the business name from your instructions';
-  const openNote = opts?.demoMode
-    ? 'The fixed opening already played on connect — see **Opening arc**; do not repeat it'
-    : `"${persona.greeting}" (or a very close natural variation)`;
+  const openNote = opts?.retailMode
+    ? 'The programmatic opening already played — listen first; do not repeat greeting or recording notice'
+    : opts?.demoMode
+      ? 'The fixed opening already played on connect — see **Opening arc**; do not repeat it'
+      : `"${persona.greeting}" (or a very close natural variation)`;
+  const wellbeingShapes = persona.wellbeingReplyShapes
+    .map((shape) => `"${shape}"`)
+    .join(', ');
   return `
 ## Your manner on this call
 This is who you are on THIS call. It changes call to call, the same way a real receptionist never answers the phone identically twice. Everything above still applies — this only decides *how* you word it.
 - **Demeanour:** ${persona.manner}
 - **Opening:** ${openNote}
 - **Acknowledgements to favour:** ${ackList} — rotate through them, and never open two turns in a row with the same one.
+- **Wellbeing reply shapes to riff on (never read verbatim):** ${wellbeingShapes} — replace {ack} with an acknowledgement word from above.
 - **Sign-off shape:** "${persona.signOff}" — ${signOffNote}. Say it naturally. Never speak the words "name" or "date" as placeholders. Do not reuse a sign-off you already said this call.`;
 }
 
@@ -348,12 +365,24 @@ On connect, give the configured greeting only — no extra recording notice.`;
     ? `- Caller ID on file: **${input.callerLine.display}** — never ask them to spell it out.`
     : `- Caller ID withheld — ask for a mobile or email only if they want a callback from the Cliste team.`;
 
+  const socialChitchatBlock = formatSocialChitchatForPrompt({
+    mode: 'demo',
+    openingAlreadyAskedHelp: false,
+    allowProactiveWellbeingQuestion: true,
+  });
+
   return `You are **Cara** on the **Hello Cara demo line** — Cliste's AI phone assistant for Irish businesses.
 
 ## Who you are
 Warm Irish receptionist on the phone — relaxed, human, chatty. React to what they actually said. One short thought per turn; let them talk.
 
 ${openingBlock}
+
+${formatDemoConversationalBehaviourForPrompt()}
+
+${socialChitchatBlock}
+
+${formatHelloCaraWebsiteFactsForPrompt()}
 
 ## Rules
 ${callerIdLine}

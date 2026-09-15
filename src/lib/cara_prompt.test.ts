@@ -71,10 +71,12 @@ describe('buildCaraCallPrompt', () => {
     });
 
     assert.match(prompt, /Who you are/i);
-    assert.match(prompt, /paraphrase, never read verbatim/i);
+    assert.match(prompt, /Sound human \(this is the whole job\)/i);
+    assert.match(prompt, /Social chitchat/i);
+    assert.match(prompt, /You choose the exact words every call/i);
+    assert.match(prompt, /Hello Cara product facts/i);
     assert.doesNotMatch(prompt, /Host personality/i);
     assert.doesNotMatch(prompt, /Intent routing/i);
-    assert.doesNotMatch(prompt, /Sound human \(this is the whole job\)/i);
   });
 
   it('embeds all scenario playbooks including general non-trade path', () => {
@@ -119,6 +121,11 @@ describe('buildCaraCallPrompt', () => {
   });
 
   it('uses LLM-first conversational retail prompt with call flow and manner blocks', () => {
+    const persona = pickCallPersona({
+      businessName: 'Kavanaghs SuperValu Donegal Town',
+      seed: 'org-1:+353871234567:room-retail',
+      localHour: 14,
+    });
     const prompt = buildCaraCallPrompt({
       ...baseInput,
       businessName: 'Kavanaghs SuperValu Donegal Town',
@@ -126,12 +133,17 @@ describe('buildCaraCallPrompt', () => {
       businessType: 'Retail & Grocery',
       conversationalRetailMode: true,
       openingGreetingDelivered: true,
+      persona,
     });
 
     assert.match(prompt, /programmatic/i);
     assert.match(prompt, /how can I help you today/i);
+    assert.match(prompt, /Social chitchat/i);
+    assert.match(prompt, /Anti-loop/i);
+    assert.match(prompt, /You choose the exact words every call/i);
     assert.match(prompt, /CALL FLOW/i);
     assert.match(prompt, /## Sound human/i);
+    assert.match(prompt, /didn't quite catch/i);
     assert.match(prompt, /endPhoneCall/i);
     assert.match(prompt, /Kavanaghs SuperValu Donegal Town/);
     assert.match(prompt, /after hang-up/i);
@@ -145,8 +157,10 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /how many people|What size were you thinking/i);
     assert.match(prompt, /searchSuperValuProducts.*endPhoneCall/s);
     assert.match(prompt, /Ignore takeCallbackMessage, transferToTeam/i);
+    assert.match(prompt, /## Your manner on this call/i);
+    assert.match(prompt, /Wellbeing reply shapes/i);
+    assert.ok(prompt.includes(persona.manner));
     assert.doesNotMatch(prompt, /Hello Cara demo line/i);
-    assert.doesNotMatch(prompt, /## Your manner on this call/i);
   });
 
   it('includes universal ending-calls state machine on conversational retail 9508', () => {
@@ -211,6 +225,20 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /Opening hours \(speech only/i);
   });
 
+  it('includes social chitchat guidance on production calls', () => {
+    const prompt = buildCaraCallPrompt({
+      ...baseInput,
+      niche: 'retail',
+      openingGreetingDelivered: true,
+    });
+
+    assert.match(prompt, /### Social chitchat/i);
+    assert.match(prompt, /You choose the exact words every call/i);
+    assert.match(prompt, /Anti-loop/i);
+    assert.match(prompt, /Help already asked/i);
+    assert.match(prompt, /Do not.*open with.*how are you keeping/i);
+  });
+
   it('includes conversational sections and persona block last on production calls', () => {
     const persona = pickCallPersona({
       businessName: baseInput.businessName,
@@ -227,6 +255,7 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /## How you talk/i);
     assert.match(prompt, /## Never sound like a machine/i);
     assert.match(prompt, /## Your manner on this call/i);
+    assert.match(prompt, /Wellbeing reply shapes/i);
     assert.match(prompt, /endPhoneCall in the same turn/i);
     assert.ok(prompt.includes(persona.greeting));
     assert.doesNotMatch(prompt, /\{business\}|\{timeOfDay\}/);

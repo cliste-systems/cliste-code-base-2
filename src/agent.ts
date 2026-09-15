@@ -34,7 +34,11 @@ import {
 import { postprocessCallTranscript } from './lib/call_postprocess.js';
 import { assessTranscriptCompleteness } from './lib/transcript_completeness.js';
 import { insertCallLog, updateCallLogEnrichment, updateCallLogOutcome, updateCallLogPostCallProcessing } from './lib/call_logs.js';
-import { finalizeCallRecording, startCallRecording } from './lib/call_recording.js';
+import {
+  finalizeCallRecording,
+  startCallRecording,
+  stopCallRecording,
+} from './lib/call_recording.js';
 import {
   executePostCallActions,
   postCallActionsExpectTicket,
@@ -119,6 +123,10 @@ import {
   shouldDropLlmTtsWhileClosing,
 } from './lib/demo_close.js';
 import { buildDemoCallClosingLine, inferDemoCallerFirstName } from './lib/natural_phrasing.js';
+import {
+  classifyHelloCaraAboutQuestion,
+  helloCaraAboutSteerInstructions,
+} from './lib/hello_cara_website_facts.js';
 import { buildDemoPersonaGreeting, DEMO_LINE_OPENING_PAUSE_MS, pickCallPersona, type CallPersona } from './lib/persona.js';
 import { resolveSpokenBusinessName } from './lib/spoken_business_name.js';
 import { orgVerticalLabel } from './lib/org_vertical.js';
@@ -134,9 +142,13 @@ import {
   callerSoundsLikeAffirmativeConsent,
   callerWindingDownCall,
   callerSoundsLikeCallerFrustration,
+  callerSoundsLikeSocialChitchat,
   assistantSoundsLikeCorporateAssist,
 } from './lib/speech_triggers.js';
-import { detectLikelySttGarble } from './lib/stt_garble.js';
+import {
+  assistantReplyLooksLikeClarificationRequest,
+  detectLikelySttGarble,
+} from './lib/stt_garble.js';
 import { callerSoundsLikeRetailStaffQuestion } from './lib/retail_staff_questions.js';
 import {
   buildRetailHoursSpokenReply,
@@ -640,7 +652,7 @@ export default defineAgent({
       structuredHoursBlock,
       demoMode: testCall && !factoryFreshLine,
       conversationalRetailMode: conversationalRetailLine,
-      ...(callPersona && !conversationalRetailLine ? { persona: callPersona } : {}),
+      ...(callPersona ? { persona: callPersona } : {}),
       ...(testCall
         ? { demoPlaybookBlock: demoPlaybookBlockFromScenarios(demoScenarios) }
         : {}),
@@ -1548,6 +1560,11 @@ export default defineAgent({
       }
       resetClosePhaseIfCallerContinues(text);
       noteCallerTurnNeedsReply(text);
+      // #region agent log
+      if (conversationalRetailLine && trimmed.length > 0) {
+        fetch('http://127.0.0.1:7662/ingest/95496c05-1739-4e32-b7be-319b56b1c5b5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0f50f3'},body:JSON.stringify({sessionId:'0f50f3',location:'agent.ts:ingestCallerFinalText',message:'retail_caller_turn',data:{snippet:trimmed.slice(0,120),socialChitchat:callerSoundsLikeSocialChitchat(trimmed),sttGarble:detectLikelySttGarble(trimmed)},timestamp:Date.now(),hypothesisId:'E-clarify',runId:'post-fix'})}).catch(()=>{});
+      }
+      // #endregion
       if (session.userData.sessionFlags.awaitingAnythingElseReply) {
         session.userData.sessionFlags.callerRespondedAfterAnythingElse = true;
       }
@@ -1561,6 +1578,12 @@ export default defineAgent({
             slug: detected,
             snippet: text.slice(0, 120),
           });
+        }
+      }
+      if (testCall) {
+        const aboutQuestion = classifyHelloCaraAboutQuestion(trimmed);
+        if (aboutQuestion) {
+          steerReply(helloCaraAboutSteerInstructions(aboutQuestion));
         }
       }
       if (testCall && armDemoCloseFromCallerText(text, 'conversation_item')) {
@@ -2013,6 +2036,12 @@ export default defineAgent({
 
       const flags = session.userData.sessionFlags;
       if (role === 'assistant' && text.length > 3 && !assistantTextSoundsLikeFakeHangup(text)) {
+        // #region agent log
+        if (conversationalRetailLine && lastCallerUtterance) {
+          const callerWasSocialChitchat = callerSoundsLikeSocialChitchat(lastCallerUtterance);
+          fetch('http://127.0.0.1:7662/ingest/95496c05-1739-4e32-b7be-319b56b1c5b5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0f50f3'},body:JSON.stringify({sessionId:'0f50f3',location:'agent.ts:ConversationItemAdded',message:'retail_assistant_reply',data:{callerSnippet:lastCallerUtterance.slice(0,120),assistantSnippet:text.slice(0,160),callerWasSocialChitchat,looksLikeClarification:assistantReplyLooksLikeClarificationRequest(text),looksLikeWellbeingMisfire:/no bother at all/i.test(text)&&!callerWasSocialChitchat},timestamp:Date.now(),hypothesisId:'E-clarify',runId:'post-fix'})}).catch(()=>{});
+        }
+        // #endregion
         if (
           conversationalRetailLine &&
           !lineMatchesGreeting(text, playbackGreetingText)
@@ -2091,7 +2120,7 @@ export default defineAgent({
         corporateAssistCorrectedEpoch = replyTurnEpoch;
         console.warn('[agent] blocked corporate assist phrasing');
         steerReply(
-          'Do NOT say "I\'m here to assist" or "What can I assist you with". Reply like a friendly Irish shop worker — e.g. "I\'m good thanks — yourself?" if they asked how you are, otherwise answer their question in one warm line.',
+          'Reply like a friendly Irish desk person. One warm line — paraphrase, do not repeat your last attempt. No "assist" or call-centre phrasing.',
         );
       }
 
@@ -2196,6 +2225,10 @@ export default defineAgent({
       });
 
       const udSnapshot = session.userData;
+      const recordingEgressId = udSnapshot?.callRecordingEgressId?.trim();
+      if (recordingEgressId) {
+        void stopCallRecording(recordingEgressId);
+      }
       callFinalizePromise = (async () => {
       let durationSeconds = 0;
       let outcome = 'answered';
@@ -2425,6 +2458,7 @@ export default defineAgent({
           cara_question?: string;
           suggested_section?: string;
         }> = [];
+        let callResolution: string | null = null;
         const presetAiSummary = aiSummary;
         const retailRoutesCatalog = conversationalRetailLine
           ? formatRoutesForPostCallCatalog(routesForConversationalRetailPrompt(routingLinks))
@@ -2442,6 +2476,7 @@ export default defineAgent({
           });
           transcriptReview = pp.transcriptReview ? redactPii(pp.transcriptReview) : null;
           aiSummary = pp.aiSummary ? redactPii(pp.aiSummary) : presetAiSummary;
+          callResolution = pp.callResolution;
           knowledgeGaps = pp.knowledgeGaps;
           postCallActions = pp.postCallActions;
           didPostprocess = true;
@@ -2503,11 +2538,12 @@ export default defineAgent({
           ttsModel: String(activeTtsModel),
         });
 
-        if (callLogId && (transcriptReview || aiSummary || costEstimate)) {
+        if (callLogId && (transcriptReview || aiSummary || costEstimate || callResolution)) {
           const enriched = await updateCallLogEnrichment(callLogId, {
             transcriptReview,
             aiSummary,
             costEstimate,
+            callResolution,
           });
           if (!enriched) {
             console.error('[agent] call log enrichment update failed', callLogId);

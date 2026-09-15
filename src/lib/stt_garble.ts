@@ -40,3 +40,10 @@ export function soundsLikeSubstantiveServiceAnswer(text: string): boolean {
     t,
   );
 }
+
+/** Debug / metrics — warm ask-to-repeat, not a wellbeing or errand answer. */
+export function assistantReplyLooksLikeClarificationRequest(text: string): boolean {
+  return /\b(say that again|say it again|didn'?t quite catch|didn'?t catch|line dipped|repeat that|what was that|pardon)\b/i.test(
+    text,
+  );
+}
