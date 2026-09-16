@@ -18,7 +18,7 @@ const RETAIL_GREETING =
 describe('tts_text_sanitize', () => {
   it('flows retail greeting clauses with commas', () => {
     const out = prepareGreetingForTts(RETAIL_GREETING);
-    assert.match(out, /Thanks for calling Kav-an-as SuperValu,/);
+    assert.match(out, /Thanks for calling Kav-an-aghs SuperValu,/);
     assert.match(out, /how can I help you\?/);
   });
 
