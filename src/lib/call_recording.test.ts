@@ -80,4 +80,22 @@ describe('stopActiveCallRecording', () => {
     const state = { callRecordingEgressId: null, callRecordingStoppedAtMs: null };
     assert.equal(await stopActiveCallRecording(state, 'test'), null);
   });
+
+  it('keeps egress id after stop so finalize can upload the MP3', async () => {
+    const state = {
+      callRecordingEgressId: 'eg_finalize_me',
+      callRecordingStoppedAtMs: null,
+    };
+    const originalStop = process.env.LIVEKIT_URL;
+    process.env.LIVEKIT_URL = '';
+    try {
+      const stoppedAtMs = await stopActiveCallRecording(state, 'caller_left');
+      assert.ok(stoppedAtMs);
+      assert.equal(state.callRecordingEgressId, 'eg_finalize_me');
+      assert.equal(state.callRecordingStoppedAtMs, stoppedAtMs);
+    } finally {
+      if (originalStop === undefined) delete process.env.LIVEKIT_URL;
+      else process.env.LIVEKIT_URL = originalStop;
+    }
+  });
 });

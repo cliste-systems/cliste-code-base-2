@@ -34,7 +34,7 @@ const LEADING_ACK_BEFORE_NAME =
 const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
   [/\bHello Cara\b/gi, 'Hello Car-ah'],
   [/\bCara\b/g, 'Car-ah'],
-  [/\bKavanaghs\b/gi, 'Kavanahs'],
+  [/\bKavanaghs\b/gi, 'Kav-an-as'],
   [/\bGrafton\b/gi, 'Graft-on'],
   [/\bDublin\b/gi, 'Dub-lin'],
   [/\bDonegal Town\b/gi, 'Doneygall Town'],

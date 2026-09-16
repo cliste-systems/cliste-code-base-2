@@ -116,6 +116,7 @@ import {
   loadDemoScenarios,
 } from './lib/demo_scenarios_loader.js';
 import { persistTestCallReportFromWorker } from './lib/persist_test_call_report.js';
+import { reportPlatformEvent } from './lib/platform_event.js';
 import {
   drainReadableStream,
   emptyTextStream,
@@ -2382,6 +2383,22 @@ export default defineAgent({
             callLogId,
             roomName: roomName || '',
           });
+          if (!audioStoragePath) {
+            reportPlatformEvent({
+              severity: 'critical',
+              category: 'recording',
+              eventType: 'recording_missing_after_call',
+              message:
+                'Call ended with recording egress active but no MP3 was stored for the dashboard.',
+              organizationId: ud.organizationId,
+              callLogId,
+              calledNumber: persistCalledNumber || null,
+              metadata: {
+                egress_id: ud.callRecordingEgressId,
+                room_name: roomName || null,
+              },
+            });
+          }
         }
 
         if (audioStoragePath) {
@@ -2447,6 +2464,15 @@ export default defineAgent({
               console.warn('[agent] call-complete webhook failed (call already in DB)', {
                 error: webhookResult.error,
                 callLogId,
+              });
+              reportPlatformEvent({
+                severity: 'warning',
+                category: 'webhook',
+                eventType: 'call_complete_webhook_failed',
+                message: webhookResult.error ?? 'call-complete webhook failed after DB insert',
+                organizationId: ud.organizationId,
+                callLogId,
+                calledNumber: persistCalledNumber || null,
               });
             }
           });

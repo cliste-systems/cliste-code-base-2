@@ -9,8 +9,36 @@ import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 import { getSupabaseClient, isOfflinePlayground } from './supabase.js';
 import { updateCallLogAudioPath } from './call_logs.js';
+import { reportPlatformEvent } from './platform_event.js';
 
 const CALL_RECORDINGS_BUCKET = 'call-recordings';
+
+type RecordingTelemetryContext = {
+  organizationId: string;
+  callLogId?: string | null;
+  roomName?: string | null;
+};
+
+function reportRecordingBreak(
+  eventType: string,
+  message: string,
+  ctx: RecordingTelemetryContext,
+  severity: 'critical' | 'warning' = 'critical',
+  metadata?: Record<string, unknown>,
+): void {
+  reportPlatformEvent({
+    severity,
+    category: 'recording',
+    eventType,
+    message,
+    organizationId: ctx.organizationId,
+    callLogId: ctx.callLogId ?? null,
+    metadata: {
+      ...(ctx.roomName ? { room_name: ctx.roomName } : {}),
+      ...(metadata ?? {}),
+    },
+  });
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -225,12 +253,23 @@ export async function startCallRecording(input: {
     const egressId = info.egressId?.trim();
     if (!egressId) {
       console.warn('[call_recording] start returned no egress id');
+      reportRecordingBreak(
+        'recording_start_no_egress_id',
+        'Call recording egress started without an egress id.',
+        { organizationId, roomName: room },
+        'warning',
+      );
       return null;
     }
     console.info('[call_recording] started', { room, egressId, stagingPath });
     return egressId;
   } catch (error) {
     console.warn('[call_recording] start failed', error);
+    reportRecordingBreak(
+      'recording_start_failed',
+      error instanceof Error ? error.message : String(error),
+      { organizationId, roomName: room },
+    );
     return null;
   }
 }
@@ -291,14 +330,27 @@ async function storeRecordingBody(
   callLogId: string,
   storagePath: string,
   body: Buffer,
+  ctx: RecordingTelemetryContext,
 ): Promise<string | null> {
   if (body.length === 0) return null;
   const uploaded = await uploadRecordingToSupabase(storagePath, body);
-  if (!uploaded) return null;
+  if (!uploaded) {
+    reportRecordingBreak(
+      'recording_upload_failed',
+      'Failed to upload call recording MP3 to Supabase storage.',
+      { ...ctx, callLogId },
+    );
+    return null;
+  }
 
   const patched = await updateCallLogAudioPath(callLogId, storagePath);
   if (!patched) {
     console.warn('[call_recording] call_logs patch failed', { callLogId });
+    reportRecordingBreak(
+      'recording_call_log_patch_failed',
+      'Recording uploaded but call_logs.audio_storage_path was not updated.',
+      { ...ctx, callLogId },
+    );
     return null;
   }
 
@@ -329,11 +381,8 @@ export async function stopActiveCallRecording(
   await stopCallRecording(id);
   const stoppedAtMs = Date.now();
   state.callRecordingStoppedAtMs = stoppedAtMs;
-  state.callRecordingEgressId = null;
-  console.info('[call_recording] conversation_end', { reason, stoppedAtMs });
-  // #region agent log
-  fetch('http://127.0.0.1:7662/ingest/95496c05-1739-4e32-b7be-319b56b1c5b5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0f50f3'},body:JSON.stringify({sessionId:'0f50f3',location:'call_recording.ts:stopActiveCallRecording',message:'recording_stopped',data:{reason,stoppedAtMs,egressId:id.slice(0,12)},timestamp:Date.now(),hypothesisId:'R1-R3',runId:'post-fix'})}).catch(()=>{});
-  // #endregion
+  // Keep callRecordingEgressId until finalizeCallRecording runs on session close.
+  console.info('[call_recording] conversation_end', { reason, stoppedAtMs, egressId: id });
   return stoppedAtMs;
 }
 
@@ -406,6 +455,13 @@ export async function finalizeCallRecording(input: {
           error: info.error?.trim() || null,
           stagingPath,
         });
+        reportRecordingBreak(
+          'recording_egress_failed',
+          info.error?.trim() || `LiveKit egress ended with status ${status}`,
+          { organizationId, callLogId, roomName },
+          'critical',
+          { egress_id: egressId, status: String(status) },
+        );
         return null;
       }
 
@@ -428,16 +484,45 @@ export async function finalizeCallRecording(input: {
           }
         }
 
-        return body ? storeRecordingBody(callLogId, storagePath, body) : null;
+        if (!body) {
+          reportRecordingBreak(
+            'recording_download_failed',
+            'Call recording egress completed but the MP3 could not be downloaded.',
+            { organizationId, callLogId, roomName },
+            'critical',
+            { egress_id: egressId, object_key: objectKey },
+          );
+          return null;
+        }
+
+        return storeRecordingBody(callLogId, storagePath, body, {
+          organizationId,
+          callLogId,
+          roomName,
+        });
       }
 
       await sleep(2000);
     }
 
     console.warn('[call_recording] timed out waiting for egress', { egressId });
+    reportRecordingBreak(
+      'recording_finalize_timeout',
+      'Timed out waiting for call recording egress to finish.',
+      { organizationId, callLogId, roomName },
+      'critical',
+      { egress_id: egressId },
+    );
     return null;
   } catch (error) {
     console.warn('[call_recording] finalize failed', error);
+    reportRecordingBreak(
+      'recording_finalize_failed',
+      error instanceof Error ? error.message : String(error),
+      { organizationId, callLogId, roomName },
+      'critical',
+      { egress_id: egressId },
+    );
     return null;
   }
 }

@@ -24,6 +24,7 @@ import {
   type BusinessFileRow,
 } from './supabase.js';
 import { insertActionTicket } from './action_tickets.js';
+import { reportPlatformEvent } from './platform_event.js';
 import { playTypingSound } from './callback_audio.js';
 import { disconnectCallerLeg } from './end_call.js';
 import {
@@ -841,11 +842,23 @@ export class CaraTools {
       const result = await postSearchSupervaluProducts(payload);
 
       if (!result.ok) {
+        const err = result.error ?? 'unknown error';
+        console.warn('[cara_tools] searchSuperValuProducts webhook failed', {
+          query: trimmed,
+          intent: resolvedIntent,
+          error: err,
+        });
+        reportPlatformEvent({
+          severity: 'critical',
+          category: 'product_lookup',
+          eventType: 'product_search_webhook_failed',
+          message: err,
+          calledNumber: ud.calledNumber,
+          metadata: { query: trimmed, intent: resolvedIntent },
+        });
         return {
           ok: false,
-          message:
-            result.error ??
-            'Could not search the SuperValu range right now. Offer a team callback captured in speech — do not guess.',
+          message: `PRODUCT LOOKUP FAILED (${err}) — you did NOT check the offers list. Do NOT say nothing is on offer or that you checked the list. Apologise briefly and offer a team callback captured in speech.`,
         };
       }
 
