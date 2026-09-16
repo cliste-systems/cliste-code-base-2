@@ -2908,6 +2908,7 @@ export default defineAgent({
 
       if (callerStillConnected()) {
         greetingPlaybackStarted = true;
+        const greetingIncludesDisclosure = greetingDisclosesAi(playbackGreetingText);
         try {
           agent.singleUtteranceTtsNext = true;
           const handle = sayPrepared(session, playbackGreetingText, {
@@ -2917,6 +2918,13 @@ export default defineAgent({
             addToChatCtx: false,
             allowInterruptions: demoExperienceStack,
           });
+          if (greetingIncludesDisclosure) {
+            session.userData.disclosureConfirmed = true;
+            void callRecordingControl.tryStart();
+            console.info('[agent] recording_start_at_greeting', {
+              msSinceCallStart: Date.now() - callStartedAt,
+            });
+          }
           greetingPlayedFlag = true;
           greetingSource = 'live_tts';
           latencyTracker.recordGreetingPlayback();
@@ -2934,10 +2942,7 @@ export default defineAgent({
             /* playout wait best-effort */
           }
           greetingPlayoutComplete = true;
-          if (greetingDisclosesAi(playbackGreetingText)) {
-            session.userData.disclosureConfirmed = true;
-            await callRecordingControl.tryStart();
-          } else {
+          if (!greetingIncludesDisclosure) {
             await speakOptionalAiDisclosure();
           }
         } catch (e) {
