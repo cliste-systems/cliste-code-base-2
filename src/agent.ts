@@ -17,6 +17,10 @@ import { RoomEvent } from '@livekit/rtc-node';
 import { RoomServiceClient } from 'livekit-server-sdk';
 import { fileURLToPath } from 'node:url';
 
+import {
+  buildActiveKnowledgeBlockForCall,
+  loadActiveTemporalUpdates,
+} from './lib/active_knowledge_for_call.js';
 import { buildCaraCallPrompt } from './lib/cara_prompt.js';
 import { resolveAiDisclosure } from './lib/ai_disclosure.js';
 import { CaraTools, type CaraAgentUserData } from './lib/cara_tools.js';
@@ -142,6 +146,7 @@ import {
   callerPivotedFromSmsConsent,
   callerSaidNothingElse,
   callerSoundsLikeAffirmativeConsent,
+  callerSoundsLikeWindDownEcho,
   callerWindingDownCall,
   callerSoundsLikeCallerFrustration,
   callerSoundsLikeSocialChitchat,
@@ -161,6 +166,7 @@ import {
 import {
   getOrgForCall,
   getSendableBusinessFiles,
+  getSupabaseClient,
   resolveOrgTimeZone,
   resolveOrgVoiceId,
 } from './lib/supabase.js';
@@ -583,6 +589,20 @@ export default defineAgent({
         ? formatStructuredHoursForLivePrompt(org.business_hours, orgTz, todayLocal)
         : null;
 
+    let activeKnowledgeBlock: string | null = null;
+    try {
+      const temporalRows = await loadActiveTemporalUpdates(getSupabaseClient(), org.id);
+      activeKnowledgeBlock = buildActiveKnowledgeBlockForCall({
+        temporalRows,
+        structuredHoursBlock,
+      });
+    } catch (err) {
+      console.warn('[agent] active_knowledge_load_failed', {
+        orgId: org.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     const orgVertical = orgVerticalLabel({
       niche: org.niche,
       businessType: org.agent_business_type,
@@ -652,6 +672,7 @@ export default defineAgent({
           ? false
           : Boolean(playbackGreetingText),
       structuredHoursBlock,
+      activeKnowledgeBlock,
       demoMode: testCall && !factoryFreshLine,
       conversationalRetailMode: conversationalRetailLine,
       ...(callPersona ? { persona: callPersona } : {}),
@@ -769,6 +790,7 @@ export default defineAgent({
         demoCallerReadyToClose: false,
         retailOpeningComplete: conversationalRetailLine,
         retailSubstantiveExchangeComplete: false,
+        retailClosingFarewellSpoken: false,
         awaitingRetailCallerName: false,
         pendingCallbackSummary: null,
         retailCallerName: null,
@@ -1099,6 +1121,7 @@ export default defineAgent({
     let transcriptSeq = 0;
     const recentCallerTranscripts = new Map<string, number>();
     const recentAssistantTranscripts = new Map<string, number>();
+    const terminalGoodbyeKeys = new Set<string>();
 
     const normalizeTranscriptKey = (text: string) =>
       text
@@ -1185,7 +1208,16 @@ export default defineAgent({
         return false;
       }
       const key = normalizeTranscriptKey(trimmed);
+      if (
+        assistantTextSoundsLikeTerminalHangup(trimmed) &&
+        terminalGoodbyeKeys.has(key)
+      ) {
+        return false;
+      }
       if (isDuplicateAssistantUtterance(key, at)) return false;
+      if (assistantTextSoundsLikeTerminalHangup(trimmed)) {
+        terminalGoodbyeKeys.add(key);
+      }
       const note = interrupted ? ' [cut off]' : '';
       appendTranscriptLine(at, `Assistant: ${trimmed}${note}`);
       return true;
@@ -1607,7 +1639,6 @@ export default defineAgent({
           );
         }
       } else if (
-        !conversationalRetailLine &&
         org.niche === 'retail' &&
         !session.userData.sessionFlags.endPhoneCallUsed
       ) {
@@ -1617,7 +1648,7 @@ export default defineAgent({
           tryRetailProgrammaticHoursReply(trimmed, { correcting })
         ) {
           handledWithProgrammaticReply = true;
-        } else if (callerSoundsLikeRetailStaffQuestion(trimmed)) {
+        } else if (!conversationalRetailLine && callerSoundsLikeRetailStaffQuestion(trimmed)) {
           steerReply(
             'The caller is asking about a store or department manager (their speech may be garbled). Answer from your business instructions — store manager, fresh food manager, ambient manager. This is a simple info question: do NOT ask for their name or phone number and do NOT offer to take a message unless they explicitly want a callback.',
           );
@@ -1650,6 +1681,7 @@ export default defineAgent({
 
     const resetClosePhaseIfCallerContinues = (text: string) => {
       const flags = session.userData.sessionFlags;
+      if (callerSoundsLikeWindDownEcho(text)) return;
       if (flags.demoCallerReadyToClose && (callerAskedNewQuestion(text) || text.trim().length > 14)) {
         if (!callerWindingDownCall(text) && !callerExplicitlyRequestedHangup(text)) {
           flags.demoCallerReadyToClose = false;
@@ -1762,6 +1794,32 @@ export default defineAgent({
         })();
       }, 700);
     };
+
+    const armRetailFarewellForceHangup = (text: string) => {
+      const flags = session.userData.sessionFlags;
+      if (
+        !conversationalRetailLine ||
+        flags.endPhoneCallUsed ||
+        flags.retailClosingFarewellSpoken ||
+        !flags.callerRespondedAfterAnythingElse ||
+        !assistantTextSoundsLikeTerminalHangup(text)
+      ) {
+        return;
+      }
+      flags.retailClosingFarewellSpoken = true;
+      clearGoodbyeForceTimer();
+      diag.push('info', 'retail_farewell_force_hangup', { snippet: text.slice(0, 120) });
+      goodbyeForceTimer = setTimeout(() => {
+        goodbyeForceTimer = null;
+        if (session.userData.sessionFlags.endPhoneCallUsed) return;
+        void (async () => {
+          await waitForAgentSpeechPlayout(session, lastAssistantSpeechHandle);
+          if (session.userData.sessionFlags.endPhoneCallUsed) return;
+          await disconnectCallerLeg(session, session.userData, async () => {});
+        })();
+      }, 700);
+    };
+
     const clearDeadAirTimers = () => {
       if (deadAirTimer) {
         clearTimeout(deadAirTimer);
@@ -2143,6 +2201,10 @@ export default defineAgent({
         !flags.awaitingAnythingElseReply
       ) {
         armDemoFarewellForceHangup(text);
+      }
+
+      if (conversationalRetailLine && role === 'assistant') {
+        armRetailFarewellForceHangup(text);
       }
 
       if (
@@ -2538,7 +2600,6 @@ export default defineAgent({
           if (exec.actionTicketCreated) {
             ud.sessionFlags.actionTicketCreated = true;
             outcome = 'action_created';
-            knowledgeGaps = [];
             if (callLogId) {
               const patched = await updateCallLogOutcome(callLogId, outcome);
               if (!patched) {

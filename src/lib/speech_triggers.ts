@@ -88,6 +88,24 @@ export function callerWindingDownCall(text: string): boolean {
   return /\b(thanks|thank you|cheers)\b/.test(t) && callerSaidNothingElse(text);
 }
 
+/** Caller echoing the wind-down question — not a new errand (e.g. "what else you got?"). */
+export function callerSoundsLikeWindDownEcho(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  if (/\b(bakery|butcher|deli|department|stock|price|hours|atm|coin|cake|order)\b/.test(t)) {
+    return false;
+  }
+  return (
+    /\b(what else (you )?(got|have)|anything else|what else can you|what else do you)\b/.test(t) ||
+    /\b(what (do|can) you (do|offer|sell|stock))\b/.test(t)
+  );
+}
+
 /** Follow-up request during wind-down — keep the call open even if they also said "that's all". */
 export function callerSoundsLikeFollowUpRequest(text: string): boolean {
   const raw = text.trim();
@@ -404,6 +422,7 @@ export function callerAskedNewQuestion(text: string): boolean {
     .toLowerCase()
     .replace(/\s+/g, ' ');
   if (!t || callerSaidNothingElse(text)) return false;
+  if (callerSoundsLikeWindDownEcho(text)) return false;
   if (/\?\s*$/.test(text.trim())) return true;
   return /\b(can i|could i|do you|does|what|how|when|where|which|is it|are you|would you|tell me|wondering|interested in|looking for|stock|price|hours|department|same day)\b/.test(
     t,

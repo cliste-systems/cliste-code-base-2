@@ -9,6 +9,9 @@
  *
  * Do NOT add: caller-text regex handlers, steerReply, safeGenerateReply mid-call,
  * sayPrepared mid-call, dead-air prompts, programmatic close, or live takeCallbackMessage on 9508.
+ *
+ * Exception: programmatic **opening-hours** replies from structured business_hours (including
+ * temporary overrides) — authoritative facts, not LLM improvisation.
  */
 
 const PLACEHOLDER_CALLER_NAMES = /^(caller|unknown|n\/a|none|customer|guest)$/i;

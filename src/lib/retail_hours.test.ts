@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   buildRetailHoursSpokenReply,
+  callerSoundsLikeGenericOpenHoursQuestion,
   callerSoundsLikeOpenHoursQuestion,
   callerSoundsLikeWeekdayHoursCorrection,
   formatStructuredHoursForLivePrompt,
@@ -52,7 +53,44 @@ describe('retail_hours', () => {
     assert.equal(callerSoundsLikeOpenHoursQuestion('Are you talking tomorrow?'), true);
     assert.equal(callerSoundsLikeOpenHoursQuestion('Are you open tomorrow?'), true);
     assert.equal(callerSoundsLikeOpenHoursQuestion("He's open tomorrow."), true);
+    assert.equal(callerSoundsLikeOpenHoursQuestion('What are your opening hours?'), true);
+    assert.equal(callerSoundsLikeGenericOpenHoursQuestion('What are your opening hours?'), true);
+    assert.equal(
+      callerSoundsLikeOpenHoursQuestion('what time are you open till today'),
+      true,
+    );
     assert.equal(callerSoundsLikeOpenHoursQuestion('How are you keeping?'), false);
+  });
+
+  it('builds spoken retail hours for open-till-today with temporary override', () => {
+    const thursdayHours = {
+      ...hours,
+      thursday: { open: true, start: '08:00', end: '18:00' },
+      _hoursNote: 'Temporary hours today: Thursday: 8am–6pm',
+    };
+    const line = buildRetailHoursSpokenReply(
+      thursdayHours,
+      'what time are you open till today',
+      'Europe/Dublin',
+      { ref: new Date('2026-09-17T14:33:51.000Z') },
+    );
+    assert.match(line ?? '', /six in the evening/i);
+    assert.doesNotMatch(line ?? '', /nine in the evening/i);
+  });
+
+  it('builds spoken retail hours for generic opening-hours questions', () => {
+    const thursdayHours = {
+      ...hours,
+      thursday: { open: true, start: '08:00', end: '18:00' },
+    };
+    const line = buildRetailHoursSpokenReply(
+      thursdayHours,
+      'What are your opening hours?',
+      'Europe/Dublin',
+      { ref: new Date('2026-09-17T12:00:00.000Z') },
+    );
+    assert.match(line ?? '', /Today we're open from/i);
+    assert.match(line ?? '', /six in the evening/i);
   });
 
   it('builds spoken retail hours without LLM', () => {

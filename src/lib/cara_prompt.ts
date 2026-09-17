@@ -34,6 +34,8 @@ export type BuildCaraCallPromptInput = {
   openingGreetingDelivered?: boolean;
   /** Parsed from organizations.business_hours — authoritative weekday hours. */
   structuredHoursBlock?: string | null;
+  /** Live temporal updates + merged structured hours — loaded fresh each call. */
+  activeKnowledgeBlock?: string | null;
   /** Hello Cara demo line — conversational showcase, no business facts or routes. */
   demoMode?: boolean;
   /** Retail line using demo conversational opening + stack; keeps production tools. */
@@ -62,7 +64,7 @@ function buildCaraProductionCallPrompt(input: BuildCaraCallPromptInput): string 
   const storeSection =
     vertical === 'retail'
       ? `### B. Store enquiries (retail)
-- Answer hours, location, departments, and general store questions from business instructions and **Structured hours** when present.
+- Answer hours, location, departments, and general store questions from **Active knowledge** (live at call start) and **Structured hours** when present — active knowledge overrides compiled instructions below.
 - **Times:** speak naturally ("eight in the morning till nine in the evening") — never read "8:00" or "21:00" aloud.
 - Stock, prices, and allergens: never confirm from memory — direct to the shop floor or takeCallbackMessage.
 - Directions: say the address aloud, then offer sendDirectionsLink when a maps link route exists.
@@ -158,8 +160,7 @@ Real receptionists pause, think out loud and acknowledge. Weave these in sparing
 - **Silence / "hello?" / "are you there?":** answer instantly and pick the thread back up from context. Never make them repeat the whole thing.
 
 ## Business instructions (facts, services, hours, tone)
-${owner}
-${input.structuredHoursBlock ? `\n## Structured hours (authoritative)\n${input.structuredHoursBlock}` : ''}
+${formatActiveKnowledgeSection(input.activeKnowledgeBlock)}${owner}${formatStructuredHoursSection(input.structuredHoursBlock, input.activeKnowledgeBlock)}
 
 ## Active routes — pass exact routeId to tools
 ${routesBlock}
@@ -269,14 +270,13 @@ ${formatSpeechOnlyHoursPromptBlock()}
 ${CARA_THOUGHTFUL_INTAKE_BLOCK}
 
 ## Examples (follow these patterns)
-- Caller: *"Are you open?"* → You: *"Yeah, we're open today from nine till nine"* (or tomorrow's hours).
+- Caller: *"Are you open?"* / *"What time till tonight?"* → Answer from **Active knowledge** / **Structured hours** only — never from memory or the usual Mon–Sat schedule if today is overridden.
 - Caller: *"Can the manager call me back?"* → *"What's the first name?"* if needed → reason → confirm → *"No bother — I'll pass that to the team."*
 - Caller: *"Birthday cake for my son Saturday"* → date/flavour if needed → *"Roughly how many people?"* → *"What name on the cake?"* → *"And your first name for collection?"* → one confirm with **size and both names** → done.
 - Order close: after one confirm summary, caller *"yeah that's it"* → optional beat 1 once if needed → caller done → *"Lovely — thanks for calling ${input.businessName}, take care."* + **endPhoneCall** same turn — no third question, no dangling goodbye.
 
 ## Business instructions
-${owner}
-${input.structuredHoursBlock ? `\n## Structured hours (authoritative)\n${input.structuredHoursBlock}` : ''}
+${formatActiveKnowledgeSection(input.activeKnowledgeBlock)}${owner}${formatStructuredHoursSection(input.structuredHoursBlock, input.activeKnowledgeBlock)}
 
 ## Routes reference (for your knowledge — logged after call, not live tools)
 ${routesBlock}
@@ -420,6 +420,20 @@ ${playbookBlock}
 - Today: ${input.todayLocal} (${input.orgTimeZone}) | UTC: ${input.nowUtcIso}
 - ${callerBlock}
 ${personaBlock}`;
+}
+
+function formatActiveKnowledgeSection(block?: string | null): string {
+  const trimmed = block?.trim();
+  return trimmed ? `${trimmed}\n\n` : '';
+}
+
+function formatStructuredHoursSection(
+  structuredHoursBlock?: string | null,
+  activeKnowledgeBlock?: string | null,
+): string {
+  if (activeKnowledgeBlock?.trim()) return '';
+  if (!structuredHoursBlock?.trim()) return '';
+  return `\n## Structured hours (authoritative)\n${structuredHoursBlock.trim()}`;
 }
 
 function formatCallerLineBlock(callerLine: CallerLineInfo): string {

@@ -21,6 +21,7 @@ import {
   callerSoundsLikeSocialChitchat,
   callerSoundsLikeFollowUpRequest,
   callerSoundsLikeVagueDemoOpening,
+  callerSoundsLikeWindDownEcho,
   callerWindingDownCall,
   demoCallerReadyForClose,
 } from './speech_triggers.js';
@@ -115,6 +116,8 @@ describe('speech_triggers', () => {
     assert.equal(callerAskedNewQuestion('Do you do keratin treatments?'), true);
     assert.equal(callerAskedNewQuestion("That's all, thanks"), false);
     assert.equal(callerAskedNewQuestion('No'), false);
+    assert.equal(callerAskedNewQuestion('What else you got?'), false);
+    assert.equal(callerSoundsLikeWindDownEcho('What else you got?'), true);
   });
 
   it('detects phone-link pivot during consent', () => {

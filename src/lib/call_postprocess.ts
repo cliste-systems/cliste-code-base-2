@@ -92,11 +92,7 @@ const SUGGESTED_SECTIONS = new Set([
 
 export function normalizePostprocessKnowledgeGaps(
   raw: unknown,
-  input?: { actionTicketCreated?: boolean },
 ): PostprocessKnowledgeGap[] {
-  if (input?.actionTicketCreated) {
-    return [];
-  }
   if (!Array.isArray(raw)) return [];
 
   const out: PostprocessKnowledgeGap[] = [];
@@ -154,6 +150,78 @@ export function filterKnowledgeGapsForStructuredHours(
     const combined = [gap.topic, gap.caller_context ?? ''].filter(Boolean).join(' ');
     return !gapTextLooksLikeStructuredHours(combined);
   });
+}
+
+function topicFromCallerQuestion(text: string): string | null {
+  const t = text.trim();
+  if (!t) return null;
+  if (/\bcoin machine|change machine|exchange coins|change for cash\b/i.test(t)) {
+    return 'Coin machine / change for cash';
+  }
+  if (/\batm\b/i.test(t)) return 'ATM';
+  const cleaned = t.replace(/\?+$/, '').trim();
+  if (cleaned.length < 8) return null;
+  return cleaned.slice(0, 120);
+}
+
+/** Programmatic safety net when post-call LLM omits teachable gaps. */
+export function fallbackExtractKnowledgeGapsFromTranscript(
+  verbatim: string,
+): PostprocessKnowledgeGap[] {
+  const lines = verbatim.split('\n').map((line) => line.trim()).filter(Boolean);
+  const gaps: PostprocessKnowledgeGap[] = [];
+  const seen = new Set<string>();
+
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!lines[i]?.startsWith('Caller:')) continue;
+    const callerText = lines[i]!.slice('Caller:'.length).trim();
+    if (callerText.length < 8) continue;
+
+    let assistantText = '';
+    for (let j = i + 1; j < lines.length; j += 1) {
+      if (lines[j]?.startsWith('Assistant:')) {
+        assistantText = lines[j]!.slice('Assistant:'.length).trim();
+        break;
+      }
+      if (lines[j]?.startsWith('Caller:')) break;
+    }
+    if (
+      !/\b(not too sure|not sure|don'?t know|can check|pass a message|check for you|i'?m unsure|offer to check)\b/i.test(
+        assistantText,
+      )
+    ) {
+      continue;
+    }
+
+    const topic = topicFromCallerQuestion(callerText);
+    if (!topic) continue;
+    const key = topic.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    gaps.push({
+      topic,
+      caller_context: callerText.slice(0, 200),
+      cara_question: `A caller asked about ${topic}. What should I tell them?`,
+      suggested_section: 'faq',
+    });
+  }
+
+  return gaps;
+}
+
+function mergeKnowledgeGaps(
+  primary: PostprocessKnowledgeGap[],
+  fallback: PostprocessKnowledgeGap[],
+): PostprocessKnowledgeGap[] {
+  const merged = [...primary];
+  const seen = new Set(primary.map((gap) => gap.topic.trim().toLowerCase()));
+  for (const gap of fallback) {
+    const key = gap.topic.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(gap);
+  }
+  return merged.slice(0, 3);
 }
 
 function fallbackSummary(outcome: string): string {
@@ -233,7 +301,7 @@ Return ONLY valid JSON with keys ${jsonKeys} (no markdown outside JSON).
   - resolved: the caller's question or errand was handled on the call (including simple hours/stock/directions answers with no further staff action).
   - incomplete: no shop errand was stated or completed — pleasantries only, abrupt hang-up, or the conversation never moved past small talk.
   - needs_follow_up: staff must still act (callback, order logged verbally, unresolved complaint, etc.).
-- knowledgeGaps: Array (may be empty). Include an item when the caller asked about a service or topic Cara could not answer from the business menu/instructions, or Cara took a message because something was unlisted or unknown. Each item: {"topic":"short label","caller_context":"optional staff excerpt","cara_question":"optional owner question","suggested_section":"faq|services|services_not_offered|business_rules"}. Omit payment/health/ID details. Do not emit gaps for opening hours, bank holidays, or St Patrick's Day when structured hours exist — those are handled programmatically. Do not duplicate routine Action Inbox handoffs already covered by the outcome. Max 3 items.${postCallActionsBlock}`;
+- knowledgeGaps: Array (may be empty). Include an item when the caller asked about a service or topic Cara could not answer from the business menu/instructions, or Cara took a message because something was unlisted or unknown — **even if an Action Inbox ticket was also logged**. Each item: {"topic":"short label","caller_context":"optional staff excerpt","cara_question":"optional owner question","suggested_section":"faq|services|services_not_offered|business_rules"}. Omit payment/health/ID details. Do not emit gaps for opening hours, bank holidays, or St Patrick's Day when structured hours exist — those are handled programmatically. Do not duplicate routine booking/order/callback handoffs. Max 3 items.${postCallActionsBlock}`;
 
   const chatCtx = llm.ChatContext.empty();
   chatCtx.addMessage({
@@ -337,7 +405,10 @@ export async function postprocessCallTranscript(input: {
     if (result) {
       const verbatimLines = countTranscriptLines(verbatim);
       const reviewLines = countTranscriptLines(result.transcriptReview);
-      let knowledgeGaps = input.actionTicketCreated ? [] : result.knowledgeGaps;
+      let knowledgeGaps = mergeKnowledgeGaps(
+        result.knowledgeGaps,
+        fallbackExtractKnowledgeGapsFromTranscript(verbatim),
+      );
       knowledgeGaps = filterKnowledgeGapsForStructuredHours(
         knowledgeGaps,
         input.businessHours,
@@ -364,12 +435,16 @@ export async function postprocessCallTranscript(input: {
   const fallbackActions = input.conversationalRetailLine
     ? fallbackExtractPostCallActions(verbatim)
     : emptyActions;
+  const fallbackGaps = fallbackExtractKnowledgeGapsFromTranscript(verbatim);
 
   return {
     transcriptReview: verbatim,
     aiSummary: sanitizeOwnerFacingCallSummary(fallbackSummary(input.outcome)),
     callResolution: null,
-    knowledgeGaps: emptyGaps,
+    knowledgeGaps: filterKnowledgeGapsForStructuredHours(
+      fallbackGaps,
+      input.businessHours,
+    ),
     postCallActions: fallbackActions,
   };
 }

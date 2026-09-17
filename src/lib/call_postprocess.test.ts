@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  fallbackExtractKnowledgeGapsFromTranscript,
   filterKnowledgeGapsForStructuredHours,
   normalizePostprocessKnowledgeGaps,
   parsePostprocessJsonPayload,
@@ -28,13 +29,6 @@ describe('normalizePostprocessKnowledgeGaps', () => {
     assert.equal(gaps[0]?.suggested_section, 'services');
   });
 
-  it('returns empty when action ticket already created', () => {
-    const gaps = normalizePostprocessKnowledgeGaps(
-      [{ topic: 'Emergency callout' }],
-      { actionTicketCreated: true },
-    );
-    assert.deepEqual(gaps, []);
-  });
 });
 
 describe('filterKnowledgeGapsForStructuredHours', () => {
@@ -61,6 +55,18 @@ describe('filterKnowledgeGapsForStructuredHours', () => {
       null,
     );
     assert.equal(gaps.length, 1);
+  });
+});
+
+describe('fallbackExtractKnowledgeGapsFromTranscript', () => {
+  it('extracts teachable gaps when Cara was unsure', () => {
+    const gaps = fallbackExtractKnowledgeGapsFromTranscript(
+      [
+        'Caller: Do you have a coin machine for change?',
+        "Assistant: I'm not too sure on that one, but I can check for you.",
+      ].join('\n'),
+    );
+    assert.equal(gaps[0]?.topic, 'Coin machine / change for cash');
   });
 });
 

@@ -2,6 +2,10 @@ import { createRequire } from 'node:module';
 import { type SupabaseClient, createClient } from '@supabase/supabase-js';
 
 import { cached } from './cache.js';
+import {
+  loadActiveBusinessHoursOverride,
+  mergeHoursOverrideIntoBundle,
+} from './business_hours_overrides.js';
 
 const require = createRequire(import.meta.url);
 
@@ -289,12 +293,23 @@ async function fetchOrgByPhonePool(phone: string): Promise<OrgCallConfig | null>
   return null;
 }
 
+async function applyActiveHoursOverride(org: OrgCallConfig): Promise<OrgCallConfig> {
+  const supabase = getSupabase();
+  const override = await loadActiveBusinessHoursOverride(supabase, org.id);
+  if (!override) return org;
+  return {
+    ...org,
+    business_hours: mergeHoursOverrideIntoBundle(org.business_hours, override),
+  };
+}
+
 async function resolveOrgUncached(input: {
   slug?: string;
   phone?: string;
 }): Promise<OrgCallConfig | null> {
   const slug = input.slug?.trim();
   const phone = input.phone?.trim();
+  let org: OrgCallConfig | null = null;
 
   if (phone) {
     const byPool = await fetchOrgByPhonePool(phone);
@@ -305,26 +320,29 @@ async function resolveOrgUncached(input: {
           orgSlug: byPool.slug,
         });
       }
-      return byPool;
+      org = byPool;
     }
 
-    const byOrgPhone = await fetchOrgByPhoneOnOrg(phone);
-    if (byOrgPhone) {
-      if (slug && !slugMatches(byOrgPhone, slug)) {
-        console.warn('[supabase] slug/phone mismatch — using organizations.phone_number org', {
-          slug,
-          orgSlug: byOrgPhone.slug,
-        });
+    if (!org) {
+      const byOrgPhone = await fetchOrgByPhoneOnOrg(phone);
+      if (byOrgPhone) {
+        if (slug && !slugMatches(byOrgPhone, slug)) {
+          console.warn('[supabase] slug/phone mismatch — using organizations.phone_number org', {
+            slug,
+            orgSlug: byOrgPhone.slug,
+          });
+        }
+        org = byOrgPhone;
       }
-      return byOrgPhone;
     }
   }
 
-  if (slug) {
-    return fetchOrgBySlug(slug);
+  if (!org && slug) {
+    org = await fetchOrgBySlug(slug);
   }
 
-  return null;
+  if (!org) return null;
+  return applyActiveHoursOverride(org);
 }
 
 /** Resolve org by dialed number first (`phone_numbers.e164`), then slug for dev dispatch. */

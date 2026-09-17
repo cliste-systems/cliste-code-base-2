@@ -76,6 +76,8 @@ export type CaraSessionFlags = {
   retailOpeningComplete?: boolean;
   /** Conversational retail — Cara answered at least one caller errand post-opening. */
   retailSubstantiveExchangeComplete?: boolean;
+  /** Conversational retail — terminal thanks-for-calling already spoken this call. */
+  retailClosingFarewellSpoken?: boolean;
   /** Stable retail — waiting for caller first name before callback ticket. */
   awaitingRetailCallerName?: boolean;
   /** Stable retail — summary captured when stock/price question asked. */

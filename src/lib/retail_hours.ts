@@ -240,9 +240,15 @@ export function formatStructuredHoursForLivePrompt(
       : '- Bank & public holidays: closed (including St Patrick\'s Day).'
     : null;
 
+  const hoursNote =
+    raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? String((raw as Record<string, unknown>)._hoursNote ?? '').trim()
+      : '';
+
   return [
     'Structured opening hours (authoritative — use these, not bank-holiday guesses):',
     todaySpoken,
+    ...(hoursNote ? [`Temporary hours note: ${hoursNote}`] : []),
     ...lines,
     ...(bankLine ? [bankLine] : []),
     'If they name a weekday, answer that weekday only unless it falls on a bank/public holiday — then say closed.',
@@ -310,6 +316,23 @@ export function tomorrowWeekdayKey(timeZone: string): (typeof WEEKDAY_NAMES)[num
   return weekdayKeyFromDate(d, timeZone);
 }
 
+/** Generic opening-hours question without naming a day — treat as today. */
+export function callerSoundsLikeGenericOpenHoursQuestion(text: string): boolean {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  return (
+    /\b(opening hours|what are your hours|your hours|store hours|shop hours)\b/.test(t) ||
+    /\b(what time|when)\s+(do you|are you)\s+(close|open)\b/.test(t) ||
+    /\b(open till|open until|close today|closing today|what time.*(till|until|close))\b/.test(t) ||
+    /\b(closing time|opening time)\b/.test(t)
+  );
+}
+
 /** Opening-hours question — includes common STT garble ("talking tomorrow" → open tomorrow). */
 export function callerSoundsLikeOpenHoursQuestion(text: string): boolean {
   const t = text
@@ -320,6 +343,7 @@ export function callerSoundsLikeOpenHoursQuestion(text: string): boolean {
     .trim();
   if (!t) return false;
   if (callerSoundsLikeSocialChitchat(text)) return false;
+  if (callerSoundsLikeGenericOpenHoursQuestion(text)) return true;
   const dayHint =
     /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/.test(
       t,
@@ -337,6 +361,7 @@ export function callerSoundsLikeOpenHoursQuestion(text: string): boolean {
 export function hoursQuestionDay(
   text: string,
   timeZone: string,
+  ref = new Date(),
 ): (typeof WEEKDAY_NAMES)[number] | null {
   const named = weekdayMentionedInText(text);
   if (named) return named;
@@ -344,7 +369,10 @@ export function hoursQuestionDay(
     return tomorrowWeekdayKey(timeZone);
   }
   if (/\btoday\b/.test(text.toLowerCase())) {
-    return weekdayKeyFromDate(new Date(), timeZone);
+    return weekdayKeyFromDate(ref, timeZone);
+  }
+  if (callerSoundsLikeGenericOpenHoursQuestion(text)) {
+    return weekdayKeyFromDate(ref, timeZone);
   }
   return null;
 }
@@ -367,15 +395,24 @@ export function buildRetailHoursSpokenReply(
   const sched = parseBusinessHoursSchedule(raw);
   if (!sched) return null;
 
-  const day = hoursQuestionDay(text, timeZone) ?? weekdayMentionedInText(text);
+  const ref = opts?.ref ?? new Date();
+  const day =
+    hoursQuestionDay(text, timeZone, ref) ??
+    weekdayMentionedInText(text) ??
+    (callerSoundsLikeGenericOpenHoursQuestion(text)
+      ? weekdayKeyFromDate(ref, timeZone)
+      : null);
   if (!day) return null;
 
   const row = sched.get(day);
   if (!row) return null;
 
   const lower = text.toLowerCase();
+  const namedDay = weekdayMentionedInText(text);
   const tomorrowAsk = /\btomorrow\b/.test(lower);
-  const todayAsk = /\btoday\b/.test(lower);
+  const todayAsk =
+    /\btoday\b/.test(lower) ||
+    (callerSoundsLikeGenericOpenHoursQuestion(text) && !namedDay && !tomorrowAsk);
 
   let answer: string;
   if (row === 'closed') {
