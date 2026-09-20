@@ -101,6 +101,7 @@ import {
   classifyPipelineErrorStage,
   postPipelineIncident,
 } from './lib/pipeline_incident.js';
+import { isEngineerTestCall } from './lib/engineer_test_call.js';
 import { isTestCall } from './lib/test_call.js';
 import { isFactoryFreshLine } from './lib/factory_fresh_line.js';
 import {
@@ -153,12 +154,29 @@ import {
   assistantSoundsLikeCorporateAssist,
 } from './lib/speech_triggers.js';
 import {
+  assistantAskedExplicitOrderConfirm,
+  assistantPrematureTeamHandoff,
+  assistantSpokeTeamHandoff,
+  assistantUsesBannedAiSlop,
+  buildAmbiguousNameConfirmSteer,
+  buildBannedSlopSteer,
+  buildPostConfirmSpellingSteer,
+  buildPrematureTeamHandoffSteer,
+  callerGaveFirstName,
+  callerSpelledNameLetterByLetter,
+  isPhoneticallyAmbiguousFirstName,
+  lastAssistantAskedCallerFirstName,
+  parseLetterSpelledName,
+} from './lib/cake_name_intake.js';
+import {
   assistantReplyLooksLikeClarificationRequest,
   detectLikelySttGarble,
 } from './lib/stt_garble.js';
 import { callerSoundsLikeRetailStaffQuestion } from './lib/retail_staff_questions.js';
 import {
   buildRetailHoursSpokenReply,
+  buildSundayCloseContextSteer,
+  assistantStatesCloseWithoutSundayContext,
   callerSoundsLikeWeekdayHoursCorrection,
   callerSoundsLikeOpenHoursQuestion,
   formatStructuredHoursForLivePrompt,
@@ -317,7 +335,15 @@ function noteCallerGarble(
 function mergeTranscriptLines(parts: TranscriptLine[]): string | null {
   if (parts.length === 0) return null;
   const sorted = [...parts].sort((a, b) => a.at - b.at || a.seq - b.seq);
-  let text = sorted.map((p) => p.line).join('\n\n');
+  const deduped: TranscriptLine[] = [];
+  let prevNorm: string | null = null;
+  for (const part of sorted) {
+    const norm = part.line.replace(/\s+/g, ' ').trim().toLowerCase();
+    if (norm === prevNorm) continue;
+    prevNorm = norm;
+    deduped.push(part);
+  }
+  let text = deduped.map((p) => p.line).join('\n\n');
   if (text.length > MAX_TRANSCRIPT_CHARS) {
     text = `${text.slice(0, MAX_TRANSCRIPT_CHARS)}\n\n[Transcript truncated for storage.]`;
   }
@@ -750,13 +776,26 @@ export default defineAgent({
         : '') ||
       '';
     const callSidAttr = stableCallSidFallback(participant, roomName);
+    const engineerTestCall = isEngineerTestCall({
+      callerNumber: callerNumberRaw,
+      roomName,
+      jobMetadata: ctx.job.metadata ?? null,
+      roomMetadata: ctx.room.metadata ?? null,
+    });
+    const billableCall = !testCall && !engineerTestCall;
+    if (engineerTestCall) {
+      console.info('[agent] engineer_test_call', {
+        calledNumber: maskPhone(calledNumber),
+        roomName,
+      });
+    }
 
     const billingPeriodStart = currentBillingPeriodStart(org.billing_period_start ?? null);
     const planQuota = planQuotaMinutes(org.plan_tier);
 
     const burstPctRaw = Number.parseFloat(process.env.CLISTE_QUOTA_BURST_PCT ?? '10');
     const burstFloor = Number.parseInt(process.env.CLISTE_QUOTA_BURST_FLOOR_MIN ?? '5', 10);
-    if (typeof planQuota === 'number' && planQuota > 0 && !testCall) {
+    if (typeof planQuota === 'number' && planQuota > 0 && billableCall) {
       const used = await sumUsageMinutesThisPeriod({
         organizationId: org.id,
         billingPeriodStart,
@@ -785,9 +824,8 @@ export default defineAgent({
       }
     }
 
-    const usageRecordIdPromise = testCall
-      ? Promise.resolve(null)
-      : startUsageRecord({
+    const usageRecordIdPromise = billableCall
+      ? startUsageRecord({
           organizationId: org.id,
           planTier: org.plan_tier ?? null,
           planQuotaMinutes: planQuota,
@@ -795,7 +833,8 @@ export default defineAgent({
           roomName: roomName || null,
           callerNumber: callerNumberRaw,
           billingPeriodStart,
-        });
+        })
+      : Promise.resolve(null);
 
     const endCallTarget =
       roomName && participant.identity
@@ -1662,6 +1701,40 @@ export default defineAgent({
         return true;
       }
       let handledWithProgrammaticReply = false;
+      if (conversationalRetailLine && !session.userData.sessionFlags.endPhoneCallUsed) {
+        const flags = session.userData.sessionFlags;
+        if (flags.awaitingOrderConfirmReply && callerSoundsLikeAffirmativeConsent(trimmed)) {
+          flags.orderHandoffConfirmed = true;
+          flags.awaitingOrderConfirmReply = false;
+        }
+        if (callerSpelledNameLetterByLetter(trimmed)) {
+          const spelled = parseLetterSpelledName(trimmed);
+          const postConfirm =
+            flags.orderHandoffConfirmed ||
+            flags.askedAnythingElse ||
+            flags.awaitingAnythingElseReply ||
+            assistantSpokeTeamHandoff(lastAssistantChatText);
+          if (postConfirm) {
+            steerReply(buildPostConfirmSpellingSteer(spelled));
+            handledWithProgrammaticReply = true;
+          } else if (spelled) {
+            flags.retailLastCapturedName = spelled;
+          }
+        } else {
+          const firstName = callerGaveFirstName(trimmed);
+          if (
+            firstName &&
+            isPhoneticallyAmbiguousFirstName(firstName) &&
+            lastAssistantAskedCallerFirstName(lastAssistantChatText)
+          ) {
+            flags.retailLastCapturedName = firstName;
+            steerReply(buildAmbiguousNameConfirmSteer(firstName));
+            handledWithProgrammaticReply = true;
+          } else if (firstName) {
+            flags.retailLastCapturedName = firstName;
+          }
+        }
+      }
       if (
         !conversationalRetailLine &&
         org.niche === 'retail' &&
@@ -2161,6 +2234,30 @@ export default defineAgent({
         clearAllGuardTimers();
       }
       if (
+        conversationalRetailLine &&
+        role === 'assistant' &&
+        !flags.endPhoneCallUsed &&
+        !lineMatchesGreeting(text, playbackGreetingText)
+      ) {
+        if (
+          !flags.orderHandoffConfirmed &&
+          assistantPrematureTeamHandoff(text)
+        ) {
+          flags.awaitingOrderConfirmReply = true;
+          steerReply(buildPrematureTeamHandoffSteer());
+        } else if (
+          org.niche === 'retail' &&
+          assistantStatesCloseWithoutSundayContext(text, orgTz)
+        ) {
+          steerReply(buildSundayCloseContextSteer(org.business_hours, orgTz));
+        } else if (assistantUsesBannedAiSlop(text)) {
+          steerReply(buildBannedSlopSteer());
+        }
+        if (assistantAskedExplicitOrderConfirm(text)) {
+          flags.awaitingOrderConfirmReply = true;
+        }
+      }
+      if (
         role === 'assistant' &&
         hasCallerIdOnFile &&
         assistantAskedForPhoneNumber(text) &&
@@ -2453,6 +2550,7 @@ export default defineAgent({
                 diagnostics: closeDiagnostics,
               }
             : {}),
+          ...(engineerTestCall ? { engineer_test_call: true } : {}),
         };
 
         callLogId = (
@@ -2465,6 +2563,7 @@ export default defineAgent({
               transcript: verbatim,
               calledNumber: persistCalledNumber || null,
               isTestCall: testCall,
+              isEngineerTestCall: engineerTestCall,
               callSid: callSidAttr,
               roomName: roomName || null,
             }),
@@ -2475,7 +2574,8 @@ export default defineAgent({
         if (
           callLogId &&
           disclosureConfirmed &&
-          ud.callRecordingEgressId?.trim()
+          ud.callRecordingEgressId?.trim() &&
+          !engineerTestCall
         ) {
           audioStoragePath = await finalizeCallRecording({
             egressId: ud.callRecordingEgressId,
@@ -2819,7 +2919,11 @@ export default defineAgent({
           await finishUsageRecord({
             usageId: usageRecordId,
             durationSeconds,
-            ...(testCall ? { syncSkipReason: 'test_call' } : {}),
+            ...(testCall
+              ? { syncSkipReason: 'test_call' }
+              : engineerTestCall
+                ? { syncSkipReason: 'engineer_test_call' }
+                : {}),
           });
         }
 
@@ -2954,6 +3058,7 @@ export default defineAgent({
     };
 
     callRecordingControl.tryStart = async (): Promise<void> => {
+      if (engineerTestCall) return;
       if (session.userData.callRecordingEgressId || !session.userData.disclosureConfirmed) {
         return;
       }

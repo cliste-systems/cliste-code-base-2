@@ -82,6 +82,16 @@ export type CaraSessionFlags = {
   awaitingRetailCallerName?: boolean;
   /** Stable retail — summary captured when stock/price question asked. */
   pendingCallbackSummary?: string | null;
+  /** Order/callback summary read — waiting for explicit yes before team handoff. */
+  awaitingOrderConfirmReply?: boolean;
+  /** Caller confirmed the read-back summary — handoff may proceed. */
+  orderHandoffConfirmed?: boolean;
+  /** @deprecated Use awaitingOrderConfirmReply */
+  awaitingCakeOrderConfirmReply?: boolean;
+  /** @deprecated Use orderHandoffConfirmed */
+  cakeOrderConfirmed?: boolean;
+  /** Last first name captured on a cake/collection question. */
+  retailLastCapturedName?: string | null;
   /** Caller recently asked about weekly offers — steer catalog lookup to promo items. */
   callerAskedAboutOffers?: boolean;
   /** One-time alcohol age reminder already given this call. */
@@ -906,9 +916,13 @@ export class CaraTools {
           ? 'Use only these synced offer quotes. Lead with the saving, then the offer price, then the usual price — one short sentence each, spoken clearly with a pause between them. Do not mention payment on the phone. Never quote offers from memory.'
           : 'Use this guidance — speak prices in natural Irish words exactly as given, in your own words. Never quote offers from memory.';
 
+      const freshnessNote = result.offersFreshness?.trim()
+        ? `${result.offersFreshness.trim()}\n\n`
+        : '';
+
       return {
         ok: true,
-        message: `${offerPrefix}${alcoholNote ? ' Include the one-time age reminder once in your reply.' : ''}\n\n${formatted}${alcoholNote}`,
+        message: `${freshnessNote}${offerPrefix}${alcoholNote ? ' Include the one-time age reminder once in your reply.' : ''}\n\n${formatted}${alcoholNote}`,
         matches: result.matches,
       };
     },

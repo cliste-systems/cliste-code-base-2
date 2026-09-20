@@ -39,6 +39,7 @@ export type CallCompletePayload = {
   ai_summary?: string | null;
   disclosure_confirmed?: boolean;
   is_test_call?: boolean;
+  engineer_test_call?: boolean;
   test_profile_id?: string | null;
   variant_label?: string | null;
   diagnostics?: CallCloseDiagnosticsPayload | null;
@@ -408,6 +409,7 @@ export async function postSearchSupervaluProducts(
   browseCategories?: string[] | null;
   noMatchQuote?: string | null;
   clarificationHint?: string | null;
+  offersFreshness?: string | null;
   error?: string;
 }> {
   if (!voiceWebhooksConfigured()) {
@@ -421,6 +423,7 @@ export async function postSearchSupervaluProducts(
       browse_categories?: string[] | null;
       no_match_quote?: string | null;
       clarification_hint?: string | null;
+      offers_freshness?: string | null;
       error?: string;
     }>('/api/voice/search-supervalu-products', payload);
 
@@ -439,6 +442,8 @@ export async function postSearchSupervaluProducts(
       noMatchQuote: body.no_match_quote ?? null,
       clarificationHint:
         typeof body.clarification_hint === 'string' ? body.clarification_hint : null,
+      offersFreshness:
+        typeof body.offers_freshness === 'string' ? body.offers_freshness : null,
     };
   } catch (err) {
     return { ok: false, matches: [], error: webhookFetchError(err) };

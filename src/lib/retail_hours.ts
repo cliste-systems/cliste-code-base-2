@@ -377,6 +377,77 @@ export function hoursQuestionDay(
   return null;
 }
 
+function localMinutesSinceMidnight(d: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  }).formatToParts(d);
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
+  return hour * 60 + minute;
+}
+
+/** Whether the store is open at `ref` in the org timezone — null when hours unknown. */
+export function isStoreOpenNow(raw: unknown, timeZone: string, ref = new Date()): boolean | null {
+  const sched = parseBusinessHoursSchedule(raw);
+  if (!sched) return null;
+  const day = weekdayKeyFromDate(ref, timeZone);
+  if (!day) return null;
+  const row = sched.get(day);
+  if (!row || row === 'closed') return false;
+  const nowMin = localMinutesSinceMidnight(ref, timeZone);
+  return nowMin >= row.openMin && nowMin < row.closeMin;
+}
+
+/** Spoken close-time line with weekday context — e.g. "Sundays we close at six in the evening". */
+export function spokenDayCloseContext(
+  raw: unknown,
+  timeZone: string,
+  ref = new Date(),
+): string | null {
+  const sched = parseBusinessHoursSchedule(raw);
+  if (!sched) return null;
+  const day = weekdayKeyFromDate(ref, timeZone);
+  if (!day) return null;
+  const row = sched.get(day);
+  if (!row || row === 'closed') return null;
+  const { close } = spokenOpenCloseForPhone(row);
+  if (day === 'sunday') {
+    return `Sundays we close at ${close}`;
+  }
+  return `Today we're open till ${close}`;
+}
+
+/** Steer when Cara mentions closing time without naming Sunday on a Sunday call. */
+export function assistantStatesCloseWithoutSundayContext(
+  text: string,
+  timeZone: string,
+  ref = new Date(),
+): boolean {
+  const day = weekdayKeyFromDate(ref, timeZone);
+  if (day !== 'sunday') return false;
+  const t = text.toLowerCase();
+  if (!/\b(close|closes|closing|closed)\b/.test(t)) return false;
+  if (/\bsundays?\b/.test(t)) return false;
+  return /\b(six|6)\b/.test(t);
+}
+
+export function buildSundayCloseContextSteer(
+  raw: unknown,
+  timeZone: string,
+  ref = new Date(),
+): string {
+  const ctx =
+    spokenDayCloseContext(raw, timeZone, ref) ??
+    'Sundays we close at six in the evening — Mon–Sat till nine';
+  return (
+    `When explaining collection timing, name the day — e.g. "${ctx}" — not a vague "the store closes at six today". ` +
+    'Mon–Sat we are open till nine. One short line, then stop.'
+  );
+}
+
 /** Direct spoken hours answer — bypasses LLM for retail opening-hours questions. */
 export function buildRetailHoursSpokenReply(
   raw: unknown,

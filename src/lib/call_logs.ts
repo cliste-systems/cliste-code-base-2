@@ -22,6 +22,7 @@ export async function insertCallLog(input: {
   costEstimate?: CallCostEstimateRecord | null;
   calledNumber?: string | null;
   isTestCall?: boolean;
+  isEngineerTestCall?: boolean;
   callSid?: string | null;
   roomName?: string | null;
 }): Promise<string | null> {
@@ -56,6 +57,7 @@ export async function insertCallLog(input: {
       cost_estimate: input.costEstimate ?? null,
       ...(input.calledNumber?.trim() ? { called_number: input.calledNumber.trim() } : {}),
       ...(input.isTestCall === true ? { is_test_call: true } : {}),
+      ...(input.isEngineerTestCall === true ? { engineer_test_call: true } : {}),
       ...(input.callSid?.trim() ? { call_sid: input.callSid.trim() } : {}),
       ...(input.roomName?.trim() ? { room_name: input.roomName.trim() } : {}),
       post_call_status: 'pending',

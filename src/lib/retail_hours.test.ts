@@ -2,13 +2,17 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  assistantStatesCloseWithoutSundayContext,
   buildRetailHoursSpokenReply,
+  buildSundayCloseContextSteer,
   callerSoundsLikeGenericOpenHoursQuestion,
   callerSoundsLikeOpenHoursQuestion,
   callerSoundsLikeWeekdayHoursCorrection,
   formatStructuredHoursForLivePrompt,
   hoursLineForWeekday,
   hoursQuestionDay,
+  isStoreOpenNow,
+  spokenDayCloseContext,
   weekdayMentionedInText,
 } from './retail_hours.js';
 
@@ -145,5 +149,32 @@ describe('retail_hours', () => {
     );
     assert.match(line ?? '', /Tomorrow we're closed/i);
     assert.match(line ?? '', /bank and public holiday/i);
+  });
+
+  it('detects store closed after Sunday close', () => {
+    const ref = new Date('2026-09-20T17:28:00Z');
+    assert.equal(isStoreOpenNow(hours, 'Europe/Dublin', ref), false);
+    assert.match(spokenDayCloseContext(hours, 'Europe/Dublin', ref) ?? '', /Sundays we close/i);
+  });
+
+  it('flags vague Sunday close without naming the day', () => {
+    const ref = new Date('2026-09-20T17:28:00Z');
+    assert.equal(
+      assistantStatesCloseWithoutSundayContext(
+        'The store closes at 6 PM today, so you might struggle.',
+        'Europe/Dublin',
+        ref,
+      ),
+      true,
+    );
+    assert.equal(
+      assistantStatesCloseWithoutSundayContext(
+        'Sundays we close at six in the evening.',
+        'Europe/Dublin',
+        ref,
+      ),
+      false,
+    );
+    assert.match(buildSundayCloseContextSteer(hours, 'Europe/Dublin', ref), /Sundays we close/i);
   });
 });
