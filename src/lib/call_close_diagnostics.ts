@@ -27,7 +27,7 @@ export type CallCloseDiagnosticsPayload = {
   sessionFlags?: Record<string, unknown>;
   events: CallDiagnosticEvent[];
   greetingPlayed: boolean;
-  greetingSource?: 'cached_pcm' | 'live_tts' | null;
+  greetingSource?: 'cached_pcm' | 'live_tts' | 'gpt_live' | null;
   disclosureConfirmed: boolean;
   deploy: Record<string, string | undefined>;
   transcriptIssues: string[];
@@ -99,7 +99,7 @@ export function buildCloseDiagnosticsPayload(input: {
   sessionFlags?: Record<string, unknown>;
   events: CallDiagnosticEvent[];
   greetingPlayed: boolean;
-  greetingSource?: 'cached_pcm' | 'live_tts' | null;
+  greetingSource?: 'cached_pcm' | 'live_tts' | 'gpt_live' | null;
   disclosureConfirmed: boolean;
   transcript?: string | null;
   identifiers?: CallIdentifiers;

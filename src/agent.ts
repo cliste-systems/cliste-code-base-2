@@ -2,6 +2,11 @@ import 'dotenv/config';
 
 import * as lkTurn from '@livekit/agents-plugin-livekit';
 import { createCaraLlm } from './lib/llm_provider.js';
+import {
+  buildGptLiveRetailOpeningInstructions,
+  createGptLiveRetailModel,
+  shouldUseGptLiveRetailStack,
+} from './lib/gpt_live_retail.js';
 import * as silero from '@livekit/agents-plugin-silero';
 import {
   type JobContext,
@@ -492,6 +497,9 @@ export default defineAgent({
       (isConversationalRetailLine(calledNumber) ||
         isConversationalRetailLine(routing.phone) ||
         isConversationalRetailLine(org.phone_number));
+    const useGptLiveRetailStack = shouldUseGptLiveRetailStack({ conversationalRetailLine });
+    const gptLiveRetail = useGptLiveRetailStack ? createGptLiveRetailModel() : null;
+    const activeGptLiveRetail = Boolean(gptLiveRetail);
     /** 9508 = LiveKit turn loop only; no agent.ts guard rails. */
     const bareLiveKitRetailLane = conversationalRetailLine;
     const demoExperienceStack = shouldUseDemoExperienceStack({
@@ -517,6 +525,8 @@ export default defineAgent({
         calledNumber: maskPhone(calledNumber),
         orgSlug: org.slug,
         bareLiveKitLane: bareLiveKitRetailLane,
+        gptLive: activeGptLiveRetail,
+        gptLiveVoice: gptLiveRetail?.voice ?? null,
       });
     }
     const blockResult = await checkCallerBlocklist({
@@ -699,7 +709,7 @@ export default defineAgent({
     const diag = createCallDiagnosticSession();
     const latencyTracker = createCallLatencyTracker(callStartedAt);
     let greetingPlayedFlag = false;
-    let greetingSource: 'cached_pcm' | 'live_tts' | null = null;
+    let greetingSource: 'cached_pcm' | 'live_tts' | 'gpt_live' | null = null;
     const pipelineIncidentPosted = new Set<string>();
     const livekitJobId =
       typeof (ctx.job as { id?: string }).id === 'string'
@@ -929,47 +939,63 @@ export default defineAgent({
       ? Number.parseInt(process.env.LIVEKIT_TEST_LLM_MAX_TOKENS ?? '320', 10)
       : Number.parseInt(process.env.LIVEKIT_LLM_MAX_TOKENS ?? '320', 10);
 
-    const resolvedLlm = createCaraLlm({
-      inferenceLlmModel,
-      profileLlmProvider: testProfile?.llm_provider ?? null,
-      reasoningEffort: useBuilderDemoStack ? 'low' : undefined,
-      temperature: llmTemperature,
-      maxCompletionTokens: llmMaxCompletionTokens,
-    });
-    const llmInstance = resolvedLlm.instance;
+    const resolvedLlm = activeGptLiveRetail
+      ? null
+      : createCaraLlm({
+          inferenceLlmModel,
+          profileLlmProvider: testProfile?.llm_provider ?? null,
+          reasoningEffort: useBuilderDemoStack ? 'low' : undefined,
+          temperature: llmTemperature,
+          maxCompletionTokens: llmMaxCompletionTokens,
+        });
+    const llmInstance = activeGptLiveRetail && gptLiveRetail ? gptLiveRetail.instance : resolvedLlm!.instance;
 
-    const sttModelOptions = isAssemblyAiSttModel(inferenceSttModel)
-      ? buildAssemblyAiSttOptions({
+    const sessionStt = activeGptLiveRetail
+      ? null
+      : new inference.STT({
           model: inferenceSttModel,
-          keyterms: sttKeyterms,
-          domainPrompt: sttDomainPrompt,
-          minTurnSilenceMs: sttMinTurnSilenceMs,
-          maxTurnSilenceMs: sttMaxTurnSilenceMs,
-          eotConfidence: sttEotConfidence,
-        })
+          language: inferenceSttLanguage,
+          modelOptions: isAssemblyAiSttModel(inferenceSttModel)
+            ? buildAssemblyAiSttOptions({
+                model: inferenceSttModel,
+                keyterms: sttKeyterms,
+                domainPrompt: sttDomainPrompt,
+                minTurnSilenceMs: sttMinTurnSilenceMs,
+                maxTurnSilenceMs: sttMaxTurnSilenceMs,
+                eotConfidence: sttEotConfidence,
+              })
+            : {
+                interim_results: true,
+                ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
+              },
+        });
+
+    const pipelineLabel = activeGptLiveRetail && gptLiveRetail
+      ? {
+          stack: 'gpt-live-retail' as const,
+          stt: 'gpt-live-built-in',
+          sttKeytermCount: 0,
+          sttNeuralTurn: false,
+          latencyProfile,
+          llm: gptLiveRetail.label,
+          tts: 'gpt-live-built-in',
+          voiceId: gptLiveRetail.voice,
+          voice: gptLiveRetail.voice,
+          ttsProvider: 'gpt-live-built-in',
+          backendModel: gptLiveRetail.backendModel,
+        }
       : {
-          interim_results: true,
-          ...(sttKeyterms.length > 0 ? { keyterms: sttKeyterms } : {}),
+          stt: inferenceSttModel,
+          sttKeytermCount: sttKeyterms.length,
+          sttNeuralTurn: useSttNeuralTurnDetection,
+          latencyProfile,
+          llm: resolvedLlm!.label,
+          tts: ttsConfig.label,
+          voiceId: activeVoiceId,
+          ttsProvider: 'cartesia-inference',
+          ...(endpointMinMs !== undefined ? { endpointMinMs } : {}),
+          ...(endpointMaxMs !== undefined ? { endpointMaxMs } : {}),
         };
-
-    const sessionStt = new inference.STT({
-      model: inferenceSttModel,
-      language: inferenceSttLanguage,
-      modelOptions: sttModelOptions,
-    });
-
-    const pipelineLabel = {
-      stt: inferenceSttModel,
-      sttKeytermCount: sttKeyterms.length,
-      sttNeuralTurn: useSttNeuralTurnDetection,
-      latencyProfile,
-      llm: resolvedLlm.label,
-      tts: ttsConfig.label,
-      voiceId: activeVoiceId,
-      ttsProvider: 'cartesia-inference',
-      endpointMinMs: endpointMinMs ?? null,
-      endpointMaxMs: endpointMaxMs ?? null,
-    };
 
     if (conversationalRetailLine) {
       assertExpectedStack(pipelineLabel);
@@ -987,13 +1013,15 @@ export default defineAgent({
             llm_provider: testProfile.llm_provider,
           }
         : null,
-      llmProvider: resolvedLlm.provider,
+      llmProvider: activeGptLiveRetail ? 'gpt-live' : resolvedLlm!.provider,
       llmTemperature,
       llmMaxCompletionTokens,
       endpointMode,
       interruptionMode,
       latencyProfile,
       sttLanguage: inferenceSttLanguage,
+      gptLiveRetail: activeGptLiveRetail,
+      gptLiveVoice: gptLiveRetail?.voice ?? null,
     };
 
     console.info('[agent] pipeline', pipelineLabel);
@@ -1013,48 +1041,56 @@ export default defineAgent({
       });
     }
 
-    setActiveTtsModelForSanitizer(activeTtsModel);
+    setActiveTtsModelForSanitizer(activeGptLiveRetail ? 'gpt-live-built-in' : activeTtsModel);
 
-    const sessionTts = new inference.TTS({
-      model: ttsConfig.model,
-      voice: ttsConfig.voiceId,
-      language: ttsConfig.language,
-    });
+    const sessionTts = activeGptLiveRetail
+      ? null
+      : new inference.TTS({
+          model: ttsConfig.model,
+          voice: ttsConfig.voiceId,
+          language: ttsConfig.language,
+        });
 
-    const session = new voice.AgentSession<CaraAgentUserData>({
-      stt: sessionStt,
-      ...(useBuilderDemoStack ? {} : { vad: ctx.proc.userData.vad as silero.VAD }),
-      llm: llmInstance,
-      tts: sessionTts,
-      userData: sessionUserData,
-      maxToolSteps: 5,
-      turnHandling: {
-        preemptiveGeneration: {
-          enabled: demoExperienceStack
-            ? process.env.LIVEKIT_TEST_PREEMPTIVE_GENERATION?.trim() === '1'
-            : process.env.LIVEKIT_PREEMPTIVE_GENERATION?.trim() === '1',
-        },
-        turnDetection: useBuilderDemoStack
-          ? (turnDetectorInstance ?? undefined)
-          : (turnDetectorInstance ?? 'stt'),
-        endpointing: {
-          ...(endpointMode ? { mode: endpointMode } : {}),
-          ...(endpointMinMs !== undefined ? { minDelay: endpointMinMs } : {}),
-          ...(endpointMaxMs !== undefined ? { maxDelay: endpointMaxMs } : {}),
-        },
-        interruption: {
-          mode: interruptionMode,
-          discardAudioIfUninterruptible: (() => {
-            const raw = process.env.LIVEKIT_DISCARD_AUDIO_IF_UNINTERRUPTIBLE?.trim().toLowerCase();
-            if (raw === 'true') return true;
-            if (raw === 'false') return false;
-            return demoExperienceStack;
-          })(),
-          minDuration: Number.isFinite(interruptionMinMs) ? interruptionMinMs : 200,
-          minWords: Number.isFinite(interruptionMinWords) ? interruptionMinWords : 1,
-        },
-      },
-    });
+    const session = activeGptLiveRetail
+      ? new voice.AgentSession<CaraAgentUserData>({
+          llm: llmInstance,
+          userData: sessionUserData,
+          maxToolSteps: 5,
+        })
+      : new voice.AgentSession<CaraAgentUserData>({
+          stt: sessionStt!,
+          ...(useBuilderDemoStack ? {} : { vad: ctx.proc.userData.vad as silero.VAD }),
+          llm: llmInstance,
+          tts: sessionTts!,
+          userData: sessionUserData,
+          maxToolSteps: 5,
+          turnHandling: {
+            preemptiveGeneration: {
+              enabled: demoExperienceStack
+                ? process.env.LIVEKIT_TEST_PREEMPTIVE_GENERATION?.trim() === '1'
+                : process.env.LIVEKIT_PREEMPTIVE_GENERATION?.trim() === '1',
+            },
+            turnDetection: useBuilderDemoStack
+              ? (turnDetectorInstance ?? undefined)
+              : (turnDetectorInstance ?? 'stt'),
+            endpointing: {
+              ...(endpointMode ? { mode: endpointMode } : {}),
+              ...(endpointMinMs !== undefined ? { minDelay: endpointMinMs } : {}),
+              ...(endpointMaxMs !== undefined ? { maxDelay: endpointMaxMs } : {}),
+            },
+            interruption: {
+              mode: interruptionMode,
+              discardAudioIfUninterruptible: (() => {
+                const raw = process.env.LIVEKIT_DISCARD_AUDIO_IF_UNINTERRUPTIBLE?.trim().toLowerCase();
+                if (raw === 'true') return true;
+                if (raw === 'false') return false;
+                return demoExperienceStack;
+              })(),
+              minDuration: Number.isFinite(interruptionMinMs) ? interruptionMinMs : 200,
+              minWords: Number.isFinite(interruptionMinWords) ? interruptionMinWords : 1,
+            },
+          },
+        });
 
     const deadAirMs = demoExperienceStack
       ? Number.parseInt(process.env.DEMO_DEAD_AIR_MS ?? '20000', 10)
@@ -1389,10 +1425,12 @@ export default defineAgent({
           errorMessage: msg,
           modelLabel:
             stage === 'tts'
-              ? String(activeTtsModel)
+              ? String(activeGptLiveRetail ? 'gpt-live-built-in' : activeTtsModel)
               : stage === 'llm'
-                ? resolvedLlm.label
-                : inferenceSttModel,
+                ? pipelineLabel.llm
+                : activeGptLiveRetail
+                  ? 'gpt-live-built-in'
+                  : inferenceSttModel,
           retryable:
             stage === 'stt'
               ? classifySttPipelineError(msg, err).retryable
@@ -2971,40 +3009,73 @@ export default defineAgent({
         greetingPlaybackStarted = true;
         const greetingIncludesDisclosure = greetingDisclosesAi(playbackGreetingText);
         try {
-          agent.singleUtteranceTtsNext = true;
-          const handle = sayPrepared(session, playbackGreetingText, {
-            greeting: true,
-            greetingCommaFlow: false,
-            greetingRetailOpening: conversationalRetailLine,
-            addToChatCtx: false,
-            allowInterruptions: demoExperienceStack,
-          });
-          if (greetingIncludesDisclosure) {
-            session.userData.disclosureConfirmed = true;
-            void callRecordingControl.tryStart();
-            console.info('[agent] recording_start_at_greeting', {
+          if (activeGptLiveRetail) {
+            const handle = session.generateReply({
+              instructions: buildGptLiveRetailOpeningInstructions(playbackGreetingText),
+            });
+            if (greetingIncludesDisclosure) {
+              session.userData.disclosureConfirmed = true;
+              void callRecordingControl.tryStart();
+              console.info('[agent] recording_start_at_greeting', {
+                msSinceCallStart: Date.now() - callStartedAt,
+              });
+            }
+            greetingPlayedFlag = true;
+            greetingSource = 'gpt_live';
+            latencyTracker.recordGreetingPlayback();
+            console.info('[agent] greeting_playback', {
+              source: 'gpt_live',
               msSinceCallStart: Date.now() - callStartedAt,
             });
-          }
-          greetingPlayedFlag = true;
-          greetingSource = 'live_tts';
-          latencyTracker.recordGreetingPlayback();
-          console.info('[agent] greeting_playback', {
-            source: 'live_tts',
-            msSinceCallStart: Date.now() - callStartedAt,
-          });
-          diag.push('info', 'greeting_playback', {
-            source: 'live_tts',
-            msSinceCallStart: Date.now() - callStartedAt,
-          });
-          try {
-            await waitForSpeechHandlePlayout(handle);
-          } catch {
-            /* playout wait best-effort */
-          }
-          greetingPlayoutComplete = true;
-          if (!greetingIncludesDisclosure) {
-            await speakOptionalAiDisclosure();
+            diag.push('info', 'greeting_playback', {
+              source: 'gpt_live',
+              msSinceCallStart: Date.now() - callStartedAt,
+            });
+            try {
+              await waitForSpeechHandlePlayout(handle);
+            } catch {
+              /* playout wait best-effort */
+            }
+            greetingPlayoutComplete = true;
+            if (!greetingIncludesDisclosure) {
+              await speakOptionalAiDisclosure();
+            }
+          } else {
+            agent.singleUtteranceTtsNext = true;
+            const handle = sayPrepared(session, playbackGreetingText, {
+              greeting: true,
+              greetingCommaFlow: false,
+              greetingRetailOpening: conversationalRetailLine,
+              addToChatCtx: false,
+              allowInterruptions: demoExperienceStack,
+            });
+            if (greetingIncludesDisclosure) {
+              session.userData.disclosureConfirmed = true;
+              void callRecordingControl.tryStart();
+              console.info('[agent] recording_start_at_greeting', {
+                msSinceCallStart: Date.now() - callStartedAt,
+              });
+            }
+            greetingPlayedFlag = true;
+            greetingSource = 'live_tts';
+            latencyTracker.recordGreetingPlayback();
+            console.info('[agent] greeting_playback', {
+              source: 'live_tts',
+              msSinceCallStart: Date.now() - callStartedAt,
+            });
+            diag.push('info', 'greeting_playback', {
+              source: 'live_tts',
+              msSinceCallStart: Date.now() - callStartedAt,
+            });
+            try {
+              await waitForSpeechHandlePlayout(handle);
+            } catch {
+              /* playout wait best-effort */
+            }
+            greetingPlayoutComplete = true;
+            if (!greetingIncludesDisclosure) {
+              await speakOptionalAiDisclosure();
+            }
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
