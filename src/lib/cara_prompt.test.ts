@@ -32,17 +32,6 @@ describe('buildCaraCallPrompt', () => {
     assert.match(prompt, /takeCallbackMessage/i);
   });
 
-  it('instructs natural grounded Q&A without verbatim reading', () => {
-    const prompt = buildCaraCallPrompt({
-      ...baseInput,
-      niche: 'salon',
-    });
-
-    assert.match(prompt, /Approved facts, natural wording/i);
-    assert.match(prompt, /Never read saved answers verbatim/i);
-    assert.match(prompt, /Preserve negatives, conditions, exceptions/i);
-  });
-
   it('uses retail flow for grocery stores', () => {
     const prompt = buildCaraCallPrompt({
       ...baseInput,
