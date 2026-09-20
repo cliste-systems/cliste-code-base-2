@@ -4,7 +4,7 @@ import * as lkTurn from '@livekit/agents-plugin-livekit';
 import { createCaraLlm } from './lib/llm_provider.js';
 import {
   buildGptLiveRetailOpeningInstructions,
-  createGptLiveRetailModel,
+  resolveGptLiveRetailModel,
   shouldUseGptLiveRetailStack,
 } from './lib/gpt_live_retail.js';
 import * as silero from '@livekit/agents-plugin-silero';
@@ -578,7 +578,7 @@ export default defineAgent({
         isConversationalRetailLine(routing.phone) ||
         isConversationalRetailLine(org.phone_number));
     const useGptLiveRetailStack = shouldUseGptLiveRetailStack({ conversationalRetailLine });
-    const gptLiveRetail = useGptLiveRetailStack ? createGptLiveRetailModel() : null;
+    const gptLiveRetail = useGptLiveRetailStack ? await resolveGptLiveRetailModel() : null;
     const activeGptLiveRetail = Boolean(gptLiveRetail);
     /** 9508 = LiveKit turn loop only; no agent.ts guard rails. */
     const bareLiveKitRetailLane = conversationalRetailLine;
