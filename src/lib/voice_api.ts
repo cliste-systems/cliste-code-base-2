@@ -387,6 +387,7 @@ export type SearchSupervaluProductsPayload = {
   called_number: string;
   query: string;
   intent?: 'offer' | 'price' | 'stock';
+  fulfilment?: 'counter' | 'prepack';
 };
 
 export type SearchSupervaluProductsMatch = {

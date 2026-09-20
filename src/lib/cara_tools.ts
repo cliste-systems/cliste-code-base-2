@@ -810,7 +810,7 @@ export class CaraTools {
 
   readonly searchSuperValuProducts = llm.tool({
     description:
-      'Look up SuperValu products — stock, regular price, and synced weekly offers. Use for do you stock / how much / on offer / this week / on special. Pass the caller\'s product words (e.g. "steak", "salmon darnes", "McVitie\'s biscuits") — never generic "weekly offers". Quote only what this tool returns. If it asks you to clarify first — counter vs pre-pack (butcher, fish, deli), or which type/brand when several match — ask ONE short question and do NOT say nothing is on offer.',
+      'Look up SuperValu products — stock, regular price, and synced weekly offers. Use for do you stock / how much / on offer / this week / on special. Pass the caller\'s product words (e.g. "steak", "salmon darnes", "McVitie\'s biscuits") — never generic "weekly offers". If the tool asks you to clarify counter vs pre-pack at butcher, fish, or deli, ask ONE short question and wait — do NOT quote prices or products until they choose; then call again with fulfilment "counter" or "prepack". Quote only what this tool returns.',
     parameters: z.object({
       query: z
         .string()
@@ -825,8 +825,14 @@ export class CaraTools {
         .describe(
           'offer = on offer/this week/special; price = how much/cost; stock = do you stock/carry',
         ),
+      fulfilment: z
+        .enum(['counter', 'prepack'])
+        .optional()
+        .describe(
+          'Only after the caller chose fresh counter (per kilo) vs pre-pack aisle — never guess from their wording alone',
+        ),
     }),
-    execute: async ({ query, intent: explicitIntent }, { ctx }) => {
+    execute: async ({ query, intent: explicitIntent, fulfilment }, { ctx }) => {
       const ud = readCaraUserData(ctx);
       if (!voiceWebhooksConfigured()) {
         return {
@@ -850,6 +856,7 @@ export class CaraTools {
         called_number: ud.calledNumber,
         query: trimmed,
         intent: resolvedIntent,
+        fulfilment,
       };
       const result = await postSearchSupervaluProducts(payload);
 
@@ -875,17 +882,9 @@ export class CaraTools {
       }
 
       if (result.clarificationHint) {
-        const exampleLabels = result.matches
-          .slice(0, 4)
-          .map((match) => match.product_name?.trim() || match.quote_text?.trim())
-          .filter(Boolean)
-          .join('; ');
-        const prefix = exampleLabels
-          ? `Matching products were found (e.g. ${exampleLabels}). Do NOT say nothing is on offer or not on the list. `
-          : '';
         return {
           ok: true,
-          message: `${prefix}${result.clarificationHint}`,
+          message: `${result.clarificationHint} Do NOT quote any prices or product names in this turn.`,
           matches: result.matches,
         };
       }
