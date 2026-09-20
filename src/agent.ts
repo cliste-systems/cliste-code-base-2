@@ -326,6 +326,44 @@ function mergeTranscriptLines(parts: TranscriptLine[]): string | null {
 
 type RoutingHint = { slug?: string; phone?: string };
 
+function parseMetadataCallerNumber(metadata: string): string | undefined {
+  if (!metadata.trim()) return undefined;
+  try {
+    const p = JSON.parse(metadata) as Record<string, unknown>;
+    const raw = p.caller_number ?? p.callerNumber;
+    const caller = typeof raw === 'string' ? raw.trim() : undefined;
+    return caller || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isSipCallerParticipant(participant: RemoteParticipant): boolean {
+  const id = (participant.identity ?? '').trim();
+  if (id.toLowerCase().startsWith('sip_')) return true;
+  const attrs = participant.attributes ?? {};
+  return Boolean(
+    attrs['sip.phoneNumber']?.trim() ||
+      attrs['sip.trunkPhoneNumber']?.trim() ||
+      attrs['sip.trunk_phone_number']?.trim(),
+  );
+}
+
+function resolveCallerNumber(
+  job: JobContext['job'],
+  participant: RemoteParticipant,
+): string {
+  const fromParticipant = callerNumberFromParticipant(participant);
+  if (isSipCallerParticipant(participant)) {
+    return fromParticipant;
+  }
+  const jobCaller = parseMetadataCallerNumber(job.metadata ?? '');
+  const roomCaller = job.room?.metadata
+    ? parseMetadataCallerNumber(job.room.metadata)
+    : undefined;
+  return jobCaller ?? roomCaller ?? fromParticipant;
+}
+
 function parseMetadataRouting(metadata: string): RoutingHint {
   if (!metadata.trim()) return {};
   try {
@@ -471,7 +509,7 @@ export default defineAgent({
       return;
     }
 
-    const callerNumberRaw = callerNumberFromParticipant(participant);
+    const callerNumberRaw = resolveCallerNumber(ctx.job, participant);
     const callerE164 = callerE164ForBlocklist(callerNumberRaw);
     const calledNumber =
       resolveCalledNumber(routing.phone, org.phone_number) ||
