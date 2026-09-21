@@ -1052,10 +1052,14 @@ export class CaraTools {
       const freshnessNote = result.offersFreshness?.trim()
         ? `${result.offersFreshness.trim()}\n\n`
         : '';
+      const promotionScopeNote =
+        result.promotionQuery && result.promotionScopeNote?.trim()
+          ? `${result.promotionScopeNote.trim()}\n\n`
+          : '';
 
       return {
         ok: true,
-        message: `${freshnessNote}${offerPrefix}${alcoholNote ? ' Include the one-time age reminder once in your reply.' : ''}\n\n${formatted}${alcoholNote}`,
+        message: `${freshnessNote}${promotionScopeNote}${offerPrefix}${alcoholNote ? ' Include the one-time age reminder once in your reply.' : ''}\n\n${formatted}${alcoholNote}`,
         matches: selectedMatches,
       };
     },
