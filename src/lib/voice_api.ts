@@ -413,6 +413,7 @@ export async function postSearchSupervaluProducts(
   clarificationHint?: string | null;
   clarificationKind?: 'fulfilment' | 'refinement' | null;
   offersFreshness?: string | null;
+  promotionQuery?: boolean;
   error?: string;
 }> {
   if (!voiceWebhooksConfigured()) {
@@ -428,6 +429,7 @@ export async function postSearchSupervaluProducts(
       clarification_hint?: string | null;
       clarification_kind?: 'fulfilment' | 'refinement' | null;
       offers_freshness?: string | null;
+      promotion_query?: boolean;
       error?: string;
     }>('/api/voice/search-supervalu-products', payload);
 
@@ -452,6 +454,7 @@ export async function postSearchSupervaluProducts(
           : null,
       offersFreshness:
         typeof body.offers_freshness === 'string' ? body.offers_freshness : null,
+      promotionQuery: body.promotion_query === true,
     };
   } catch (err) {
     return { ok: false, matches: [], error: webhookFetchError(err) };
