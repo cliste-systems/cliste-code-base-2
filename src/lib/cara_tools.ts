@@ -824,14 +824,14 @@ export class CaraTools {
 
   readonly searchSuperValuProducts = llm.tool({
     description:
-      'Look up SuperValu products — stock, regular price, and synced weekly offers. Use for do you stock / how much / on offer / this week / on special. Pass the caller\'s own product/category words. For a broad offer request, the tool may confirm matching offers exist and require ONE short refinement question before any products or prices are quoted; ask it naturally, wait for the caller, then search again with their refinement. This applies to every department, not a hardcoded category. If the caller clearly names a counter/aisle type, pass fulfilment immediately. If the tool asks counter vs pre-pack at butcher, fish, or deli, ask ONE short question and wait. When the tool returns any clarification, NEVER quote a product or price in that turn. Quote only what this tool returns.',
+      'Look up SuperValu products AND promotions. Use for stock, regular price, weekly offers, promotion mechanics and named promotions: e.g. "3 for €10 fruit and veg", "Real Rewards cereal offers", "half price shampoo", "save 20% household", "mix & match", or "Super 7". For promotion questions, pass the caller\'s FULL promotion wording — do not reduce it to a product word or generic "weekly offers". The backend interprets promotion mechanics generically and only returns current promotion data it can verify. For ordinary product/category questions, pass the caller\'s own product/category words. If the tool asks for a refinement or counter vs pre-pack, ask ONE short question and wait. When it returns any clarification, NEVER quote a product or price in that turn. Quote only what this tool returns.',
     parameters: z.object({
       query: z
         .string()
         .min(2)
         .max(120)
         .describe(
-          'Caller\'s product words — e.g. "steak", "salmon darnes", "Skyr yogurt", "meat counter ham"',
+          'Use the caller\'s exact product/category OR promotion wording — e.g. "steak", "3 for €10 fruit and veg", "Real Rewards cereal", "half price shampoo", "mix and match".',
         ),
       intent: z
         .enum(['offer', 'price', 'stock'])
@@ -914,7 +914,8 @@ export class CaraTools {
         result.ok &&
         result.matches.length === 0 &&
         !result.clarificationHint &&
-        !result.noMatchQuote
+        !result.noMatchQuote &&
+        !result.promotionQuery
       ) {
         const fallbackQueries = buildProductFallbackQueries(lookupQuery).filter(
           (candidate) => candidate.toLowerCase() !== lookupQuery.toLowerCase(),
@@ -1043,16 +1044,22 @@ export class CaraTools {
 
       const offerPrefix =
         resolvedIntent === 'offer'
-          ? 'Use only these synced offer quotes. Lead with the saving, then the offer price, then the usual price — one short sentence each, spoken clearly with a pause between them. Do not mention payment on the phone. Never quote offers from memory.'
+          ? result.promotionQuery
+            ? 'This is a verified promotion-mechanic lookup. Answer the exact promotion the caller asked about. Keep bundle mechanics intact: for example, say "three for ten euro" as the deal — never turn the bundle total into a fake per-item offer price. If several returned products share the same deal, say the deal once and list the matching products naturally. Never add products, campaign names, prices, or eligibility rules that are not in these results.'
+            : 'Use only these synced offer quotes. Lead with the saving, then the offer price, then the usual price — one short sentence each, spoken clearly with a pause between them. Do not mention payment on the phone. Never quote offers from memory.'
           : 'Use this guidance — speak prices in natural Irish words exactly as given, in your own words. Never quote offers from memory.';
 
       const freshnessNote = result.offersFreshness?.trim()
         ? `${result.offersFreshness.trim()}\n\n`
         : '';
+      const promotionScopeNote =
+        result.promotionQuery && result.promotionScopeNote?.trim()
+          ? `${result.promotionScopeNote.trim()}\n\n`
+          : '';
 
       return {
         ok: true,
-        message: `${freshnessNote}${offerPrefix}${alcoholNote ? ' Include the one-time age reminder once in your reply.' : ''}\n\n${formatted}${alcoholNote}`,
+        message: `${freshnessNote}${promotionScopeNote}${offerPrefix}${alcoholNote ? ' Include the one-time age reminder once in your reply.' : ''}\n\n${formatted}${alcoholNote}`,
         matches: selectedMatches,
       };
     },

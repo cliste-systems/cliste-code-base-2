@@ -42,6 +42,7 @@ const PRONUNCIATION_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
   [/\bSt\.?\s+Patrick'?s?\s+Day\b/gi, "Saint Patrick's Day"],
   [/\bgarages\b/gi, 'gar-idges'],
   [/\bgarage\b/gi, 'gar-idge'],
+  [/\bfillet\b/gi, 'fill-it'],
   [/\bReal Rewards\b/gi, 'Real Re-wards'],
   [/\bRail Rewards\b/gi, 'Real Re-wards'],
 ];
