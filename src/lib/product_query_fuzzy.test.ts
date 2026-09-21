@@ -9,6 +9,7 @@ import {
   inferExplicitProductFulfilment,
   inferProductSelectionPreference,
   pickConfidentFuzzyProductMatch,
+  resolveEffectiveProductFulfilment,
 } from './product_query_fuzzy.js';
 
 describe('retail product query fuzzy recovery', () => {
@@ -53,11 +54,32 @@ describe('retail product query fuzzy recovery', () => {
     assert.equal(inferExplicitProductFulfilment('pre-pack fillet steak'), 'prepack');
   });
 
+  it('honors the model fulfilment on the same turn after product wording is normalized', () => {
+    assert.equal(resolveEffectiveProductFulfilment('salmon', 'counter'), 'counter');
+    assert.equal(resolveEffectiveProductFulfilment('sirloin', 'counter'), 'counter');
+    assert.equal(resolveEffectiveProductFulfilment('salmon at the fish counter', 'prepack'), 'counter');
+    assert.equal(resolveEffectiveProductFulfilment('salmon', undefined), undefined);
+  });
+
   it('creates narrow fallback searches without offer boilerplate', () => {
     assert.deepEqual(buildProductFallbackQueries('is there any filled steak on offer?'), [
       'filled',
       'steak',
     ]);
+  });
+
+  it('adds bounded fragments for a single misspelled product token', () => {
+    const fallbacks = buildProductFallbackQueries('avacado');
+    assert.equal(fallbacks[0], 'avacado');
+    assert.ok(fallbacks.includes('cado'));
+  });
+
+  it('scores common avocado spelling slips as confident near matches once candidates are recovered', () => {
+    const score = fuzzyProductMatchScore(
+      'avacado',
+      'SuperValu Signature Tastes Ripe & Ready Avocado (1 Piece)',
+    );
+    assert.ok(score >= 0.78);
   });
 
   it('keeps broad offer context behind the caller refinement', () => {
