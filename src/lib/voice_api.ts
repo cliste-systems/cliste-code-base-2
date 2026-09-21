@@ -396,6 +396,7 @@ export type SearchSupervaluProductsMatch = {
   sku: string | null;
   score: number;
   quote_text: string;
+  current_price_eur?: number | null;
   is_on_offer?: boolean;
   is_alcohol?: boolean;
   service_area?: string | null;
@@ -410,6 +411,7 @@ export async function postSearchSupervaluProducts(
   browseCategories?: string[] | null;
   noMatchQuote?: string | null;
   clarificationHint?: string | null;
+  clarificationKind?: 'fulfilment' | 'refinement' | null;
   offersFreshness?: string | null;
   error?: string;
 }> {
@@ -424,6 +426,7 @@ export async function postSearchSupervaluProducts(
       browse_categories?: string[] | null;
       no_match_quote?: string | null;
       clarification_hint?: string | null;
+      clarification_kind?: 'fulfilment' | 'refinement' | null;
       offers_freshness?: string | null;
       error?: string;
     }>('/api/voice/search-supervalu-products', payload);
@@ -443,6 +446,10 @@ export async function postSearchSupervaluProducts(
       noMatchQuote: body.no_match_quote ?? null,
       clarificationHint:
         typeof body.clarification_hint === 'string' ? body.clarification_hint : null,
+      clarificationKind:
+        body.clarification_kind === 'fulfilment' || body.clarification_kind === 'refinement'
+          ? body.clarification_kind
+          : null,
       offersFreshness:
         typeof body.offers_freshness === 'string' ? body.offers_freshness : null,
     };
