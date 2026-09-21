@@ -303,13 +303,34 @@ async function applyActiveHoursOverride(org: OrgCallConfig): Promise<OrgCallConf
   };
 }
 
+async function fetchOrgById(id: string): Promise<OrgCallConfig | null> {
+  const orgId = id.trim();
+  if (!orgId) return null;
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from('organizations')
+    .select(ORG_SELECT)
+    .eq('id', orgId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data ? mapOrgRow(data as Record<string, unknown>) : null;
+}
+
 async function resolveOrgUncached(input: {
+  organizationId?: string;
   slug?: string;
   phone?: string;
 }): Promise<OrgCallConfig | null> {
+  const organizationId = input.organizationId?.trim();
   const slug = input.slug?.trim();
   const phone = input.phone?.trim();
   let org: OrgCallConfig | null = null;
+
+  if (organizationId) {
+    org = await fetchOrgById(organizationId);
+    if (org) return applyActiveHoursOverride(org);
+  }
 
   if (phone) {
     const byPool = await fetchOrgByPhonePool(phone);
@@ -347,18 +368,25 @@ async function resolveOrgUncached(input: {
 
 /** Resolve org by dialed number first (`phone_numbers.e164`), then slug for dev dispatch. */
 export async function getOrgForCall(input: {
+  organizationId?: string;
   slug?: string;
   phone?: string;
 }): Promise<OrgCallConfig | null> {
-  if (isOfflinePlayground()) {
+  const organizationId = input.organizationId?.trim();
+  const slug = input.slug?.trim();
+  const phone = input.phone?.trim();
+  const hasExplicitRouting = Boolean(organizationId || slug || phone);
+
+  // Playground stub is only for LiveKit Console tests with no dialed number metadata.
+  if (isOfflinePlayground() && !hasExplicitRouting) {
     console.warn('[supabase] CARA_OFFLINE_PLAYGROUND — skipping org lookup');
     return playgroundOrg();
   }
-  const slug = input.slug?.trim();
-  const phone = input.phone?.trim();
-  const cacheKey = `org:${slug ?? ''}:${phone ?? ''}`;
+
+  const cacheKey = `org:${organizationId ?? ''}:${slug ?? ''}:${phone ?? ''}`;
   return cached(cacheKey, ORG_CACHE_TTL_MS, () =>
     resolveOrgUncached({
+      ...(organizationId ? { organizationId } : {}),
       ...(slug ? { slug } : {}),
       ...(phone ? { phone } : {}),
     }),

@@ -102,6 +102,16 @@ import {
   postPipelineIncident,
 } from './lib/pipeline_incident.js';
 import { isEngineerTestCall } from './lib/engineer_test_call.js';
+import {
+  encodeTextRehearsalPacket,
+  isTextRehearsalSession,
+  parseTextRehearsalPacket,
+  parseTextRehearsalToolOutput,
+  TEXT_REHEARSAL_TOPIC,
+  waitForTextRehearsalTurnReply,
+  type TextRehearsalOutboundPacket,
+  type TextRehearsalToolCall,
+} from './lib/text_rehearsal.js';
 import { isTestCall } from './lib/test_call.js';
 import { isFactoryFreshLine } from './lib/factory_fresh_line.js';
 import {
@@ -123,6 +133,7 @@ import {
 import { persistTestCallReportFromWorker } from './lib/persist_test_call_report.js';
 import { reportPlatformEvent } from './lib/platform_event.js';
 import {
+  collectReadableStreamText,
   drainReadableStream,
   emptyTextStream,
   settleInterruptedAgentSpeech,
@@ -190,6 +201,7 @@ import {
 } from './lib/supabase.js';
 import {
   buildTtsNodeInputStream,
+  prepareCartesiaSpeechChunk,
   prepareHardcodedSpeechForTts,
   setActiveTtsModelForSanitizer,
 } from './lib/tts_text_sanitize.js';
@@ -350,7 +362,7 @@ function mergeTranscriptLines(parts: TranscriptLine[]): string | null {
   return text;
 }
 
-type RoutingHint = { slug?: string; phone?: string };
+type RoutingHint = { slug?: string; phone?: string; organizationId?: string };
 
 function parseMetadataCallerNumber(metadata: string): string | undefined {
   if (!metadata.trim()) return undefined;
@@ -396,10 +408,14 @@ function parseMetadataRouting(metadata: string): RoutingHint {
     const p = JSON.parse(metadata) as Record<string, unknown>;
     const slugRaw = p.organization_slug ?? p.slug;
     const slug = typeof slugRaw === 'string' ? slugRaw.trim() : undefined;
+    const orgIdRaw = p.organization_id ?? p.orgId;
+    const organizationId =
+      typeof orgIdRaw === 'string' ? orgIdRaw.trim() : undefined;
     const phoneRaw =
       p.phone_number ?? p.dialedNumber ?? p.trunkPhoneNumber ?? p.trunk_phone_number;
     const phone = typeof phoneRaw === 'string' ? phoneRaw.trim() : undefined;
     const hint: RoutingHint = {};
+    if (organizationId) hint.organizationId = organizationId;
     if (slug) hint.slug = slug;
     if (phone) hint.phone = phone;
     return hint;
@@ -437,6 +453,8 @@ function resolveOrgRouting(job: JobContext['job'], participant: RemoteParticipan
     process.env.DEFAULT_ORG_SLUG?.trim() ??
     undefined;
 
+  const organizationId = jobM.organizationId ?? roomM.organizationId ?? part.organizationId;
+
   const phone =
     part.phone ??
     jobM.phone ??
@@ -445,6 +463,7 @@ function resolveOrgRouting(job: JobContext['job'], participant: RemoteParticipan
     DEFAULT_TEST_PHONE;
 
   const hint: RoutingHint = {};
+  if (organizationId) hint.organizationId = organizationId;
   if (slug) hint.slug = slug;
   hint.phone = phone;
   return hint;
@@ -508,6 +527,7 @@ export default defineAgent({
     const routing = resolveOrgRouting(ctx.job, participant);
 
     const org = await getOrgForCall({
+      ...(routing.organizationId ? { organizationId: routing.organizationId } : {}),
       ...(routing.slug ? { slug: routing.slug } : {}),
       ...(routing.phone ? { phone: routing.phone } : {}),
     });
@@ -782,11 +802,24 @@ export default defineAgent({
       jobMetadata: ctx.job.metadata ?? null,
       roomMetadata: ctx.room.metadata ?? null,
     });
-    const billableCall = !testCall && !engineerTestCall;
+    const textRehearsalMode = isTextRehearsalSession({
+      jobMetadata: ctx.job.metadata ?? null,
+      roomMetadata: ctx.room.metadata ?? null,
+      roomName,
+    });
+    const billableCall = !testCall && !engineerTestCall && !textRehearsalMode;
     if (engineerTestCall) {
       console.info('[agent] engineer_test_call', {
         calledNumber: maskPhone(calledNumber),
         roomName,
+      });
+    }
+    const textRehearsalSkipGreeting = textRehearsalMode;
+    if (textRehearsalMode) {
+      console.info('[agent] text_rehearsal_mode', {
+        roomName,
+        calledNumber: maskPhone(calledNumber),
+        skipGreeting: textRehearsalSkipGreeting,
       });
     }
 
@@ -1167,6 +1200,85 @@ export default defineAgent({
     let replyRetryUsedForTurn = false;
     let generateReplyInFlight = false;
     let generateReplyStartedAt = 0;
+    let pendingTextRehearsalTurnId: string | null = null;
+    let pendingTextRehearsalTools: TextRehearsalToolCall[] = [];
+    let pendingTextRehearsalAssistant = '';
+    let textRehearsalReadySent = false;
+    const rehearsalCallerIdentity = participant.identity;
+
+    const publishTextRehearsalPacket = async (packet: TextRehearsalOutboundPacket) => {
+      const local = ctx.room.localParticipant;
+      if (!local) return;
+      try {
+        await local.publishData(encodeTextRehearsalPacket(packet), {
+          reliable: true,
+          topic: TEXT_REHEARSAL_TOPIC,
+          destination_identities: [rehearsalCallerIdentity],
+        });
+      } catch (error) {
+        console.warn('[agent] text_rehearsal_publish_failed', error);
+      }
+    };
+
+    const sendTextRehearsalReady = async (greeting?: string | null) => {
+      if (!textRehearsalMode || textRehearsalReadySent) return;
+      textRehearsalReadySent = true;
+      await publishTextRehearsalPacket({
+        type: 'session_ready',
+        greeting: greeting?.trim() || null,
+      });
+    };
+
+    const parseRehearsalToolArgs = (raw: unknown): Record<string, unknown> => {
+      if (typeof raw === 'string') {
+        try {
+          return JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+          return {};
+        }
+      }
+      if (raw && typeof raw === 'object') {
+        return raw as Record<string, unknown>;
+      }
+      return {};
+    };
+
+    const handleTextRehearsalCallerTurn = async (text: string, turnId: string) => {
+      if (!textRehearsalMode || isCallEnding()) return;
+      pendingTextRehearsalTurnId = turnId;
+      pendingTextRehearsalTools = [];
+      pendingTextRehearsalAssistant = '';
+      lastAssistantChatText = '';
+      pendingLlmTtsTranscript = '';
+      bumpReplyTurn('text_rehearsal');
+      try {
+        const handle = session.generateReply({
+          userInput: text.trim(),
+          inputModality: 'text',
+        });
+        await waitForTextRehearsalTurnReply({
+          handle,
+          getAssistantText: () => pendingTextRehearsalAssistant.trim(),
+          isAgentListening: () => session.agentState === 'listening',
+          timeoutMs: 90_000,
+        });
+        const assistant = pendingTextRehearsalAssistant.trim();
+        await publishTextRehearsalPacket({
+          type: 'turn_complete',
+          turnId,
+          assistant,
+          tools: pendingTextRehearsalTools,
+        });
+      } catch (error) {
+        await publishTextRehearsalPacket({
+          type: 'error',
+          turnId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        pendingTextRehearsalTurnId = null;
+      }
+    };
     let conversationStarted = false;
     let greetingPlaybackStarted = false;
     let greetingTranscriptLogged = false;
@@ -1960,6 +2072,7 @@ export default defineAgent({
 
     const scheduleResponseFillerForSlowWork = () => {
       clearResponseFillerTimer();
+      if (textRehearsalMode) return;
       if (responseFillerMs <= 0 || shouldSuppressFillers() || isCallEnding()) return;
       if (conversationalRetailLine) return;
       if (session.agentState === 'speaking') return;
@@ -1992,6 +2105,7 @@ export default defineAgent({
     };
 
     const resetDeadAirTimer = () => {
+      if (textRehearsalMode) return;
       if (bareLiveKitRetailLane) return;
       clearDeadAirTimers();
       if (isCallEnding()) return;
@@ -2375,6 +2489,26 @@ export default defineAgent({
       }
 
       if (role === 'assistant') {
+        if (
+          textRehearsalMode &&
+          pendingTextRehearsalTurnId &&
+          !lineMatchesGreeting(text, playbackGreetingText)
+        ) {
+          if (looksLikeLookupFillerSpeech(text)) {
+            void publishTextRehearsalPacket({
+              type: 'lookup_filler',
+              turnId: pendingTextRehearsalTurnId,
+              text,
+            });
+          } else {
+            pendingTextRehearsalAssistant = text;
+            void publishTextRehearsalPacket({
+              type: 'assistant_line',
+              turnId: pendingTextRehearsalTurnId,
+              text,
+            });
+          }
+        }
         if (lineMatchesGreeting(text, playbackGreetingText) && greetingTranscriptLogged) {
           return;
         }
@@ -2391,6 +2525,27 @@ export default defineAgent({
     session.on(voice.AgentSessionEventTypes.FunctionToolsExecuted, (ev) => {
       resetDeadAirTimer();
       for (const [call, out] of voice.zipFunctionCallsAndOutputs(ev)) {
+        if (textRehearsalMode && pendingTextRehearsalTurnId) {
+          const args = parseRehearsalToolArgs((call as { args?: unknown }).args);
+          const tool: TextRehearsalToolCall = { name: call.name, args };
+          pendingTextRehearsalTools.push(tool);
+          void publishTextRehearsalPacket({
+            type: 'tool_call',
+            turnId: pendingTextRehearsalTurnId,
+            name: call.name,
+            args,
+          });
+          if (out) {
+            const result = parseTextRehearsalToolOutput(out);
+            void publishTextRehearsalPacket({
+              type: 'tool_result',
+              turnId: pendingTextRehearsalTurnId,
+              name: call.name,
+              ok: result.ok,
+              message: result.message,
+            });
+          }
+        }
         if (call.name === 'endPhoneCall') {
           session.userData.sessionFlags.closingCall = true;
           clearAllGuardTimers();
@@ -2976,6 +3131,19 @@ export default defineAgent({
         const preparedSpeechNext =
           this.session.userData.preparedSpeechSingleUtteranceNext === true;
         const singleUtterance = this.singleUtteranceTtsNext || preparedSpeechNext;
+        if (textRehearsalMode) {
+          this.singleUtteranceTtsNext = false;
+          this.session.userData.preparedSpeechSingleUtteranceNext = false;
+          const spoken = (await collectReadableStreamText(text)).trim();
+          if (spoken.length > 3) {
+            lastAssistantChatText = spoken;
+            pendingLlmTtsTranscript = spoken;
+            if (pendingTextRehearsalTurnId) {
+              pendingTextRehearsalAssistant = spoken;
+            }
+          }
+          return voice.Agent.default.ttsNode(this, emptyTextStream(), modelSettings);
+        }
         if (
           shouldDropLlmTtsWhileClosing({
             closingCall: this.session.userData.sessionFlags.closingCall === true,
@@ -3020,6 +3188,33 @@ export default defineAgent({
 
     await session.start({ agent, room: ctx.room });
     const callerIdentity = participant.identity;
+    if (textRehearsalMode) {
+      ctx.room.on(RoomEvent.DataReceived, (payload, from, _kind, topic) => {
+        if (topic !== TEXT_REHEARSAL_TOPIC) return;
+        if (!from || from.identity !== rehearsalCallerIdentity) return;
+        const packet = parseTextRehearsalPacket(payload);
+        if (!packet || !('type' in packet)) return;
+        if (packet.type === 'ping') {
+          void publishTextRehearsalPacket({ type: 'pong', turnId: packet.turnId });
+          // Client may connect after the first session_ready — answer pings until they catch up.
+          void publishTextRehearsalPacket({ type: 'session_ready', greeting: null });
+          return;
+        }
+        if (packet.type === 'end_session') {
+          gracefulDisconnect();
+          return;
+        }
+        if (packet.type === 'caller_turn') {
+          void handleTextRehearsalCallerTurn(packet.text, packet.turnId);
+        }
+      });
+      if (textRehearsalSkipGreeting) {
+        conversationStarted = true;
+        session.userData.sessionFlags.retailOpeningComplete = conversationalRetailLine;
+      }
+      // Unlock the UI immediately — no spoken greeting in text rehearsal.
+      void sendTextRehearsalReady(null);
+    }
     ctx.room.on(RoomEvent.ParticipantDisconnected, (left) => {
       if (left.identity !== callerIdentity) return;
       void stopActiveCallRecording(session.userData, 'caller_participant_disconnected');
@@ -3100,7 +3295,7 @@ export default defineAgent({
       }
     };
 
-    if (playbackGreetingText) {
+    if (playbackGreetingText && !textRehearsalSkipGreeting) {
       const openingPauseMs = conversationalRetailLine
         ? RETAIL_LINE_OPENING_PAUSE_MS
         : testCall
@@ -3154,9 +3349,12 @@ export default defineAgent({
           if (!msg.includes('not running')) {
             console.error('[agent] live greeting play failed', e);
           }
+          if (textRehearsalMode && !textRehearsalReadySent) {
+            void sendTextRehearsalReady(playbackGreetingText.trim() || null);
+          }
         }
       }
-    } else {
+    } else if (!textRehearsalSkipGreeting) {
       conversationStarted = true;
       const openInstructions = callPersona
         ? `The caller just connected. Open with ONE short greeting: "${callPersona.greeting}". Include the AI and call-recording notice exactly as specified in your instructions. Max 35 words.`

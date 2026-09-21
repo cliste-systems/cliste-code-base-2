@@ -1,0 +1,37 @@
+- name: meat_counter_offers_vague
+  turns:
+    - "what's on offer at the meat counter this week?"
+  expect:
+    clarification: true
+    must_not_quote_prices: true
+
+- name: meat_counter_after_clarify
+  turns:
+    - "what's on offer at the meat counter this week?"
+    - "the fresh counter"
+  expect:
+    fulfilment: counter
+    must_mention:
+      - "per kilo"
+
+- name: steak_offers_vague
+  turns:
+    - "what steaks are on offer this week"
+  expect:
+    clarification: true
+    must_not_quote_prices: true
+
+- name: steak_offers_counter
+  turns:
+    - "what steaks are on offer this week"
+    - "fresh at the butcher counter"
+  expect:
+    fulfilment: counter
+    must_not_contain:
+      - "Denny"
+
+- name: prepack_rashers_explicit
+  turns:
+    - "any pre-pack rashers on special this week?"
+  expect:
+    must_not_quote_prices: false

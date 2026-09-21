@@ -22,6 +22,7 @@
     "gdpr:purge-transcripts": "tsx scripts/gdpr-purge-transcripts.ts",
     "download-files": "tsx src/agent.ts download-files || echo '[download-files] failed — agent will fall back to VAD for turn detection'",
     "preview:persona": "tsx scripts/preview-persona.ts",
+    "text-rehearsal": "tsx scripts/text-rehearsal.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/lib/**/*.test.ts",
     "test:demo-golden": "tsx --test src/lib/demo_conversational.test.ts src/lib/demo_personality.test.ts",
@@ -49,6 +50,7 @@
     "tsx": "^4.21.0",
     "twilio": "^6.0.2",
     "ws": "^8.21.0",
+    "yaml": "^2.9.0",
     "zod": "^4.3.6"
   }
 }

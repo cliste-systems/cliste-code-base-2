@@ -66,6 +66,21 @@ export async function drainReadableStream(stream: ReadableStream<string>): Promi
   }
 }
 
+export async function collectReadableStreamText(stream: ReadableStream<string>): Promise<string> {
+  const reader = stream.getReader();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) buffer += value;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return buffer;
+}
+
 type SpeechHandle = {
   done(): boolean;
   addDoneCallback: (cb: (sh: unknown) => void) => void;
