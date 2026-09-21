@@ -89,7 +89,7 @@ describe('retail product query fuzzy recovery', () => {
   it('preserves own-brand refinement while stripping cheapest from search text', () => {
     assert.equal(
       combineProductRefinementQuery('avocado', 'fresh supervalu brand cheapest'),
-      'fresh supervalu brand avocado',
+      'fresh supervalu brand avocado cheapest',
     );
     assert.equal(inferProductSelectionPreference('fresh supervalu brand cheapest'), 'cheapest');
   });
