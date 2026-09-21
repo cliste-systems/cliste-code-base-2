@@ -34,6 +34,17 @@ When someone asks how long a service takes`;
     assert.ok(terms.includes('SuperValu'));
   });
 
+  it('includes common butcher cuts so Irish STT does not invent nearby phrases', () => {
+    const terms = buildSttKeyterms({
+      orgName: "Kavanaghs SuperValu Donegal Town",
+      niche: 'retail',
+    });
+    assert.ok(terms.includes('fillet steak'));
+    assert.ok(terms.includes('sirloin'));
+    assert.ok(terms.includes('striploin'));
+    assert.ok(terms.includes('ribeye steak'));
+  });
+
   it('builds retail domain prompt', () => {
     const p = buildSttDomainPrompt("Murphy's SuperValu Killarney", { niche: 'retail' });
     assert.match(p, /retail grocery store/i);
