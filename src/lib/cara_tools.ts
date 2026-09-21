@@ -894,7 +894,7 @@ export class CaraTools {
           ok: true,
           message:
             result.noMatchQuote ??
-            'No matching product found on the SuperValu range — do not claim we never stock it or that SuperValu does not make it. Say it is not on the national list you checked; call this tool again with simpler product words (e.g. "SuperValu egg noodles" not "SuperValu own brand dried egg noodles").',
+            'No matching product found in the catalogue. Do not claim the store does not stock it and do not guess. Say you cannot confirm that product from the catalogue you checked and offer to get a team member to ring back to confirm availability. If the caller wants that, collect the product description and their first name for the post-call callback.',
           matches: [],
         };
       }
