@@ -36,6 +36,11 @@ import {
   type CatalogSearchIntent,
 } from './catalog_search_intent.js';
 import { normalizePhoneE164 } from './phone_normalize.js';
+import {
+  buildProductFallbackQueries,
+  inferExplicitProductFulfilment,
+  pickConfidentFuzzyProductMatch,
+} from './product_query_fuzzy.js';
 import { sendTwilioSms, twilioSmsConfigured, caraSmsDryRunEnabled } from './twilio_sms.js';
 import {
   postSendCallerEmail,
@@ -45,6 +50,7 @@ import {
   voiceWebhooksConfigured,
   type SearchBusinessFilePayload,
   type SearchSupervaluProductsPayload,
+  type SearchSupervaluProductsMatch,
 } from './voice_api.js';
 
 const SMS_FAILURE_MESSAGE =
@@ -96,6 +102,10 @@ export type CaraSessionFlags = {
   callerAskedAboutOffers?: boolean;
   /** One-time alcohol age reminder already given this call. */
   alcoholAgeDisclaimerGiven?: boolean;
+  /** Tool asked the caller to choose counter vs pre-pack; allows that one follow-up choice. */
+  pendingProductFulfilmentClarification?: boolean;
+  /** Product words that triggered the pending counter/pre-pack clarification. */
+  pendingProductLookupQuery?: string | null;
 };
 
 export type CaraAgentUserData = {
@@ -784,6 +794,9 @@ export class CaraTools {
         };
       }
 
+      ud.sessionFlags.pendingProductFulfilmentClarification = false;
+      ud.sessionFlags.pendingProductLookupQuery = null;
+
       if (result.matches.length === 0) {
         return {
           ok: true,
@@ -843,8 +856,21 @@ export class CaraTools {
       }
 
       const trimmed = query.trim();
+      const pendingFulfilmentClarification =
+        ud.sessionFlags.pendingProductFulfilmentClarification === true;
+      const pendingProductQuery = ud.sessionFlags.pendingProductLookupQuery?.trim() || null;
+      const callerOnlyChoseFulfilment =
+        pendingFulfilmentClarification &&
+        /^(?:the\s+)?(?:counter|butcher|meat counter|pre\s*-?\s*pack|packaged|aisle)$/i.test(trimmed);
+      const lookupQuery =
+        callerOnlyChoseFulfilment && pendingProductQuery ? pendingProductQuery : trimmed;
+      const queryFulfilment = inferExplicitProductFulfilment(trimmed);
+      const effectiveFulfilment =
+        queryFulfilment ??
+        (pendingFulfilmentClarification ? fulfilment : undefined);
+
       const resolvedIntent = resolveCatalogSearchIntent({
-        query: trimmed,
+        query: lookupQuery,
         explicitIntent: explicitIntent as CatalogSearchIntent | undefined,
         callerAskedAboutOffers: ud.sessionFlags.callerAskedAboutOffers,
       });
@@ -854,11 +880,72 @@ export class CaraTools {
 
       const payload: SearchSupervaluProductsPayload = {
         called_number: ud.calledNumber,
-        query: trimmed,
+        query: lookupQuery,
         intent: resolvedIntent,
-        fulfilment,
+        ...(effectiveFulfilment ? { fulfilment: effectiveFulfilment } : {}),
       };
-      const result = await postSearchSupervaluProducts(payload);
+      let result = await postSearchSupervaluProducts(payload);
+
+      console.info('[cara_tools] product lookup', {
+        query: lookupQuery,
+        transcriptQuery: trimmed,
+        intent: resolvedIntent,
+        modelFulfilment: fulfilment ?? null,
+        effectiveFulfilment: effectiveFulfilment ?? null,
+        matchCount: result.matches.length,
+        clarification: Boolean(result.clarificationHint),
+        topMatches: result.matches.slice(0, 3).map((match) => match.product_name),
+      });
+
+      if (result.ok && result.matches.length === 0 && !result.clarificationHint) {
+        const fallbackQueries = buildProductFallbackQueries(lookupQuery).filter(
+          (candidate) => candidate.toLowerCase() !== lookupQuery.toLowerCase(),
+        );
+        const recoveredMatches: SearchSupervaluProductsMatch[] = [];
+        let firstUsefulRetry: typeof result | null = null;
+
+        for (const fallbackQuery of fallbackQueries) {
+          const retryPayload: SearchSupervaluProductsPayload = {
+            called_number: ud.calledNumber,
+            query: fallbackQuery,
+            intent: resolvedIntent,
+            ...(effectiveFulfilment ? { fulfilment: effectiveFulfilment } : {}),
+          };
+          const retry = await postSearchSupervaluProducts(retryPayload);
+          if (!retry.ok) continue;
+          if (!firstUsefulRetry && (retry.matches.length > 0 || retry.clarificationHint)) {
+            firstUsefulRetry = retry;
+          }
+          for (const match of retry.matches) {
+            if (!recoveredMatches.some((existing) => existing.sku === match.sku && existing.product_name === match.product_name)) {
+              recoveredMatches.push(match);
+            }
+          }
+        }
+
+        const confident = pickConfidentFuzzyProductMatch(lookupQuery, recoveredMatches);
+        if (confident) {
+          result = {
+            ...(firstUsefulRetry ?? result),
+            ok: true,
+            matches: [confident],
+            clarificationHint: null,
+            noMatchQuote: null,
+          };
+          console.info('[cara_tools] product lookup fuzzy recovery', {
+            query: lookupQuery,
+            recoveredProduct: confident.product_name,
+            recoveredSku: confident.sku,
+          });
+        } else if (firstUsefulRetry) {
+          result = firstUsefulRetry;
+          console.info('[cara_tools] product lookup broad recovery', {
+            query: lookupQuery,
+            matchCount: result.matches.length,
+            clarification: Boolean(result.clarificationHint),
+          });
+        }
+      }
 
       if (!result.ok) {
         const err = result.error ?? 'unknown error';
@@ -882,6 +969,10 @@ export class CaraTools {
       }
 
       if (result.clarificationHint) {
+        const asksFulfilment =
+          /counter/i.test(result.clarificationHint) && /pre-pack|prepack/i.test(result.clarificationHint);
+        ud.sessionFlags.pendingProductFulfilmentClarification = asksFulfilment;
+        ud.sessionFlags.pendingProductLookupQuery = asksFulfilment ? lookupQuery : null;
         return {
           ok: true,
           message: `${result.clarificationHint} Do NOT quote any prices or product names in this turn.`,

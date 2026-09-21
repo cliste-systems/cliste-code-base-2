@@ -904,6 +904,8 @@ export default defineAgent({
         awaitingRetailCallerName: false,
         pendingCallbackSummary: null,
         retailCallerName: null,
+        pendingProductFulfilmentClarification: false,
+        pendingProductLookupQuery: null,
       },
       disclosureConfirmed: false,
       demoLine: testCall,
