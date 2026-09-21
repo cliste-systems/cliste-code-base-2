@@ -817,7 +817,7 @@ export class CaraTools {
       return {
         ok: true,
         message: `Use only these excerpts to answer — do not read unrelated lines aloud:\n\n${formatted}`,
-        matches: selectedMatches,
+        matches: result.matches,
       };
     },
   });
@@ -1053,7 +1053,7 @@ export class CaraTools {
       return {
         ok: true,
         message: `${freshnessNote}${offerPrefix}${alcoholNote ? ' Include the one-time age reminder once in your reply.' : ''}\n\n${formatted}${alcoholNote}`,
-        matches: result.matches,
+        matches: selectedMatches,
       };
     },
   });
