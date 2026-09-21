@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  applyProductSelectionPreference,
   buildProductFallbackQueries,
+  combineProductRefinementQuery,
   fuzzyProductMatchScore,
   inferExplicitProductFulfilment,
+  inferProductSelectionPreference,
   pickConfidentFuzzyProductMatch,
 } from './product_query_fuzzy.js';
 
@@ -56,4 +59,30 @@ describe('retail product query fuzzy recovery', () => {
       'steak',
     ]);
   });
+
+  it('keeps broad offer context behind the caller refinement', () => {
+    assert.equal(combineProductRefinementQuery('alcohol', 'wine'), 'wine alcohol');
+  });
+
+  it('preserves own-brand refinement while stripping cheapest from search text', () => {
+    assert.equal(
+      combineProductRefinementQuery('avocado', 'fresh supervalu brand cheapest'),
+      'fresh supervalu brand avocado',
+    );
+    assert.equal(inferProductSelectionPreference('fresh supervalu brand cheapest'), 'cheapest');
+  });
+
+  it('selects the cheapest priced relevant match generically', () => {
+    const selected = applyProductSelectionPreference(
+      [
+        { product_name: 'Option A', current_price_eur: 2.89 },
+        { product_name: 'Option B', current_price_eur: 0.99 },
+        { product_name: 'Option C', current_price_eur: 1.59 },
+      ],
+      'cheapest',
+    );
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0]?.product_name, 'Option B');
+  });
+
 });
