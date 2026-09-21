@@ -1,15 +1,8 @@
-- name: meat_counter_offers_vague
+- name: meat_counter_offers_explicit
   turns:
     - "what's on offer at the meat counter this week?"
   expect:
-    clarification: true
-    must_not_quote_prices: true
-
-- name: meat_counter_after_clarify
-  turns:
-    - "what's on offer at the meat counter this week?"
-    - "the fresh counter"
-  expect:
+    clarification: false
     fulfilment: counter
     must_mention:
       - "per kilo"

@@ -810,7 +810,7 @@ export class CaraTools {
 
   readonly searchSuperValuProducts = llm.tool({
     description:
-      'Look up SuperValu products — stock, regular price, and synced weekly offers. Use for do you stock / how much / on offer / this week / on special. Pass the caller\'s product words (e.g. "steak", "salmon darnes", "McVitie\'s biscuits") — never generic "weekly offers". If the tool asks you to clarify counter vs pre-pack at butcher, fish, or deli, ask ONE short question and wait — do NOT quote prices or products until they choose; then call again with fulfilment "counter" or "prepack". Quote only what this tool returns.',
+      'Look up SuperValu products — stock, regular price, and synced weekly offers. Use for do you stock / how much / on offer / this week / on special. Pass the caller\'s product words (e.g. "steak", "salmon darnes", "McVitie\'s biscuits") — never generic "weekly offers". If the caller clearly names a counter/aisle type, pass fulfilment immediately. If the tool asks you to clarify counter vs pre-pack at butcher, fish, or deli, ask ONE short question and wait — do NOT quote prices or products until they choose; then call again with fulfilment "counter" or "prepack". Quote only what this tool returns.',
     parameters: z.object({
       query: z
         .string()
@@ -829,7 +829,7 @@ export class CaraTools {
         .enum(['counter', 'prepack'])
         .optional()
         .describe(
-          'Only after the caller chose fresh counter (per kilo) vs pre-pack aisle — never guess from their wording alone',
+          'Set counter when the caller clearly says meat/butcher/deli/fish counter, per kilo, by weight, or loose; set prepack when they clearly say pre-pack, packaged, meat/fish/chilled aisle. Leave unset only when genuinely ambiguous.',
         ),
     }),
     execute: async ({ query, intent: explicitIntent, fulfilment }, { ctx }) => {
