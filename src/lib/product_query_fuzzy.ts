@@ -4,7 +4,8 @@ const QUERY_NOISE = new Set([
   'a','an','the','and','or','for','to','of','in','on','at','is','it','are','do','you','we','i',
   'any','some','there','this','that','week','today','offer','offers','offered','special','specials',
   'deal','deals','promo','promos','promotion','promotions','price','prices','stock','please','just',
-  'wondering','have','got','with','from','now','currently','sale',
+  'wondering','have','got','with','from','now','currently','sale','cheapest','lowest','least',
+  'expensive','value','budget',
 ]);
 
 function normalizeToken(value: string): string {
@@ -59,6 +60,50 @@ export function productQueryTokens(query: string): string[] {
       .map((token) => token.trim())
       .filter((token) => token.length > 1 && !QUERY_NOISE.has(token)),
   )];
+}
+
+
+export type ProductSelectionPreference = 'cheapest' | null;
+
+export function inferProductSelectionPreference(query: string): ProductSelectionPreference {
+  return /\b(?:cheapest|lowest\s+price|least\s+expensive|best\s+value|budget)\b/i.test(query)
+    ? 'cheapest'
+    : null;
+}
+
+export function stripProductSelectionPreference(query: string): string {
+  return query
+    .replace(/\b(?:cheapest|lowest\s+price|least\s+expensive|best\s+value|budget)\b/gi, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/**
+ * Keep the caller's new refinement first so search fallbacks prefer the thing
+ * they just said, while retaining the broad parent context behind it.
+ */
+export function combineProductRefinementQuery(baseQuery: string, refinement: string): string {
+  const refined = stripProductSelectionPreference(refinement);
+  const base = stripProductSelectionPreference(baseQuery);
+  return [refined, base].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
+}
+
+export function applyProductSelectionPreference<
+  T extends { current_price_eur?: number | null },
+>(
+  matches: T[],
+  preference: ProductSelectionPreference,
+): T[] {
+  if (preference !== 'cheapest' || matches.length <= 1) return matches;
+  const priced = matches
+    .map((match, index) => ({
+      match,
+      index,
+      price: Number(match.current_price_eur),
+    }))
+    .filter((entry) => Number.isFinite(entry.price) && entry.price > 0)
+    .sort((a, b) => a.price - b.price || a.index - b.index);
+  return priced.length > 0 ? [priced[0]!.match] : matches;
 }
 
 export function inferExplicitProductFulfilment(
