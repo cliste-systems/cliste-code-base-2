@@ -19,6 +19,12 @@ export function inferCatalogSearchIntent(query: string): CatalogSearchIntent {
   return 'stock';
 }
 
+function hasExplicitStockIntent(query: string): boolean {
+  return /\bdo\s+(?:you|yous|ye)\s+(?:stock|sell|carry|have|do)\b|\bhave\s+(?:you|yous|ye)\s+got\b|\bin\s+stock\b|\b(?:you|yous|ye)\s+don'?t\s+(?:do|stock|sell|carry|have)\b|\b(?:you|yous|ye)\s+do\s+any\b|\bdo\s+(?:you|yous|ye)\s+do\s+any\b/i.test(
+    query,
+  );
+}
+
 export function resolveCatalogSearchIntent(input: {
   query: string;
   explicitIntent?: CatalogSearchIntent;
@@ -27,6 +33,10 @@ export function resolveCatalogSearchIntent(input: {
   if (input.explicitIntent) return input.explicitIntent;
   const fromQuery = inferCatalogSearchIntent(input.query);
   if (fromQuery !== 'stock') return fromQuery;
+
+  // Offer context is useful for bare refinements ("Kelloggs", "the counter"),
+  // but it must not override a new, explicit stock/range question.
+  if (hasExplicitStockIntent(input.query)) return 'stock';
   if (input.callerAskedAboutOffers) return 'offer';
   return undefined;
 }
@@ -117,10 +127,7 @@ export function trackCallerCatalogSearchIntent(
     flags.callerAskedAboutOffers = false;
     return;
   }
-  if (
-    /\b(do you sell|do you stock|do you carry|have you got)\b/i.test(t) &&
-    !/\boffer\b/i.test(t)
-  ) {
+  if (hasExplicitStockIntent(t) && !/\boffer\b/i.test(t)) {
     flags.callerAskedAboutOffers = false;
   }
 }
