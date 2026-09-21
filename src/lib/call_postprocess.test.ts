@@ -3,7 +3,9 @@ import { describe, it } from 'node:test';
 
 import {
   fallbackExtractKnowledgeGapsFromTranscript,
+  filterKnowledgeGapsForRetailDynamicData,
   filterKnowledgeGapsForStructuredHours,
+  isStructuredRetailDynamicKnowledge,
   normalizePostprocessKnowledgeGaps,
   parsePostprocessJsonPayload,
   postprocessCallTranscript,
@@ -29,6 +31,58 @@ describe('normalizePostprocessKnowledgeGaps', () => {
     assert.equal(gaps[0]?.suggested_section, 'services');
   });
 
+});
+
+describe('retail dynamic knowledge gap filtering', () => {
+  it('treats arbitrary offer, price and stock questions as structured data rather than training', () => {
+    for (const text of [
+      'Weekly offers',
+      'Ham discounts',
+      'current promotions',
+      'Cereal offers',
+      "Are there any Kellogg's cereals on offer?",
+      'How much are the Corn Flakes?',
+      'Do you stock oat milk?',
+    ]) {
+      assert.equal(isStructuredRetailDynamicKnowledge(text), true, text);
+    }
+
+    assert.equal(
+      isStructuredRetailDynamicKnowledge('Do you have a coin machine for change?'),
+      false,
+    );
+    assert.equal(
+      isStructuredRetailDynamicKnowledge(
+        'How much notice is needed for a personalised birthday cake?',
+      ),
+      false,
+    );
+  });
+
+  it('drops structured retail data gaps while retaining stable store knowledge', () => {
+    const gaps = filterKnowledgeGapsForRetailDynamicData([
+      {
+        topic: 'Cereal offers',
+        caller_context: "Are there any Kellogg's cereals on offer?",
+      },
+      {
+        topic: 'Coin machine',
+        caller_context: 'Do you have a coin machine for change?',
+      },
+    ]);
+    assert.equal(gaps.length, 1);
+    assert.equal(gaps[0]?.topic, 'Coin machine');
+  });
+
+  it('does not fallback-extract an offer lookup failure as owner training', () => {
+    const gaps = fallbackExtractKnowledgeGapsFromTranscript(
+      [
+        'Caller: Are there any cereals on offer?',
+        "Assistant: I'm not sure, but I can check for you.",
+      ].join('\n'),
+    );
+    assert.equal(gaps.length, 0);
+  });
 });
 
 describe('filterKnowledgeGapsForStructuredHours', () => {

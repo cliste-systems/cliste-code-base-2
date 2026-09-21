@@ -138,6 +138,58 @@ function gapTextLooksLikeStructuredHours(text: string): boolean {
   );
 }
 
+/**
+ * Dynamic retail facts belong to structured/live sources, never permanent
+ * manager-authored training. This is intent-based rather than product-name
+ * based so arbitrary brands, departments and caller phrasings are covered.
+ */
+export function isStructuredRetailDynamicKnowledge(text: string): boolean {
+  const s = String(text ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  if (!s) return false;
+
+  if (
+    /\b(offer|offers|promo|promos|promotion|promotions|special|specials|deal|deals|discount|discounts|sale|sales|reduced|reduction|half[ -]?price|rewards? price|real rewards|weekly (?:offer|offers|deal|deals|special|specials)|on the cheap)\b/.test(
+      s,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /\b(in stock|stock level|stock left|sold out|availability|available today|have any left|do you stock|do ye stock|do you carry|do ye carry)\b/.test(
+      s,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    !/\b(notice|lead time|how far in advance|advance notice)\b/.test(s) &&
+    /\b(how much(?: is| are| does)?|price|prices|cost|costs|priced at|per kg|per kilo)\b/.test(
+      s,
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+export function filterKnowledgeGapsForRetailDynamicData(
+  gaps: PostprocessKnowledgeGap[],
+): PostprocessKnowledgeGap[] {
+  return gaps.filter((gap) => {
+    const evidence = [
+      gap.topic,
+      gap.caller_context ?? '',
+      gap.cara_question ?? '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    return !isStructuredRetailDynamicKnowledge(evidence);
+  });
+}
+
 /** Drop hours/bank-holiday gaps when the org already has structured business_hours. */
 export function filterKnowledgeGapsForStructuredHours(
   gaps: PostprocessKnowledgeGap[],
@@ -190,6 +242,10 @@ export function fallbackExtractKnowledgeGapsFromTranscript(
         assistantText,
       )
     ) {
+      continue;
+    }
+
+    if (isStructuredRetailDynamicKnowledge(callerText)) {
       continue;
     }
 
@@ -301,7 +357,9 @@ Return ONLY valid JSON with keys ${jsonKeys} (no markdown outside JSON).
   - resolved: the caller's question or errand was handled on the call (including simple hours/stock/directions answers with no further staff action).
   - incomplete: no shop errand was stated or completed — pleasantries only, abrupt hang-up, or the conversation never moved past small talk.
   - needs_follow_up: staff must still act (callback, order logged verbally, unresolved complaint, etc.).
-- knowledgeGaps: Array (may be empty). Include an item when the caller asked about a service or topic Cara could not answer from the business menu/instructions, or Cara took a message because something was unlisted or unknown — **even if an Action Inbox ticket was also logged**. Each item: {"topic":"short label","caller_context":"optional staff excerpt","cara_question":"optional owner question","suggested_section":"faq|services|services_not_offered|business_rules"}. Omit payment/health/ID details. Do not emit gaps for opening hours, bank holidays, or St Patrick's Day when structured hours exist — those are handled programmatically. Do not duplicate routine booking/order/callback handoffs. Max 3 items.${postCallActionsBlock}`;
+- knowledgeGaps: Array (may be empty). Include an item only for **stable business knowledge that a manager should manually teach Cara** because it is missing from the business setup (for example a store facility, local policy, service rule, or permanent procedure). Each item: {"topic":"short label","caller_context":"optional staff excerpt","cara_question":"optional owner question","suggested_section":"faq|services|services_not_offered|business_rules"}. Omit payment/health/ID details.
+  - For conversational retail, **NEVER** emit a knowledge gap for data that belongs to a structured/live source: product catalogue/range, product prices, weekly offers, promotions, deals, discounts, Real Rewards, live stock/availability, opening hours, bookings, orders, or routing. If Cara failed to answer one of those, that is a retrieval/system issue — not something the store manager should train manually.
+  - Do not duplicate routine booking/order/callback handoffs. Max 3 items.${postCallActionsBlock}`;
 
   const chatCtx = llm.ChatContext.empty();
   chatCtx.addMessage({
@@ -329,7 +387,11 @@ Return ONLY valid JSON with keys ${jsonKeys} (no markdown outside JSON).
       transcriptReview: stripToolLinesFromTranscript(parsed.transcriptReview.trim()),
       aiSummary: sanitizeOwnerFacingCallSummary(parsed.summary.trim()),
       callResolution: normalizeCallResolution(parsed.callResolution),
-      knowledgeGaps: normalizePostprocessKnowledgeGaps(parsed.knowledgeGaps),
+      knowledgeGaps: input.conversationalRetailLine
+        ? filterKnowledgeGapsForRetailDynamicData(
+            normalizePostprocessKnowledgeGaps(parsed.knowledgeGaps),
+          )
+        : normalizePostprocessKnowledgeGaps(parsed.knowledgeGaps),
       postCallActions,
     };
   }
@@ -413,6 +475,9 @@ export async function postprocessCallTranscript(input: {
         knowledgeGaps,
         input.businessHours,
       );
+      if (input.conversationalRetailLine) {
+        knowledgeGaps = filterKnowledgeGapsForRetailDynamicData(knowledgeGaps);
+      }
       let postCallActions = result.postCallActions;
       if (input.conversationalRetailLine && postCallActions.length === 0) {
         postCallActions = fallbackExtractPostCallActions(verbatim);
@@ -435,7 +500,10 @@ export async function postprocessCallTranscript(input: {
   const fallbackActions = input.conversationalRetailLine
     ? fallbackExtractPostCallActions(verbatim)
     : emptyActions;
-  const fallbackGaps = fallbackExtractKnowledgeGapsFromTranscript(verbatim);
+  let fallbackGaps = fallbackExtractKnowledgeGapsFromTranscript(verbatim);
+  if (input.conversationalRetailLine) {
+    fallbackGaps = filterKnowledgeGapsForRetailDynamicData(fallbackGaps);
+  }
 
   return {
     transcriptReview: verbatim,
