@@ -831,7 +831,7 @@ export class CaraTools {
         .min(2)
         .max(120)
         .describe(
-          'Use the caller\'s exact product/category OR promotion wording — e.g. "steak", "3 for €10 fruit and veg", "Real Rewards cereal", "half price shampoo", "mix and match".',
+          'Use the caller\'s exact product/category OR promotion wording — e.g. "steak", "cheapest SuperValu avocado", "3 for €10 fruit and veg", "Real Rewards cereal", "half price shampoo", "mix and match". Keep selection words such as "cheapest" or "lowest price" in the query.',
         ),
       intent: z
         .enum(['offer', 'price', 'stock'])
