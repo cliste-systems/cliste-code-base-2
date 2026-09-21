@@ -36,8 +36,11 @@ import {
 } from './catalog_search_intent.js';
 import { normalizePhoneE164 } from './phone_normalize.js';
 import {
+  applyProductSelectionPreference,
   buildProductFallbackQueries,
+  combineProductRefinementQuery,
   inferExplicitProductFulfilment,
+  inferProductSelectionPreference,
   productQueryTokens,
   pickConfidentFuzzyProductMatch,
 } from './product_query_fuzzy.js';
@@ -814,14 +817,14 @@ export class CaraTools {
       return {
         ok: true,
         message: `Use only these excerpts to answer — do not read unrelated lines aloud:\n\n${formatted}`,
-        matches: result.matches,
+        matches: selectedMatches,
       };
     },
   });
 
   readonly searchSuperValuProducts = llm.tool({
     description:
-      'Look up SuperValu products — stock, regular price, and synced weekly offers. Use for do you stock / how much / on offer / this week / on special. Pass the caller\'s product words (e.g. "steak", "salmon darnes", "McVitie\'s biscuits") — never generic "weekly offers". If the caller clearly names a counter/aisle type, pass fulfilment immediately. If the tool asks you to clarify counter vs pre-pack at butcher, fish, or deli, ask ONE short question and wait — do NOT quote prices or products until they choose; then call again with fulfilment "counter" or "prepack". Quote only what this tool returns.',
+      'Look up SuperValu products — stock, regular price, and synced weekly offers. Use for do you stock / how much / on offer / this week / on special. Pass the caller\'s own product/category words. For a broad offer request, the tool may confirm matching offers exist and require ONE short refinement question before any products or prices are quoted; ask it naturally, wait for the caller, then search again with their refinement. This applies to every department, not a hardcoded category. If the caller clearly names a counter/aisle type, pass fulfilment immediately. If the tool asks counter vs pre-pack at butcher, fish, or deli, ask ONE short question and wait. When the tool returns any clarification, NEVER quote a product or price in that turn. Quote only what this tool returns.',
     parameters: z.object({
       query: z
         .string()
@@ -866,12 +869,13 @@ export class CaraTools {
         pendingRefinementClarification &&
         pendingProductQuery &&
         productQueryTokens(trimmed).length > 0 &&
-        productQueryTokens(trimmed).length <= 3;
+        productQueryTokens(trimmed).length <= 6;
+      const selectionPreference = inferProductSelectionPreference(trimmed);
       const lookupQuery =
         callerOnlyChoseFulfilment && pendingProductQuery
           ? pendingProductQuery
           : callerProvidedRefinement
-            ? `${pendingProductQuery} ${trimmed}`
+            ? combineProductRefinementQuery(pendingProductQuery, trimmed)
             : trimmed;
       const queryFulfilment = inferExplicitProductFulfilment(trimmed);
       const effectiveFulfilment =
@@ -906,7 +910,12 @@ export class CaraTools {
         topMatches: result.matches.slice(0, 3).map((match) => match.product_name),
       });
 
-      if (result.ok && result.matches.length === 0 && !result.clarificationHint) {
+      if (
+        result.ok &&
+        result.matches.length === 0 &&
+        !result.clarificationHint &&
+        !result.noMatchQuote
+      ) {
         const fallbackQueries = buildProductFallbackQueries(lookupQuery).filter(
           (candidate) => candidate.toLowerCase() !== lookupQuery.toLowerCase(),
         );
@@ -939,6 +948,7 @@ export class CaraTools {
             ok: true,
             matches: [confident],
             clarificationHint: null,
+            clarificationKind: null,
             noMatchQuote: null,
           };
           console.info('[cara_tools] product lookup fuzzy recovery', {
@@ -979,22 +989,32 @@ export class CaraTools {
 
       if (result.clarificationHint) {
         const asksFulfilment =
-          /counter/i.test(result.clarificationHint) && /pre-pack|prepack/i.test(result.clarificationHint);
-        const asksBrandOrType =
-          /types? or brands?|brands? or types?|which type or brand|which brand or type/i.test(
-            result.clarificationHint,
-          );
+          result.clarificationKind === 'fulfilment' ||
+          (/counter/i.test(result.clarificationHint) &&
+            /pre-pack|prepack/i.test(result.clarificationHint));
+        const asksRefinement =
+          result.clarificationKind === 'refinement' ||
+          (!asksFulfilment &&
+            /refin|narrow|types?|brands?|categor/i.test(result.clarificationHint));
+
         ud.sessionFlags.pendingProductFulfilmentClarification = asksFulfilment;
-        ud.sessionFlags.pendingProductRefinementClarification =
-          !asksFulfilment && asksBrandOrType;
+        ud.sessionFlags.pendingProductRefinementClarification = asksRefinement;
         ud.sessionFlags.pendingProductLookupQuery =
-          asksFulfilment || asksBrandOrType ? lookupQuery : null;
+          asksFulfilment || asksRefinement ? lookupQuery : null;
+
         return {
           ok: true,
-          message: `${result.clarificationHint} Do NOT quote any prices or product names in this turn.`,
-          matches: result.matches,
+          message:
+            `${result.clarificationHint} HARD STOP: ask only the clarification question. ` +
+            'Do NOT quote, mention, hint at, or recommend any product name or price in this turn.',
+          matches: [],
         };
       }
+
+      // A successful resolved lookup ends the pending clarification arc.
+      ud.sessionFlags.pendingProductFulfilmentClarification = false;
+      ud.sessionFlags.pendingProductRefinementClarification = false;
+      ud.sessionFlags.pendingProductLookupQuery = null;
 
       if (result.matches.length === 0) {
         return {
@@ -1006,11 +1026,15 @@ export class CaraTools {
         };
       }
 
-      const formatted = result.matches
+      const selectedMatches = applyProductSelectionPreference(
+        result.matches,
+        selectionPreference,
+      );
+      const formatted = selectedMatches
         .map((match) => match.quote_text.trim())
         .join('\n\n');
 
-      const hasAlcohol = result.matches.some((match) => match.is_alcohol === true);
+      const hasAlcohol = selectedMatches.some((match) => match.is_alcohol === true);
       let alcoholNote = '';
       if (hasAlcohol && !ud.sessionFlags.alcoholAgeDisclaimerGiven) {
         ud.sessionFlags.alcoholAgeDisclaimerGiven = true;
