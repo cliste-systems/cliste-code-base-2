@@ -83,9 +83,14 @@ export function stripProductSelectionPreference(query: string): string {
  * they just said, while retaining the broad parent context behind it.
  */
 export function combineProductRefinementQuery(baseQuery: string, refinement: string): string {
+  const preference = inferProductSelectionPreference(refinement);
   const refined = stripProductSelectionPreference(refinement);
   const base = stripProductSelectionPreference(baseQuery);
-  return [refined, base].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
+  return [refined, base, preference === 'cheapest' ? 'cheapest' : '']
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 export function applyProductSelectionPreference<
