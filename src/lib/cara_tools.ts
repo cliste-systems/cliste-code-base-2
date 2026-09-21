@@ -23,7 +23,6 @@ import {
   createBusinessFileSignedUrl,
   type BusinessFileRow,
 } from './supabase.js';
-import { insertActionTicket } from './action_tickets.js';
 import { reportPlatformEvent } from './platform_event.js';
 import { playTypingSound } from './callback_audio.js';
 import { disconnectCallerLeg } from './end_call.js';
@@ -308,30 +307,25 @@ async function createCallbackViaWebhook(
   summary: string,
   options?: { phone?: string; callerName?: string },
 ): Promise<{ ok: boolean; message: string }> {
-  const caller = options?.phone?.trim()
-    ? normalizePhoneE164(options.phone)
-    : ud.callerPhone.trim() || 'unknown';
+  // Action Inbox has been retired. Keep the caller request in the transcript /
+  // post-call summary and mark the call as needing a callback; do not create a
+  // second queue record.
   const name = options?.callerName?.trim() ?? '';
-  const summaryWithName = name
-    ? `Caller: ${name}. ${summary.trim()}`
-    : summary.trim();
-
-  await insertActionTicket({
-    organizationId: ud.organizationId,
-    calledNumber: ud.calledNumber,
-    callerNumber: caller,
-    summary: summaryWithName,
-    engineeringPriority: 'urgent',
-    ...(name ? { callerName: name } : {}),
+  const detail = name ? `Caller: ${name}. ${summary.trim()}` : summary.trim();
+  ud.sessionFlags.callbackRequested = true;
+  ud.sessionFlags.actionTicketCreated = false;
+  console.info('[callback] captured_in_call_summary', {
+    orgId: ud.organizationId,
+    callerName: name || undefined,
+    detailLength: detail.length,
   });
 
-  ud.sessionFlags.actionTicketCreated = true;
   const confirmHint = ud.conversationalRetailLine
-    ? 'Speak NOW in one warm line — confirm what you logged (name, date, cake message). Do not stay silent. No tools this turn.'
+    ? 'Speak NOW in one warm line — confirm what you captured. Do not stay silent. No tools this turn.'
     : 'Confirm what you captured in one warm spoken line, then continue the call naturally.';
   return {
     ok: true,
-    message: `Message logged for the team. ${confirmHint}`,
+    message: `Callback/request captured in this call. ${confirmHint}`,
   };
 }
 

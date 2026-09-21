@@ -44,11 +44,7 @@ import {
   startCallRecording,
   stopActiveCallRecording,
 } from './lib/call_recording.js';
-import {
-  executePostCallActions,
-  postCallActionsExpectTicket,
-  type PostCallAction,
-} from './lib/post_call_actions.js';
+import type { PostCallAction } from './lib/post_call_actions.js';
 import {
   PostCallProcessingTracker,
   withRetry,
@@ -2875,48 +2871,6 @@ export default defineAgent({
           postCallTracker.record('postprocess', 'empty verbatim after close');
         }
 
-        if (postCallActions.length > 0) {
-          postCallTracker.expectedTicket = postCallActionsExpectTicket(postCallActions);
-        }
-
-        if (
-          conversationalRetailLine &&
-          postCallActions.length > 0 &&
-          persistCalledNumber
-        ) {
-          const exec = await executePostCallActions({
-            organizationId: ud.organizationId,
-            calledNumber: persistCalledNumber,
-            callerNumber: callerNumberRaw,
-            callLogId,
-            actions: postCallActions,
-          });
-          postCallTracker.errors.push(...exec.postCallErrors);
-          if (exec.actionTicketCreated) {
-            ud.sessionFlags.actionTicketCreated = true;
-            outcome = 'action_created';
-            if (callLogId) {
-              const patched = await updateCallLogOutcome(callLogId, outcome);
-              if (!patched) {
-                console.error('[agent] call log outcome patch failed', callLogId);
-              }
-            }
-            console.info('[agent] post_call_actions_executed', {
-              callLogId,
-              executed: exec.executed.length,
-              errors: exec.errors.length,
-            });
-          } else if (exec.errors.length > 0) {
-            console.error('[agent] post_call_actions_failed', {
-              callLogId,
-              errors: exec.errors,
-            });
-            for (const err of exec.errors) {
-              postCallTracker.record('action_ticket', err);
-            }
-          }
-        }
-
         const costEstimate = estimateCallCostUsd({
           durationSeconds,
           smsSegmentsSent: ud.sessionFlags.smsSent,
@@ -3032,7 +2986,7 @@ export default defineAgent({
           callLogId &&
           voiceWebhooksConfigured() &&
           persistCalledNumber &&
-          (postCallActions.length > 0 || transcriptReview || aiSummary)
+          (transcriptReview || aiSummary)
         ) {
           const enrichResult = await postCallComplete({
             called_number: persistCalledNumber,
@@ -3046,22 +3000,8 @@ export default defineAgent({
             ai_summary: aiSummary,
             post_call_status: finalPostCallStatus,
             post_call_errors: postCallTracker.errors,
-            post_call_expected_ticket: postCallTracker.expectedTicket,
+            post_call_expected_ticket: false,
             ...(audioStoragePath ? { audio_storage_path: audioStoragePath } : {}),
-            post_call_actions: postCallActions.map((action) =>
-              action.type === 'action_ticket'
-                ? {
-                    type: action.type,
-                    callerName: action.callerName,
-                    summary: action.summary,
-                    ...(action.routeId !== undefined ? { routeId: action.routeId } : {}),
-                  }
-                : {
-                    type: action.type,
-                    callerName: action.callerName,
-                    reason: action.reason,
-                  },
-            ),
           });
           if (!enrichResult.ok) {
             console.warn('[agent] post_call_actions enrichment webhook failed', {
