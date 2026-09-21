@@ -124,6 +124,20 @@ export function inferExplicitProductFulfilment(
   return undefined;
 }
 
+/**
+ * Resolve fulfilment for the current caller turn.
+ * The model's explicit structured argument is authoritative when it has
+ * already interpreted wording such as "fish counter" and normalized the
+ * product query down to "salmon". Never require a previous clarification
+ * before honoring that structured choice.
+ */
+export function resolveEffectiveProductFulfilment(
+  query: string,
+  modelFulfilment?: RetailProductFulfilment,
+): RetailProductFulfilment | undefined {
+  return inferExplicitProductFulfilment(query) ?? modelFulfilment;
+}
+
 export function buildProductFallbackQueries(query: string): string[] {
   const ordered = productQueryTokens(query)
     .sort((a, b) => b.length - a.length)
@@ -135,8 +149,27 @@ export function buildProductFallbackQueries(query: string): string[] {
     if (normalized && normalized !== token && !fallbacks.includes(normalized)) {
       fallbacks.push(normalized);
     }
+
+    // If the exact spelling returned nothing, a few bounded 4-character
+    // fragments can recover candidates for ordinary STT/spelling slips
+    // ("avacado" -> catalogue "avocado"). We still accept a recovered
+    // product only through pickConfidentFuzzyProductMatch below, so a broad
+    // fragment cannot make Cara guess.
+    if (normalized.length >= 7) {
+      const starts = [
+        0,
+        Math.max(0, Math.floor((normalized.length - 4) / 2)),
+        normalized.length - 4,
+      ];
+      for (const start of starts) {
+        const fragment = normalized.slice(start, start + 4);
+        if (fragment.length === 4 && !fallbacks.includes(fragment)) {
+          fallbacks.push(fragment);
+        }
+      }
+    }
   }
-  return fallbacks;
+  return fallbacks.slice(0, 10);
 }
 
 export function fuzzyProductMatchScore(query: string, productName: string): number {
