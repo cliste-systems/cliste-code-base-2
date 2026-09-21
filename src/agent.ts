@@ -946,7 +946,7 @@ export default defineAgent({
     )
       ? Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MIN_MS ?? '', 10)
       : conversationalRetailLine
-        ? 550
+        ? 350
         : useBuilderDemoStack
           ? 250
           : endpointDefaults.minDelayMs;
@@ -955,7 +955,7 @@ export default defineAgent({
     )
       ? Number.parseInt(process.env.LIVEKIT_ENDPOINTING_MAX_MS ?? '', 10)
       : conversationalRetailLine
-        ? 2400
+        ? 1600
         : useBuilderDemoStack
           ? Number.parseInt(process.env.LIVEKIT_TEST_ENDPOINTING_MAX_MS ?? '2000', 10)
           : testCall

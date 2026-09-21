@@ -69,6 +69,21 @@ const STATIC_RETAIL_KEYTERMS = [
   'butcher',
   'customer service',
   'fresh food',
+  'fillet',
+  'fillet steak',
+  'beef fillet',
+  'Hereford fillet steak',
+  'sirloin',
+  'sirloin steak',
+  'striploin',
+  'striploin steak',
+  'ribeye',
+  'ribeye steak',
+  'rump steak',
+  'minute steak',
+  'quick fry steak',
+  'pork steak',
+  'steak mince',
   'ambient',
   'store manager',
   'in stock',
@@ -132,6 +147,8 @@ export function buildSttDomainPrompt(
       `Irish English phone calls to ${name}, a local retail grocery store. ` +
       'Callers ask about opening hours, departments (deli, butcher, customer service, fresh food, ambient), ' +
       'store managers, directions, parking, stock on shelves, complaints, and deliveries. ' +
+      'Meat and butcher enquiries commonly include fillet steak, sirloin, striploin, ribeye, rump steak, pork steak, minute steak, and quick fry steak. ' +
+      'In Irish English the meat cut fillet is pronounced "fill-it", not the American "fill-ay". ' +
       'Common phrases: are you open, are ye open, opening hours, deli counter, customer service, in stock.'
     );
   }
