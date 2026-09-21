@@ -39,6 +39,7 @@ import { normalizePhoneE164 } from './phone_normalize.js';
 import {
   buildProductFallbackQueries,
   inferExplicitProductFulfilment,
+  productQueryTokens,
   pickConfidentFuzzyProductMatch,
 } from './product_query_fuzzy.js';
 import { sendTwilioSms, twilioSmsConfigured, caraSmsDryRunEnabled } from './twilio_sms.js';
@@ -104,8 +105,10 @@ export type CaraSessionFlags = {
   alcoholAgeDisclaimerGiven?: boolean;
   /** Tool asked the caller to choose counter vs pre-pack; allows that one follow-up choice. */
   pendingProductFulfilmentClarification?: boolean;
-  /** Product words that triggered the pending counter/pre-pack clarification. */
+  /** Product words that triggered the pending counter/pre-pack or brand/type clarification. */
   pendingProductLookupQuery?: string | null;
+  /** Tool asked the caller to narrow a broad category by brand/type. */
+  pendingProductRefinementClarification?: boolean;
 };
 
 export type CaraAgentUserData = {
@@ -795,6 +798,7 @@ export class CaraTools {
       }
 
       ud.sessionFlags.pendingProductFulfilmentClarification = false;
+      ud.sessionFlags.pendingProductRefinementClarification = false;
       ud.sessionFlags.pendingProductLookupQuery = null;
 
       if (result.matches.length === 0) {
@@ -858,12 +862,23 @@ export class CaraTools {
       const trimmed = query.trim();
       const pendingFulfilmentClarification =
         ud.sessionFlags.pendingProductFulfilmentClarification === true;
+      const pendingRefinementClarification =
+        ud.sessionFlags.pendingProductRefinementClarification === true;
       const pendingProductQuery = ud.sessionFlags.pendingProductLookupQuery?.trim() || null;
       const callerOnlyChoseFulfilment =
         pendingFulfilmentClarification &&
         /^(?:the\s+)?(?:counter|butcher|meat counter|pre\s*-?\s*pack|packaged|aisle)$/i.test(trimmed);
+      const callerProvidedRefinement =
+        pendingRefinementClarification &&
+        pendingProductQuery &&
+        productQueryTokens(trimmed).length > 0 &&
+        productQueryTokens(trimmed).length <= 3;
       const lookupQuery =
-        callerOnlyChoseFulfilment && pendingProductQuery ? pendingProductQuery : trimmed;
+        callerOnlyChoseFulfilment && pendingProductQuery
+          ? pendingProductQuery
+          : callerProvidedRefinement
+            ? `${pendingProductQuery} ${trimmed}`
+            : trimmed;
       const queryFulfilment = inferExplicitProductFulfilment(trimmed);
       const effectiveFulfilment =
         queryFulfilment ??
@@ -971,8 +986,15 @@ export class CaraTools {
       if (result.clarificationHint) {
         const asksFulfilment =
           /counter/i.test(result.clarificationHint) && /pre-pack|prepack/i.test(result.clarificationHint);
+        const asksBrandOrType =
+          /types? or brands?|brands? or types?|which type or brand|which brand or type/i.test(
+            result.clarificationHint,
+          );
         ud.sessionFlags.pendingProductFulfilmentClarification = asksFulfilment;
-        ud.sessionFlags.pendingProductLookupQuery = asksFulfilment ? lookupQuery : null;
+        ud.sessionFlags.pendingProductRefinementClarification =
+          !asksFulfilment && asksBrandOrType;
+        ud.sessionFlags.pendingProductLookupQuery =
+          asksFulfilment || asksBrandOrType ? lookupQuery : null;
         return {
           ok: true,
           message: `${result.clarificationHint} Do NOT quote any prices or product names in this turn.`,

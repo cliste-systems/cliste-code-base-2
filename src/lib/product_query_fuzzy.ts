@@ -80,9 +80,18 @@ export function inferExplicitProductFulfilment(
 }
 
 export function buildProductFallbackQueries(query: string): string[] {
-  return productQueryTokens(query)
+  const ordered = productQueryTokens(query)
     .sort((a, b) => b.length - a.length)
     .slice(0, 3);
+  const fallbacks: string[] = [];
+  for (const token of ordered) {
+    if (!fallbacks.includes(token)) fallbacks.push(token);
+    const normalized = normalizeToken(token);
+    if (normalized && normalized !== token && !fallbacks.includes(normalized)) {
+      fallbacks.push(normalized);
+    }
+  }
+  return fallbacks;
 }
 
 export function fuzzyProductMatchScore(query: string, productName: string): number {

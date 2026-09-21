@@ -9,6 +9,11 @@ import {
 } from './product_query_fuzzy.js';
 
 describe('retail product query fuzzy recovery', () => {
+  it('adds a possessive/plural-safe stem fallback for brand names', () => {
+    assert.deepEqual(buildProductFallbackQueries('Kelloggs'), ['kelloggs', 'kellogg']);
+  });
+
+
   it('treats filled steak as a strong near-match for fillet steak', () => {
     const fillet = fuzzyProductMatchScore(
       'filled steak',
