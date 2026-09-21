@@ -3,7 +3,7 @@ export type CatalogSearchIntent = 'offer' | 'price' | 'stock';
 export function inferCatalogSearchIntent(query: string): CatalogSearchIntent {
   const q = query.toLowerCase();
   if (
-    /\bon offer\b|\bthis week\b|\bspecial\b|\bpromo|\bpromotion|\bdeal\b|\breduced\b|\bany offers\b|\bis it on\b|\bare they on\b|\boffers?\s+this\b/i.test(
+    /\bon offer\b|\bthis week\b|\bspecial\b|\bpromo|\bpromotion|\bdeal\b|\breduced\b|\bany offers\b|\bis it on\b|\bare they on\b|\boffers?\s+this\b|\b(?:buy\s+)?\d+\s+for\s+(?:€\s*)?\d+|\breal\s+rewards?\b|\brewards?\s+price\b|\bhalf\s+price\b|\bsave\s+(?:€\s*)?\d+|\b\d+\s*%\s*off\b|\bmix\s*(?:&|and)\s*match\b|\bsuper\s*7\b/i.test(
       q,
     )
   ) {
@@ -102,7 +102,7 @@ export function trackCallerCatalogSearchIntent(
 ): void {
   const t = text.toLowerCase();
   if (
-    /\b(on offer|this week|any offers?|special|promotion|promo|deal|reduced|is there an offer|are there offers|offer on|weekly offers|what offers|what meat offers|meat offers|list offers|apart from meat)\b/i.test(
+    /\b(on offer|this week|any offers?|special|promotion|promo|deal|reduced|is there an offer|are there offers|offer on|weekly offers|what offers|what meat offers|meat offers|list offers|apart from meat|real rewards?|rewards price|half price|mix and match|super 7)\b|\b(?:buy\s+)?\d+\s+for\s+(?:€\s*)?\d+|\bsave\s+(?:€\s*)?\d+|\b\d+\s*%\s*off\b/i.test(
       t,
     )
   ) {
