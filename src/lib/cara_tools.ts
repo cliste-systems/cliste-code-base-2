@@ -804,10 +804,6 @@ export class CaraTools {
       ud.sessionFlags.pendingProductFulfilmentClarification = false;
       ud.sessionFlags.pendingProductRefinementClarification = false;
       ud.sessionFlags.pendingProductLookupQuery = null;
-
-      ud.sessionFlags.pendingProductFulfilmentClarification = false;
-      ud.sessionFlags.pendingProductRefinementClarification = false;
-      ud.sessionFlags.pendingProductLookupQuery = null;
       ud.sessionFlags.pendingProductSearchState = null;
 
       if (result.matches.length === 0) {
@@ -1041,6 +1037,11 @@ export class CaraTools {
           matches: result.matches,
         };
       }
+
+      ud.sessionFlags.pendingProductFulfilmentClarification = false;
+      ud.sessionFlags.pendingProductRefinementClarification = false;
+      ud.sessionFlags.pendingProductLookupQuery = null;
+      ud.sessionFlags.pendingProductSearchState = null;
 
       if (result.matches.length === 0) {
         return {
