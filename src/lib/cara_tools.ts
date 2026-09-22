@@ -832,14 +832,14 @@ export class CaraTools {
 
   readonly searchSuperValuProducts = llm.tool({
     description:
-      'MANDATORY for every product stock/range, price, or offer claim unless approved store knowledge explicitly answers it. Look up SuperValu products — stock, regular price, and synced weekly offers. Never decide from common sense that a supermarket does or does not sell something: search first, even for unusual requests such as laptops. Pass the caller\'s product words — never generic "weekly offers". When the caller names a department/area, pass service_area immediately; when they name counter vs pre-pack, pass fulfilment immediately. Explicit service_area and fulfilment are hard scope and must not be silently widened. If genuinely ambiguous, ask ONE short clarification and wait. Quote only what this tool returns.',
+      'MANDATORY for every product stock/range, price, or offer claim unless approved store knowledge explicitly answers it. Look up SuperValu products — stock, regular price, and synced weekly offers. Never decide from common sense that a supermarket does or does not sell something: search first, even for unusual requests such as laptops. Rewards/Real Rewards price-point browsing is supported: for questions like "what Rewards offers are €2.50?" call this tool with intent "offer" and preserve both Rewards and the exact amount in query; NEVER say you cannot search offers by price. Pass the caller\'s product words or offer filter — never generic "weekly offers". When the caller names a department/area, pass service_area immediately; when they name counter vs pre-pack, pass fulfilment immediately. Explicit service_area and fulfilment are hard scope and must not be silently widened. If genuinely ambiguous, ask ONE short clarification and wait. Quote only what this tool returns.',
     parameters: z.object({
       query: z
         .string()
         .min(2)
         .max(120)
         .describe(
-          'Caller\'s product words — e.g. "steak", "salmon darnes", "Skyr yogurt", "meat counter ham"',
+          'Caller\'s product words or supported offer filter — e.g. "steak", "salmon darnes", "Skyr yogurt", "meat counter ham", "Rewards 2.50"',
         ),
       intent: z
         .enum(['offer', 'price', 'stock'])
