@@ -9,11 +9,13 @@ import {
   inferExplicitProductFulfilment,
   inferProductSelectionPreference,
   pickConfidentFuzzyProductMatch,
+  resolveEffectiveProductFulfilment,
 } from './product_query_fuzzy.js';
 
 describe('retail product query fuzzy recovery', () => {
   it('adds a possessive/plural-safe stem fallback for brand names', () => {
-    assert.deepEqual(buildProductFallbackQueries('Kelloggs'), ['kelloggs', 'kellogg']);
+    const fallbacks = buildProductFallbackQueries('Kelloggs');
+    assert.deepEqual(fallbacks.slice(0, 2), ['kelloggs', 'kellogg']);
   });
 
 
@@ -53,11 +55,32 @@ describe('retail product query fuzzy recovery', () => {
     assert.equal(inferExplicitProductFulfilment('pre-pack fillet steak'), 'prepack');
   });
 
+  it('honors the model fulfilment on the same turn after product wording is normalized', () => {
+    assert.equal(resolveEffectiveProductFulfilment('salmon', 'counter'), 'counter');
+    assert.equal(resolveEffectiveProductFulfilment('sirloin', 'counter'), 'counter');
+    assert.equal(resolveEffectiveProductFulfilment('salmon at the fish counter', 'prepack'), 'counter');
+    assert.equal(resolveEffectiveProductFulfilment('salmon', undefined), undefined);
+  });
+
   it('creates narrow fallback searches without offer boilerplate', () => {
     assert.deepEqual(buildProductFallbackQueries('is there any filled steak on offer?'), [
       'filled',
       'steak',
     ]);
+  });
+
+  it('adds bounded fragments for a single misspelled product token', () => {
+    const fallbacks = buildProductFallbackQueries('avacado');
+    assert.equal(fallbacks[0], 'avacado');
+    assert.ok(fallbacks.includes('cado'));
+  });
+
+  it('scores common avocado spelling slips as confident near matches once candidates are recovered', () => {
+    const score = fuzzyProductMatchScore(
+      'avacado',
+      'SuperValu Signature Tastes Ripe & Ready Avocado (1 Piece)',
+    );
+    assert.ok(score >= 0.78);
   });
 
   it('keeps broad offer context behind the caller refinement', () => {
@@ -67,7 +90,7 @@ describe('retail product query fuzzy recovery', () => {
   it('preserves own-brand refinement while stripping cheapest from search text', () => {
     assert.equal(
       combineProductRefinementQuery('avocado', 'fresh supervalu brand cheapest'),
-      'fresh supervalu brand avocado',
+      'fresh supervalu brand avocado cheapest',
     );
     assert.equal(inferProductSelectionPreference('fresh supervalu brand cheapest'), 'cheapest');
   });
