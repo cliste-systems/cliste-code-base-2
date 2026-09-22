@@ -1,3 +1,5 @@
+import { inferRewardsPricePoint } from './rewards_price_point.js';
+
 export type CatalogSearchIntent = 'offer' | 'price' | 'stock';
 
 export function inferCatalogSearchIntent(query: string): CatalogSearchIntent {
@@ -103,9 +105,15 @@ export function inferWeeklyOffersBrowseCategories(query: string): string[] {
 
 export function trackCallerCatalogSearchIntent(
   text: string,
-  flags: { callerAskedAboutOffers?: boolean },
+  flags: { callerAskedAboutOffers?: boolean; rewardsPricePoint?: number | null },
 ): void {
   const t = text.toLowerCase();
+  const rewardsPricePoint = inferRewardsPricePoint(text);
+  flags.rewardsPricePoint = rewardsPricePoint;
+  if (rewardsPricePoint != null) {
+    flags.callerAskedAboutOffers = true;
+    return;
+  }
   if (
     /\b(on offer|this week|any offers?|special|promotion|promo|deal|reduced|is there an offer|are there offers|offer on|weekly offers|what offers|what meat offers|meat offers|list offers|apart from meat|rewards? price|real rewards)\b/i.test(
       t,
