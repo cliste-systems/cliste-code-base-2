@@ -16,5 +16,5 @@ jobs:
           cache: npm
       - run: npm install --package-lock-only --ignore-scripts
       - run: npm ci
-      - run: npm test -- --run
+      - run: npm test
       - run: npm run test:demo-golden
