@@ -31,11 +31,16 @@ describe('catalog search intent', () => {
   });
 
   it('tracks offer phrasing on caller turns', () => {
-    const flags: { callerAskedAboutOffers?: boolean } = {};
+    const flags: { callerAskedAboutOffers?: boolean; rewardsPricePoint?: number | null } = {};
     trackCallerCatalogSearchIntent('any offer on biscuits this week', flags);
     assert.equal(flags.callerAskedAboutOffers, true);
+    assert.equal(flags.rewardsPricePoint, null);
+    trackCallerCatalogSearchIntent("what's on Rewards Price for €2.50?", flags);
+    assert.equal(flags.callerAskedAboutOffers, true);
+    assert.equal(flags.rewardsPricePoint, 2.5);
     trackCallerCatalogSearchIntent('how much is the Weetabix', flags);
     assert.equal(flags.callerAskedAboutOffers, false);
+    assert.equal(flags.rewardsPricePoint, null);
   });
 
   it('infers offer intent from query text', () => {

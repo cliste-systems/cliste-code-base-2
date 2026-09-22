@@ -902,6 +902,7 @@ export default defineAgent({
         retailCallerName: null,
         pendingProductFulfilmentClarification: false,
         pendingProductLookupQuery: null,
+        rewardsPricePoint: null,
       },
       disclosureConfirmed: false,
       demoLine: testCall,
