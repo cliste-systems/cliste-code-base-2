@@ -44,6 +44,11 @@ import {
   type RetailProductFulfilment,
   type RetailProductServiceArea,
 } from './product_query_fuzzy.js';
+import {
+  formatSpokenRewardsPrice,
+  inferRewardsPricePoint,
+  searchRewardsPricePointOffersDirect,
+} from './rewards_price_point.js';
 import { sendTwilioSms, twilioSmsConfigured, caraSmsDryRunEnabled } from './twilio_sms.js';
 import {
   postSendCallerEmail,
@@ -103,6 +108,8 @@ export type CaraSessionFlags = {
   retailLastCapturedName?: string | null;
   /** Caller recently asked about weekly offers — steer catalog lookup to promo items. */
   callerAskedAboutOffers?: boolean;
+  /** Exact Rewards/Real Rewards price point from the latest caller turn. */
+  rewardsPricePoint?: number | null;
   /** One-time alcohol age reminder already given this call. */
   alcoholAgeDisclaimerGiven?: boolean;
   /** Tool asked the caller to choose counter vs pre-pack; allows that one follow-up choice. */
@@ -862,15 +869,11 @@ export class CaraTools {
     }),
     execute: async ({ query, intent: explicitIntent, service_area: modelServiceArea, fulfilment }, { ctx }) => {
       const ud = readCaraUserData(ctx);
-      if (!voiceWebhooksConfigured()) {
-        return {
-          ok: false,
-          message:
-            'Product lookup is not available on this call. Do not guess — offer a team callback captured in speech.',
-        };
-      }
-
       const trimmed = query.trim();
+      const rewardsPricePoint =
+        inferRewardsPricePoint(trimmed) ??
+        ud.sessionFlags.rewardsPricePoint ??
+        null;
       const pendingFulfilmentClarification =
         ud.sessionFlags.pendingProductFulfilmentClarification === true;
       const pendingRefinementClarification =
@@ -907,13 +910,16 @@ export class CaraTools {
           ? pendingState?.serviceArea
           : undefined);
 
-      const resolvedIntent = resolveCatalogSearchIntent({
-        query: lookupQuery,
-        ...(explicitIntent ? { explicitIntent: explicitIntent as CatalogSearchIntent } : {}),
-        ...(ud.sessionFlags.callerAskedAboutOffers !== undefined
-          ? { callerAskedAboutOffers: ud.sessionFlags.callerAskedAboutOffers }
-          : {}),
-      });
+      const resolvedIntent: CatalogSearchIntent | undefined =
+        rewardsPricePoint != null
+          ? 'offer'
+          : resolveCatalogSearchIntent({
+              query: lookupQuery,
+              ...(explicitIntent ? { explicitIntent: explicitIntent as CatalogSearchIntent } : {}),
+              ...(ud.sessionFlags.callerAskedAboutOffers !== undefined
+                ? { callerAskedAboutOffers: ud.sessionFlags.callerAskedAboutOffers }
+                : {}),
+            });
       if (resolvedIntent === 'offer') {
         ud.sessionFlags.callerAskedAboutOffers = true;
       }
@@ -925,7 +931,54 @@ export class CaraTools {
         ...(effectiveServiceArea ? { service_area: effectiveServiceArea } : {}),
         ...(effectiveFulfilment ? { fulfilment: effectiveFulfilment } : {}),
       };
-      let result = await postSearchSupervaluProducts(payload);
+
+      let result: Awaited<ReturnType<typeof postSearchSupervaluProducts>>;
+      if (rewardsPricePoint != null) {
+        try {
+          const matches = await searchRewardsPricePointOffersDirect({
+            amountEur: rewardsPricePoint,
+            ...(effectiveServiceArea ? { serviceArea: effectiveServiceArea } : {}),
+          });
+          result = {
+            ok: true,
+            matches,
+            clarificationHint: null,
+            noMatchQuote:
+              matches.length === 0
+                ? `I couldn't find a synced Rewards Price offer at ${formatSpokenRewardsPrice(rewardsPricePoint)} on the current offer list. I don't want to guess — I can ask the team to double-check if you'd like.`
+                : null,
+            offersFreshness: null,
+          };
+          ud.sessionFlags.rewardsPricePoint = null;
+          console.info('[cara_tools] direct Rewards price-point lookup', {
+            amountEur: rewardsPricePoint,
+            serviceArea: effectiveServiceArea ?? null,
+            matchCount: matches.length,
+            topMatches: matches.slice(0, 3).map((match) => match.product_name),
+          });
+        } catch (error) {
+          ud.sessionFlags.rewardsPricePoint = null;
+          const detail = error instanceof Error ? error.message : String(error);
+          console.error('[cara_tools] direct Rewards price-point lookup failed', {
+            amountEur: rewardsPricePoint,
+            error: detail,
+          });
+          return {
+            ok: false,
+            message:
+              'I could not check the current Rewards price list just now. Do not guess or substitute a different price — offer a team callback to check.',
+          };
+        }
+      } else {
+        if (!voiceWebhooksConfigured()) {
+          return {
+            ok: false,
+            message:
+              'Product lookup is not available on this call. Do not guess — offer a team callback captured in speech.',
+          };
+        }
+        result = await postSearchSupervaluProducts(payload);
+      }
 
       console.info('[cara_tools] product lookup', {
         query: lookupQuery,
@@ -940,7 +993,12 @@ export class CaraTools {
         topMatches: result.matches.slice(0, 3).map((match) => match.product_name),
       });
 
-      if (result.ok && result.matches.length === 0 && !result.clarificationHint) {
+      if (
+        rewardsPricePoint == null &&
+        result.ok &&
+        result.matches.length === 0 &&
+        !result.clarificationHint
+      ) {
         const fallbackQueries = buildProductFallbackQueries(lookupQuery).filter(
           (candidate) => candidate.toLowerCase() !== lookupQuery.toLowerCase(),
         );
