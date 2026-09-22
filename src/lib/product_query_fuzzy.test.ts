@@ -51,6 +51,15 @@ describe('retail product query fuzzy recovery', () => {
     assert.equal(inferExplicitProductFulfilment('pre-pack fillet steak'), 'prepack');
   });
 
+  it('treats explicit butcher-location wording as counter fulfilment', () => {
+    assert.equal(inferExplicitProductFulfilment('what deals have ye at the butchers?'), 'counter');
+    assert.equal(inferExplicitProductFulfilment('anything from the butcher?'), 'counter');
+    assert.equal(inferExplicitProductFulfilment('what is down at the butcher\'s?'), 'counter');
+    assert.equal(inferExplicitProductFulfilment('deals from butcher'), 'counter');
+    assert.equal(inferExplicitProductFulfilment('butcher deals'), undefined);
+    assert.equal(inferExplicitProductFulfilment('pre-pack deals at the butchers'), 'prepack');
+  });
+
   it('infers explicit retail service areas without alcohol keyword traps', () => {
     assert.equal(inferExplicitProductServiceArea('what is on offer at the butcher counter?'), 'butcher');
     assert.equal(inferExplicitProductServiceArea('salmon at the fresh fish counter'), 'fish');

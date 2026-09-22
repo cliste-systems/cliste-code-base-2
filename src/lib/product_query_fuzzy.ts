@@ -72,7 +72,7 @@ export function inferExplicitProductFulfilment(
     return 'prepack';
   }
   if (
-    /(?:butcher|meat|fish|deli|seafood)\s+counter|counter\s+(?:ham|meat|fish|salmon|steak|prawns?)|the counter|fresh sliced|per kilo|per kg|by weight|loose|priced per/.test(q)
+    /(?:butcher|meat|fish|deli|seafood)\s+counter|counter\s+(?:ham|meat|fish|salmon|steak|prawns?)|the counter|fresh sliced|per kilo|per kg|by weight|loose|priced per|\b(?:at|from|down at|over at)\s+(?:the\s+)?butcher(?:s|'s)?\b/.test(q)
   ) {
     return 'counter';
   }
