@@ -38,8 +38,11 @@ import { normalizePhoneE164 } from './phone_normalize.js';
 import {
   buildProductFallbackQueries,
   inferExplicitProductFulfilment,
+  inferExplicitProductServiceArea,
   productQueryTokens,
   pickConfidentFuzzyProductMatch,
+  type RetailProductFulfilment,
+  type RetailProductServiceArea,
 } from './product_query_fuzzy.js';
 import { sendTwilioSms, twilioSmsConfigured, caraSmsDryRunEnabled } from './twilio_sms.js';
 import {
@@ -108,6 +111,13 @@ export type CaraSessionFlags = {
   pendingProductLookupQuery?: string | null;
   /** Tool asked the caller to narrow a broad category by brand/type. */
   pendingProductRefinementClarification?: boolean;
+  /** Structured product-search context retained only while a clarification is pending. */
+  pendingProductSearchState?: {
+    query: string;
+    intent?: CatalogSearchIntent;
+    serviceArea?: RetailProductServiceArea;
+    fulfilment?: RetailProductFulfilment;
+  } | null;
 };
 
 export type CaraAgentUserData = {
@@ -795,6 +805,11 @@ export class CaraTools {
       ud.sessionFlags.pendingProductRefinementClarification = false;
       ud.sessionFlags.pendingProductLookupQuery = null;
 
+      ud.sessionFlags.pendingProductFulfilmentClarification = false;
+      ud.sessionFlags.pendingProductRefinementClarification = false;
+      ud.sessionFlags.pendingProductLookupQuery = null;
+      ud.sessionFlags.pendingProductSearchState = null;
+
       if (result.matches.length === 0) {
         return {
           ok: true,
@@ -821,7 +836,7 @@ export class CaraTools {
 
   readonly searchSuperValuProducts = llm.tool({
     description:
-      'Look up SuperValu products — stock, regular price, and synced weekly offers. Use for do you stock / how much / on offer / this week / on special. Pass the caller\'s product words (e.g. "steak", "salmon darnes", "McVitie\'s biscuits") — never generic "weekly offers". If the caller clearly names a counter/aisle type, pass fulfilment immediately. If the tool asks you to clarify counter vs pre-pack at butcher, fish, or deli, ask ONE short question and wait — do NOT quote prices or products until they choose; then call again with fulfilment "counter" or "prepack". Quote only what this tool returns.',
+      'MANDATORY for every product stock/range, price, or offer claim unless approved store knowledge explicitly answers it. Look up SuperValu products — stock, regular price, and synced weekly offers. Never decide from common sense that a supermarket does or does not sell something: search first, even for unusual requests such as laptops. Pass the caller\'s product words — never generic "weekly offers". When the caller names a department/area, pass service_area immediately; when they name counter vs pre-pack, pass fulfilment immediately. Explicit service_area and fulfilment are hard scope and must not be silently widened. If genuinely ambiguous, ask ONE short clarification and wait. Quote only what this tool returns.',
     parameters: z.object({
       query: z
         .string()
@@ -836,6 +851,12 @@ export class CaraTools {
         .describe(
           'offer = on offer/this week/special; price = how much/cost; stock = do you stock/carry',
         ),
+      service_area: z
+        .enum(['butcher', 'deli', 'fish', 'produce', 'bakery', 'dairy', 'off_licence', 'grocery'])
+        .optional()
+        .describe(
+          'Structured department scope. Use butcher for butcher/meat counter, fish for fish counter, deli for deli, produce for fruit & veg, dairy for dairy wall/section, bakery for bakery, off_licence for actual wine/beer/spirits/Guinness, and grocery for general grocery. Do not route wine gums, beer-battered food, or cider-vinegar food to off_licence.',
+        ),
       fulfilment: z
         .enum(['counter', 'prepack'])
         .optional()
@@ -843,7 +864,7 @@ export class CaraTools {
           'Set counter when the caller clearly says meat/butcher/deli/fish counter, per kilo, by weight, or loose; set prepack when they clearly say pre-pack, packaged, meat/fish/chilled aisle. Leave unset only when genuinely ambiguous.',
         ),
     }),
-    execute: async ({ query, intent: explicitIntent, fulfilment }, { ctx }) => {
+    execute: async ({ query, intent: explicitIntent, service_area: modelServiceArea, fulfilment }, { ctx }) => {
       const ud = readCaraUserData(ctx);
       if (!voiceWebhooksConfigured()) {
         return {
@@ -858,10 +879,14 @@ export class CaraTools {
         ud.sessionFlags.pendingProductFulfilmentClarification === true;
       const pendingRefinementClarification =
         ud.sessionFlags.pendingProductRefinementClarification === true;
-      const pendingProductQuery = ud.sessionFlags.pendingProductLookupQuery?.trim() || null;
+      const pendingState = ud.sessionFlags.pendingProductSearchState ?? null;
+      const pendingProductQuery =
+        pendingState?.query?.trim() ||
+        ud.sessionFlags.pendingProductLookupQuery?.trim() ||
+        null;
       const callerOnlyChoseFulfilment =
         pendingFulfilmentClarification &&
-        /^(?:the\s+)?(?:counter|butcher|meat counter|pre\s*-?\s*pack|packaged|aisle)$/i.test(trimmed);
+        /^(?:the\s+)?(?:(?:fresh\s+)?(?:meat|butcher|fish|deli|seafood)\s+counter|counter|pre\s*-?\s*pack(?:ed)?(?:\s+ones?)?|packaged(?:\s+ones?)?|(?:meat|fish|chilled)\s+aisle)(?:\s*,?\s*not\s+(?:the\s+)?(?:pre\s*-?\s*pack(?:ed)?\s+ones?|counter))?[.!]?$/i.test(trimmed);
       const callerProvidedRefinement =
         pendingRefinementClarification &&
         pendingProductQuery &&
@@ -874,9 +899,17 @@ export class CaraTools {
             ? `${pendingProductQuery} ${trimmed}`
             : trimmed;
       const queryFulfilment = inferExplicitProductFulfilment(trimmed);
-      const effectiveFulfilment =
+      const queryServiceArea = inferExplicitProductServiceArea(trimmed);
+      const effectiveFulfilment: RetailProductFulfilment | undefined =
         queryFulfilment ??
-        (pendingFulfilmentClarification ? fulfilment : undefined);
+        fulfilment ??
+        (pendingFulfilmentClarification ? pendingState?.fulfilment : undefined);
+      const effectiveServiceArea: RetailProductServiceArea | undefined =
+        queryServiceArea ??
+        modelServiceArea ??
+        (pendingFulfilmentClarification || pendingRefinementClarification
+          ? pendingState?.serviceArea
+          : undefined);
 
       const resolvedIntent = resolveCatalogSearchIntent({
         query: lookupQuery,
@@ -891,6 +924,7 @@ export class CaraTools {
         called_number: ud.calledNumber,
         query: lookupQuery,
         intent: resolvedIntent,
+        ...(effectiveServiceArea ? { service_area: effectiveServiceArea } : {}),
         ...(effectiveFulfilment ? { fulfilment: effectiveFulfilment } : {}),
       };
       let result = await postSearchSupervaluProducts(payload);
@@ -899,6 +933,8 @@ export class CaraTools {
         query: lookupQuery,
         transcriptQuery: trimmed,
         intent: resolvedIntent,
+        modelServiceArea: modelServiceArea ?? null,
+        effectiveServiceArea: effectiveServiceArea ?? null,
         modelFulfilment: fulfilment ?? null,
         effectiveFulfilment: effectiveFulfilment ?? null,
         matchCount: result.matches.length,
@@ -918,6 +954,7 @@ export class CaraTools {
             called_number: ud.calledNumber,
             query: fallbackQuery,
             intent: resolvedIntent,
+            ...(effectiveServiceArea ? { service_area: effectiveServiceArea } : {}),
             ...(effectiveFulfilment ? { fulfilment: effectiveFulfilment } : {}),
           };
           const retry = await postSearchSupervaluProducts(retryPayload);
@@ -989,6 +1026,15 @@ export class CaraTools {
           !asksFulfilment && asksBrandOrType;
         ud.sessionFlags.pendingProductLookupQuery =
           asksFulfilment || asksBrandOrType ? lookupQuery : null;
+        ud.sessionFlags.pendingProductSearchState =
+          asksFulfilment || asksBrandOrType
+            ? {
+                query: lookupQuery,
+                intent: resolvedIntent,
+                ...(effectiveServiceArea ? { serviceArea: effectiveServiceArea } : {}),
+                ...(effectiveFulfilment ? { fulfilment: effectiveFulfilment } : {}),
+              }
+            : null;
         return {
           ok: true,
           message: `${result.clarificationHint} Do NOT quote any prices or product names in this turn.`,
