@@ -1,4 +1,5 @@
 export type RetailProductFulfilment = 'counter' | 'prepack';
+export type RetailProductServiceArea = 'butcher' | 'deli' | 'fish' | 'produce' | 'bakery' | 'dairy' | 'off_licence' | 'grocery';
 
 const QUERY_NOISE = new Set([
   'a','an','the','and','or','for','to','of','in','on','at','is','it','are','do','you','we','i',
@@ -76,6 +77,40 @@ export function inferExplicitProductFulfilment(
     return 'counter';
   }
   if (/\bcounter\b/.test(q) && !/pre\s*-?\s*pack|packaged/.test(q)) return 'counter';
+  return undefined;
+}
+
+export function inferExplicitProductServiceArea(
+  query: string,
+): RetailProductServiceArea | undefined {
+  const q = query.toLowerCase();
+  const nonAlcoholFood =
+    /wine\s+gums?|beer[-\s]+battered|cider\s+vinegar|wine\s+vinegar/.test(q);
+
+  if (!nonAlcoholFood && /\boff[-\s]?licen[cs]e\b|\bwine\s+(?:aisle|section|offers?|deals?|specials?)\b|\bwines?\s+(?:on\s+offer|offers?|deals?|specials?)\b|\bguinness\b|\bspirits?\b/.test(q)) {
+    return 'off_licence';
+  }
+  if (/\bdairy\s+(?:wall|section)\b|\bfresh\s+milk\s+(?:wall|section)\b/.test(q)) {
+    return 'dairy';
+  }
+  if (/\bfruit\s*(?:&|and)\s*veg\b|\bproduce\s+(?:section|offers?|deals?|specials?)\b|\bveg\s+section\b/.test(q)) {
+    return 'produce';
+  }
+  if (/\bfish\s+counter\b|\bfresh\s+fish\s+counter\b|\bseafood\s+counter\b|\bfishmonger\b|\b(?:salmon|cod|prawns?)\b.*\bcounter\b/.test(q)) {
+    return 'fish';
+  }
+  if (/\bdeli\s+(?:counter|section)\b/.test(q)) {
+    return 'deli';
+  }
+  if (/\bbutcher(?:s|'s)?\b|\bmeat\s+counter\b|\bfresh\s+meat\s+counter\b|\b(?:sirloin|steak|beef|pork|lamb)\b.*\bcounter\b/.test(q)) {
+    return 'butcher';
+  }
+  if (/\bbakery\s+(?:counter|section|offers?|deals?|specials?)\b/.test(q)) {
+    return 'bakery';
+  }
+  if (/\b(?:ambient|provisions|grocery)\s+(?:aisle|section|offers?|deals?|specials?)\b/.test(q)) {
+    return 'grocery';
+  }
   return undefined;
 }
 
