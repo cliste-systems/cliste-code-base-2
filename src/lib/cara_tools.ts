@@ -909,8 +909,10 @@ export class CaraTools {
 
       const resolvedIntent = resolveCatalogSearchIntent({
         query: lookupQuery,
-        explicitIntent: explicitIntent as CatalogSearchIntent | undefined,
-        callerAskedAboutOffers: ud.sessionFlags.callerAskedAboutOffers,
+        ...(explicitIntent ? { explicitIntent: explicitIntent as CatalogSearchIntent } : {}),
+        ...(ud.sessionFlags.callerAskedAboutOffers !== undefined
+          ? { callerAskedAboutOffers: ud.sessionFlags.callerAskedAboutOffers }
+          : {}),
       });
       if (resolvedIntent === 'offer') {
         ud.sessionFlags.callerAskedAboutOffers = true;
@@ -919,7 +921,7 @@ export class CaraTools {
       const payload: SearchSupervaluProductsPayload = {
         called_number: ud.calledNumber,
         query: lookupQuery,
-        intent: resolvedIntent,
+        ...(resolvedIntent ? { intent: resolvedIntent } : {}),
         ...(effectiveServiceArea ? { service_area: effectiveServiceArea } : {}),
         ...(effectiveFulfilment ? { fulfilment: effectiveFulfilment } : {}),
       };
@@ -1026,7 +1028,7 @@ export class CaraTools {
           asksFulfilment || asksBrandOrType
             ? {
                 query: lookupQuery,
-                intent: resolvedIntent,
+                ...(resolvedIntent ? { intent: resolvedIntent } : {}),
                 ...(effectiveServiceArea ? { serviceArea: effectiveServiceArea } : {}),
                 ...(effectiveFulfilment ? { fulfilment: effectiveFulfilment } : {}),
               }
