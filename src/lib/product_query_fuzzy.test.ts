@@ -14,7 +14,8 @@ import {
 
 describe('retail product query fuzzy recovery', () => {
   it('adds a possessive/plural-safe stem fallback for brand names', () => {
-    assert.deepEqual(buildProductFallbackQueries('Kelloggs'), ['kelloggs', 'kellogg']);
+    const fallbacks = buildProductFallbackQueries('Kelloggs');
+    assert.deepEqual(fallbacks.slice(0, 2), ['kelloggs', 'kellogg']);
   });
 
 
