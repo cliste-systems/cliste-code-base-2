@@ -43,6 +43,13 @@ describe('catalog search intent', () => {
     assert.equal(inferCatalogSearchIntent('McVitie\'s'), 'stock');
   });
 
+  it('treats Rewards price-point browsing as offer intent', () => {
+    assert.equal(inferCatalogSearchIntent("What's on Rewards Price for €2.50?"), 'offer');
+    assert.equal(inferCatalogSearchIntent('What offers are €2.50 with Real Rewards?'), 'offer');
+    assert.equal(inferCatalogSearchIntent('Anything with Rewards at two fifty?'), 'offer');
+    assert.equal(inferCatalogSearchIntent('Any Real Rewards offers for two euro fifty?'), 'offer');
+  });
+
   it('infers browse intent for weekly offers', () => {
     assert.equal(inferWeeklyOffersListIntent('weekly offers'), true);
     assert.equal(inferWeeklyOffersListIntent('best offers'), true);
