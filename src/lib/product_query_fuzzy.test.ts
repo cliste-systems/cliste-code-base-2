@@ -5,6 +5,7 @@ import {
   buildProductFallbackQueries,
   fuzzyProductMatchScore,
   inferExplicitProductFulfilment,
+  inferExplicitProductServiceArea,
   pickConfidentFuzzyProductMatch,
 } from './product_query_fuzzy.js';
 
@@ -48,6 +49,18 @@ describe('retail product query fuzzy recovery', () => {
     assert.equal(inferExplicitProductFulfilment('fillet steak'), undefined);
     assert.equal(inferExplicitProductFulfilment('fillet steak at the meat counter'), 'counter');
     assert.equal(inferExplicitProductFulfilment('pre-pack fillet steak'), 'prepack');
+  });
+
+  it('infers explicit retail service areas without alcohol keyword traps', () => {
+    assert.equal(inferExplicitProductServiceArea('what is on offer at the butcher counter?'), 'butcher');
+    assert.equal(inferExplicitProductServiceArea('salmon at the fresh fish counter'), 'fish');
+    assert.equal(inferExplicitProductServiceArea('anything on the dairy wall?'), 'dairy');
+    assert.equal(inferExplicitProductServiceArea('three for a tenner in fruit and veg'), 'produce');
+    assert.equal(inferExplicitProductServiceArea('what wine deals have ye?'), 'off_licence');
+    assert.equal(inferExplicitProductServiceArea('Guinness cans on special'), 'off_licence');
+    assert.equal(inferExplicitProductServiceArea('wine gums on offer'), undefined);
+    assert.equal(inferExplicitProductServiceArea('beer battered cod on offer'), undefined);
+    assert.equal(inferExplicitProductServiceArea('cider vinegar crisps'), undefined);
   });
 
   it('creates narrow fallback searches without offer boilerplate', () => {
