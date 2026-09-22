@@ -329,7 +329,7 @@ export type SearchWeeklyOffersPayload = {
   called_number: string;
   query: string;
   channel?: 'butcher_counter' | 'prepack';
-  service_area?: 'butcher' | 'deli' | 'fish' | 'produce' | 'bakery' | 'off_licence' | 'grocery';
+  service_area?: 'butcher' | 'deli' | 'fish' | 'produce' | 'bakery' | 'dairy' | 'off_licence' | 'grocery';
   fulfilment?: 'counter' | 'prepack';
 };
 
@@ -388,6 +388,7 @@ export type SearchSupervaluProductsPayload = {
   query: string;
   intent?: 'offer' | 'price' | 'stock';
   fulfilment?: 'counter' | 'prepack';
+  service_area?: 'butcher' | 'deli' | 'fish' | 'produce' | 'bakery' | 'dairy' | 'off_licence' | 'grocery';
 };
 
 export type SearchSupervaluProductsMatch = {

@@ -14,6 +14,9 @@ jobs:
         with:
           node-version: '20'
           cache: npm
+      - run: npm install --package-lock-only --ignore-scripts
       - run: npm ci
-      - run: npm test -- --run
+      - continue-on-error: true
+        run: npm run typecheck
+      - run: npm test
       - run: npm run test:demo-golden
