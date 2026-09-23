@@ -1,22 +1,21 @@
 import * as openai from '@livekit/agents-plugin-openai';
-import WebSocket from 'ws';
+import type { JobContext } from '@livekit/agents';
+import type { RemoteParticipant } from '@livekit/rtc-node';
+import { RoomServiceClient } from 'livekit-server-sdk';
+
+import {
+  ANONYMOUS_CALLER_E164,
+  isAnonymousCallerE164,
+  stableCallSidFallback,
+} from './caller_blocklist.js';
+import { maskPhone } from './gdpr.js';
+import { postCallComplete } from './voice_api.js';
 
 /** OpenAI GPT-Live Irish English feminine voice (9508 retail default). */
 export const GPT_LIVE_RETAIL_VOICE_DEFAULT = 'willow';
 
 /** Backend Responses model for tool/reasoning delegation. */
 export const GPT_LIVE_RETAIL_BACKEND_DEFAULT = 'gpt-5.6-luna';
-
-const GPT_LIVE_PROBE_TTL_MS = 5 * 60_000;
-const GPT_LIVE_PROBE_TIMEOUT_MS = 8_000;
-
-type GptLiveProbeCache = {
-  ok: boolean;
-  reason: string | null;
-  checkedAt: number;
-};
-
-let gptLiveProbeCache: GptLiveProbeCache | null = null;
 
 export function resolveGptLiveRetailVoice(): string {
   return process.env.CARA_GPT_LIVE_VOICE?.trim() || GPT_LIVE_RETAIL_VOICE_DEFAULT;
@@ -26,141 +25,12 @@ export function resolveGptLiveRetailBackendModel(): string {
   return process.env.CARA_GPT_LIVE_BACKEND_MODEL?.trim() || GPT_LIVE_RETAIL_BACKEND_DEFAULT;
 }
 
-/** Kavanaghs 9508 — full-duplex GPT-Live-1 with Irish voice (Option A). */
+/** Kavanaghs 9508 — full-duplex GPT-Live-1 with Irish voice only (no inference fallback). */
 export function shouldUseGptLiveRetailStack(input: { conversationalRetailLine: boolean }): boolean {
   if (!input.conversationalRetailLine) return false;
   const raw = process.env.CARA_GPT_LIVE_RETAIL?.trim().toLowerCase();
   if (raw === '0' || raw === 'false' || raw === 'off') return false;
   return true;
-}
-
-export type GptLiveAvailability = {
-  ok: boolean;
-  reason: string | null;
-};
-
-function resolveOpenAiLiveSessionsUrl(): string {
-  const base = process.env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1';
-  const url = new URL(base);
-  url.protocol = url.protocol === 'https:' ? 'wss:' : url.protocol === 'http:' ? 'ws:' : url.protocol;
-  url.pathname = url.pathname.replace(/\/$/, '');
-  if (!url.pathname.endsWith('/live/sessions')) url.pathname += '/live/sessions';
-  url.search = '';
-  url.hash = '';
-  return url.toString();
-}
-
-function summarizeGptLiveError(error: unknown): string {
-  if (!error || typeof error !== 'object') return 'unknown_error';
-  const record = error as Record<string, unknown>;
-  const code = typeof record.code === 'string' ? record.code : null;
-  const type = typeof record.type === 'string' ? record.type : null;
-  const message = typeof record.message === 'string' ? record.message : null;
-  return [code, type, message].filter(Boolean).join(':') || 'unknown_error';
-}
-
-/** Quick OpenAI Live session.start probe — cached to avoid adding latency to every call. */
-export async function probeGptLiveAvailability(): Promise<GptLiveAvailability> {
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) {
-    return { ok: false, reason: 'missing_openai_api_key' };
-  }
-
-  if (process.env.CARA_GPT_LIVE_SKIP_PROBE?.trim() === '1') {
-    return { ok: true, reason: null };
-  }
-
-  if (gptLiveProbeCache && Date.now() - gptLiveProbeCache.checkedAt < GPT_LIVE_PROBE_TTL_MS) {
-    return { ok: gptLiveProbeCache.ok, reason: gptLiveProbeCache.reason };
-  }
-
-  const voice = resolveGptLiveRetailVoice();
-  const backendModel = resolveGptLiveRetailBackendModel();
-
-  const result = await new Promise<GptLiveAvailability>((resolve) => {
-    let settled = false;
-    const finish = (value: GptLiveAvailability) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        ws.terminate();
-      } catch {
-        /* ignore */
-      }
-      resolve(value);
-    };
-
-    const ws = new WebSocket(resolveOpenAiLiveSessionsUrl(), {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'User-Agent': 'cliste-gpt-live-probe',
-      },
-    });
-
-    const timer = setTimeout(() => {
-      finish({ ok: false, reason: 'probe_timeout' });
-    }, GPT_LIVE_PROBE_TIMEOUT_MS);
-
-    ws.on('open', () => {
-      ws.send(
-        JSON.stringify({
-          type: 'session.start',
-          event_id: 'cliste_gpt_live_probe',
-          session: {
-            model: 'gpt-live-1',
-            instructions: 'Speak Irish English.',
-            audio: {
-              format: { type: 'audio/pcm', rate: 24000 },
-              output: { voice },
-            },
-            delegation: {
-              type: 'responses',
-              responses: {
-                model: backendModel,
-                instructions: 'Use tools when needed.',
-              },
-            },
-          },
-        }),
-      );
-    });
-
-    ws.on('message', (data: WebSocket.RawData) => {
-      try {
-        const event = JSON.parse(data.toString()) as { type?: string; error?: unknown };
-        if (event.type === 'session.started') {
-          finish({ ok: true, reason: null });
-        } else if (event.type === 'error') {
-          finish({ ok: false, reason: summarizeGptLiveError(event.error) });
-        }
-      } catch {
-        finish({ ok: false, reason: 'probe_parse_error' });
-      }
-    });
-
-    ws.on('error', () => {
-      finish({ ok: false, reason: 'probe_websocket_error' });
-    });
-
-    ws.on('close', () => {
-      finish({ ok: false, reason: 'probe_closed_before_start' });
-    });
-  });
-
-  gptLiveProbeCache = {
-    ok: result.ok,
-    reason: result.reason,
-    checkedAt: Date.now(),
-  };
-
-  if (!result.ok) {
-    console.warn('[gpt_live] availability_probe_failed', result);
-  } else {
-    console.info('[gpt_live] availability_probe_ok');
-  }
-
-  return result;
 }
 
 export type ResolvedGptLiveRetailModel = {
@@ -170,41 +40,15 @@ export type ResolvedGptLiveRetailModel = {
   backendModel: string;
 };
 
-export async function resolveGptLiveRetailModel(): Promise<ResolvedGptLiveRetailModel | null> {
-  if (!process.env.OPENAI_API_KEY?.trim()) {
-    console.warn('[gpt_live] OPENAI_API_KEY missing — falling back to inference retail stack');
-    return null;
-  }
-
-  const availability = await probeGptLiveAvailability();
-  if (!availability.ok) {
-    console.warn('[gpt_live] unavailable — falling back to inference retail stack', availability);
-    return null;
-  }
-
-  const voice = resolveGptLiveRetailVoice();
-  const backendModel = resolveGptLiveRetailBackendModel();
-
-  return {
-    voice,
-    backendModel,
-    label: `openai/gpt-live-1:${voice}+${backendModel}`,
-    instance: new openai.realtime.GPTLiveModel({
-      voice,
-      responsesOptions: {
-        model: backendModel,
-        instructions:
-          'Speak Irish English. Use retail lookup tools when the caller asks about products, stock, hours, or departments. Keep spoken replies concise for phone.',
-      },
-    }),
-  };
-}
-
-/** @deprecated Prefer resolveGptLiveRetailModel() which probes availability first. */
 export function createGptLiveRetailModel(): ResolvedGptLiveRetailModel | null {
-  if (!process.env.OPENAI_API_KEY?.trim()) return null;
+  if (!process.env.OPENAI_API_KEY?.trim()) {
+    console.error('[gpt_live] OPENAI_API_KEY missing — 9508 requires GPT-Live');
+    return null;
+  }
+
   const voice = resolveGptLiveRetailVoice();
   const backendModel = resolveGptLiveRetailBackendModel();
+
   return {
     voice,
     backendModel,
@@ -227,4 +71,60 @@ export function buildGptLiveRetailOpeningInstructions(greetingText: string): str
     'Say this opening exactly, naturally and warmly, then stop and listen for the caller:\n' +
     `"${trimmed}"`
   );
+}
+
+/** Drop the SIP leg when GPT-Live cannot start — no AssemblyAI/Gemma/Cartesia fallback. */
+export async function rejectGptLiveUnavailableCall(input: {
+  ctx: JobContext;
+  participant: RemoteParticipant;
+  org: { id: string; name: string; phone_number?: string | null };
+  callerNumberRaw: string;
+  callerE164: string;
+  calledNumber: string;
+  reason: string;
+}): Promise<void> {
+  const roomName =
+    (typeof input.ctx.room.name === 'string' && input.ctx.room.name.trim()) || '';
+  const callerIdentity = (input.participant.identity ?? '').trim();
+  const callSid = stableCallSidFallback(input.participant, roomName);
+
+  console.error('[gpt_live] rejecting call — GPT-Live unavailable', {
+    orgId: input.org.id,
+    reason: input.reason,
+    callerE164: maskPhone(input.callerE164),
+  });
+
+  const host = (() => {
+    const u = process.env.LIVEKIT_URL?.trim();
+    if (!u) return null;
+    return u.replace(/^wss?:\/\//, 'https://');
+  })();
+  const key = process.env.LIVEKIT_API_KEY?.trim();
+  const secret = process.env.LIVEKIT_API_SECRET?.trim();
+  if (host && key && secret && roomName && callerIdentity) {
+    try {
+      const client = new RoomServiceClient(host, key, secret);
+      await client.removeParticipant(roomName, callerIdentity);
+    } catch (err) {
+      console.error('[gpt_live] removeParticipant failed', err);
+    }
+  }
+
+  const callerForWebhook = isAnonymousCallerE164(input.callerE164)
+    ? ANONYMOUS_CALLER_E164
+    : input.callerNumberRaw.trim() || input.callerE164;
+
+  try {
+    await postCallComplete({
+      called_number: input.calledNumber.trim() || input.org.phone_number?.trim() || '',
+      call_sid: callSid,
+      room_name: roomName || null,
+      caller_number: callerForWebhook,
+      duration_seconds: 0,
+      outcome: 'gpt_live_unavailable',
+      ai_summary: 'GPT-Live voice stack unavailable for this call.',
+    });
+  } catch (err) {
+    console.error('[gpt_live] call-complete error', err);
+  }
 }
