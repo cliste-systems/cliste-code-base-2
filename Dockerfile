@@ -12,19 +12,21 @@ ENV NODE_ENV=production
 
 FROM base AS build
 WORKDIR /app
+ENV NODE_ENV=development
 ENV HOME=/app
 ENV XDG_CACHE_HOME=/app/.cache
 ENV HF_HOME=/app/.cache/huggingface
 RUN mkdir -p /app/.cache
 
 COPY package.json package-lock.json ./
-RUN npm install --omit=dev
+RUN npm install
 
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 
 RUN npm run build
 RUN npm run download-files
+RUN npm prune --omit=dev
 
 FROM base AS production
 

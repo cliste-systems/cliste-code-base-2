@@ -126,7 +126,7 @@ export async function probeGptLiveAvailability(): Promise<GptLiveAvailability> {
       );
     });
 
-    ws.on('message', (data) => {
+    ws.on('message', (data: WebSocket.RawData) => {
       try {
         const event = JSON.parse(data.toString()) as { type?: string; error?: unknown };
         if (event.type === 'session.started') {
