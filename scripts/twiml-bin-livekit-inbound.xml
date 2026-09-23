@@ -2,22 +2,16 @@
 <!--
   Paste into Twilio: Console → TwiML Bins → Create new TwiML Bin.
 
-  Then: Phone Numbers → +353… → Voice → "A call comes in" → TwiML Bin → select this bin → Save.
+  Production uses Twilio Elastic SIP Trunk origination instead (see livekit-cloud-deploy.md).
+  This template is for manual per-number TwiML setup if needed.
 
-  SIP host must match LiveKit Cloud → Project settings → SIP (NOT the wss hostname).
-  This project uses the EU SIP domain, e.g.
-  4crcl51h1rh.eu.sip.livekit.cloud
-  (see Twilio call "To" field — use that exact host from the LiveKit dashboard).
-
-  If your inbound trunk uses digest auth, add username/password on <Sip> and
-  the same values on the LiveKit inbound trunk (lk sip inbound update …).
+  SIP host: LiveKit Cloud → Project settings → SIP (NOT the wss hostname).
+  HelloCara EU: 4isoiid8ii2.eu.sip.livekit.cloud
 
   Docs: https://docs.livekit.io/telephony/accepting-calls/inbound-twilio/
 -->
 <Response>
   <Dial timeout="60" answerOnBridge="true">
-    <Sip>
-      sip:+353749389378@4crcl51h1rh.eu.sip.livekit.cloud;transport=tcp
-    </Sip>
+    <Sip>sip:{{To}}@4isoiid8ii2.eu.sip.livekit.cloud;transport=tcp</Sip>
   </Dial>
 </Response>

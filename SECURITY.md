@@ -1,9 +1,8 @@
 # Security posture — `cliste-code-base-2`
 
-This service is a **LiveKit voice agent worker** running on Railway. It does
-not expose any inbound HTTP endpoints, so Cloudflare WAF / DDoS rules do not
-apply to it directly — the hardening for public surfaces lives in
-`cliste-code-base-1` (see `SECURITY_CLOUDFLARE.md` there).
+This service is a **LiveKit Cloud Agent worker** (voice agent). It does not expose
+any inbound HTTP endpoints. Public-surface hardening lives in `cliste-code-base-1`
+(`SECURITY_CLOUDFLARE.md`).
 
 ## Threat model
 
@@ -21,41 +20,38 @@ apply to it directly — the hardening for public surfaces lives in
 | Mitigation | File | Notes |
 |---|---|---|
 | PII redaction before LLM post-processing and DB insert | `src/lib/gdpr.ts`, `src/lib/call_logs.ts`, `src/lib/action_tickets.ts` | Removes card numbers, CVV, IBANs, PPS numbers, spoken card numbers |
-| Phone number masking in logs | `src/lib/gdpr.ts` (`maskPhone`) applied in `src/lib/tools.ts` | Prevents full numbers landing in Railway log pipeline / third-party log processors |
-| AI / recording disclosure at call open | `src/agent.ts`, `src/lib/greeting_compliance.ts`, `src/lib/ai_disclosure.ts` | Spoken disclosure must complete playout before LiveKit egress starts; demo line waits for recording-awareness line after caller name |
-| Call MP3 recording (30-day retention) | `src/lib/call_recording.ts`, `src/agent.ts` | LiveKit egress → Supabase `call-recordings/{orgId}/{callLogId}.mp3`; disable with `CALL_RECORDING_ENABLED=0`; full audio is **not** redacted like transcripts |
-| Caller-line classification | `src/lib/phone_classify.ts` | Detects landline vs mobile; never asks for a mobile if the caller ID already is one |
+| Phone number masking in logs | `src/lib/gdpr.ts` (`maskPhone`) applied in `src/lib/tools.ts` | Prevents full numbers landing in log pipelines |
+| AI / recording disclosure at call open | `src/agent.ts`, `src/lib/greeting_compliance.ts`, `src/lib/ai_disclosure.ts` | Spoken disclosure must complete playout before LiveKit egress starts |
+| Call MP3 recording (30-day retention) | `src/lib/call_recording.ts`, `src/agent.ts` | LiveKit egress → Supabase `call-recordings/{orgId}/{callLogId}.mp3` |
+| Caller-line classification | `src/lib/phone_classify.ts` | Detects landline vs mobile |
 | Tool-level caller verification for payment links | `src/lib/tools.ts` (`sendPaymentLink`) | Refuses to resend a payment link to a number other than the one on file |
-| Stripe Checkout Sessions (not card capture by voice) | `src/lib/payments.ts` | Card details never touch the agent or our logs — they go direct to Stripe |
+| Stripe Checkout Sessions (not card capture by voice) | `src/lib/payments.ts` | Card details never touch the agent or our logs |
 | In-process cache for org config | `src/lib/cache.ts`, `src/lib/supabase.ts` | Reduces repeated reads of org + service data |
-| GDPR right-to-erasure script | `scripts/gdpr-erase.ts`, `npm run gdpr:erase -- --phone="…"` | Wipes caller PII, deletes `call-recordings` objects, nulls `audio_storage_path` |
-| GDPR storage-limitation script | `scripts/gdpr-purge-transcripts.ts`, `npm run gdpr:purge-transcripts -- --days=30` | Nulls verbatim transcripts older than N days; recording purge runs in code-base-1 cron |
+| GDPR right-to-erasure script | `scripts/gdpr-erase.ts` | Wipes caller PII, deletes recordings |
+| GDPR storage-limitation | `cliste-code-base-1` cron `/api/cron/data-retention` | Nulls verbatim transcripts after 30 days |
 
-## Railway checklist
+## LiveKit Cloud Agents checklist
 
-1. **Secrets** — every secret should be a Railway Variable, never checked in.
-   Confirm `STRIPE_SECRET_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `TWILIO_AUTH_TOKEN`,
-   `LIVEKIT_API_SECRET` are set as Railway variables and marked sealed.
-   Set `CLISTE_APP_URL` to the Hello Cara dashboard origin (`https://app.hellocara.ie`) so voice webhooks reach the Next.js app.
-2. **Team access** — enforce 2FA on every Railway team member. Remove anyone
-   who does not need access.
-3. **Deployment logs** — Railway retains logs; phone numbers are already
-   masked before they reach console. If you ship third-party log drains
-   (Datadog/Logtail/etc.), the same masking applies because it runs before
-   `console.log`. Don't add new `console.log(phone)` lines without
-   `maskPhone(...)`.
-4. **Cron** — the GDPR purge script should be wired into a Railway cron (daily
-   is fine), using `node scripts/gdpr-purge-transcripts.ts --days=30`.
-5. **LiveKit Cloud** — rotate LiveKit API keys once a quarter. Set an expiry
-   on each key in the LiveKit dashboard.
+1. **Secrets** — use `lk agent update-secrets` / `--secrets-file`. Never commit
+   `secrets.production.env`. LiveKit injects `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
+   and `LIVEKIT_API_SECRET` automatically — do not set them as custom secrets.
+2. **Region** — production agent runs in **`eu-central`** (Frankfurt). Project
+   region pinning should be **Europe (`eu`)** for Irish retail SIP traffic.
+3. **Team access** — enforce 2FA on LiveKit Cloud and GitHub deploy approvers.
+4. **Deployment logs** — use `lk agent logs`. Phone numbers are masked before
+   console output. Do not add new `console.log(phone)` without `maskPhone(...)`.
+5. **Rotate keys** — rotate LiveKit API keys quarterly in the LiveKit dashboard.
+6. **Local dev** — use `LIVEKIT_AGENT_NAME=cliste-voice-local` so dev workers
+   do not steal production dispatches.
+
+See [`docs/livekit-cloud-deploy.md`](docs/livekit-cloud-deploy.md) for deploy commands.
 
 ## Operational
 
 - **Rotate `STRIPE_SECRET_KEY` and all third-party API keys** on any suspicion
-  of leak. Stripe rotation invalidates old test/live keys at the Stripe end.
+  of leak.
 - **Do not** ship new LLM tools that can read the full caller transcript
-  without rerunning redaction on the transcript first. Redaction happens
-  once, at the boundary — keep it that way.
+  without rerunning redaction on the transcript first.
 
 ## Related
 

@@ -53,8 +53,8 @@ export type CallDiagnosticBundle = {
   transcriptIssues: string[];
   recommendedChecks: string[];
   diagnosticContextMarkdown?: string;
-  railwayLogs?: string | null;
-  railwayLogsNote?: string;
+  agentLogs?: string | null;
+  agentLogsNote?: string;
   supabaseDeepLink?: string;
 };
 
@@ -127,15 +127,21 @@ export function readDiagnosticContextFile(): string | undefined {
 export function buildDeployContext(): Record<string, string | undefined> {
   return {
     gitCommit:
-      process.env.RAILWAY_GIT_COMMIT_SHA?.trim() ||
+      process.env.LIVEKIT_AGENT_VERSION?.trim() ||
       process.env.GIT_COMMIT?.trim() ||
       process.env.VERCEL_GIT_COMMIT_SHA?.trim(),
-    deploymentId: process.env.RAILWAY_DEPLOYMENT_ID?.trim(),
-    environment: process.env.RAILWAY_ENVIRONMENT?.trim() || process.env.NODE_ENV?.trim(),
-    serviceName: process.env.RAILWAY_SERVICE_NAME?.trim(),
-    projectId: process.env.RAILWAY_PROJECT_ID?.trim(),
+    deploymentId: process.env.LIVEKIT_AGENT_DEPLOYMENT?.trim(),
+    environment:
+      process.env.LIVEKIT_AGENT_DEPLOYMENT?.trim() ||
+      process.env.NODE_ENV?.trim() ||
+      'livekit-cloud',
+    serviceName: process.env.LIVEKIT_AGENT_NAME?.trim() || 'livekit-cloud-agent',
+    projectId: process.env.LIVEKIT_PROJECT_ID?.trim(),
     nodeVersion: process.version,
-    workerRegion: process.env.LIVEKIT_WORKER_REGION?.trim(),
+    workerRegion:
+      process.env.LIVEKIT_WORKER_REGION?.trim() ||
+      process.env.LK_AGENT_REGION?.trim() ||
+      'eu-central',
   };
 }
 
@@ -354,7 +360,7 @@ export function buildRecommendedChecks(input: {
     checks.push('SMS consent pivot/Q&A path — confirm callback intake in prompt + pivot handler.');
   }
   if (tags.has('call_complete_webhook_failed') || tags.has('call-complete webhook failed')) {
-    checks.push('call-complete webhook failed — Supabase row may be missing enrichment; check voice webhook + Railway.');
+    checks.push('call-complete webhook failed — Supabase row may be missing enrichment; check voice webhook + LiveKit agent logs.');
   }
   if (input.sessionFlags?.endPhoneCallUsed && !input.sessionFlags?.closingCall) {
     checks.push('endPhoneCall without closingCall — goodbye may have been skipped.');
@@ -368,7 +374,7 @@ export function buildRecommendedChecks(input: {
     );
   }
   if (checks.length === 0) {
-    checks.push('No automatic flags — read agent events + Railway logs for this window.');
+    checks.push('No automatic flags — read agent events + LiveKit logs for this window.');
   }
   return checks;
 }
@@ -415,8 +421,8 @@ export function buildCallDiagnosticBundle(input: {
   webhookNotes?: string[];
   events?: CallDiagnosticEvent[];
   callLogId?: string | null;
-  railwayLogs?: string | null;
-  railwayLogsNote?: string;
+  agentLogs?: string | null;
+  agentLogsNote?: string;
 }): CallDiagnosticBundle {
   const transcriptIssues = analyzeTranscriptForIssues(input.transcript);
   const events = input.events ?? [];
@@ -449,8 +455,8 @@ export function buildCallDiagnosticBundle(input: {
     ...(diagnosticContextMarkdown !== undefined
       ? { diagnosticContextMarkdown }
       : {}),
-    ...(input.railwayLogs !== undefined ? { railwayLogs: input.railwayLogs } : {}),
-    ...(input.railwayLogsNote !== undefined ? { railwayLogsNote: input.railwayLogsNote } : {}),
+    ...(input.agentLogs !== undefined ? { agentLogs: input.agentLogs } : {}),
+    ...(input.agentLogsNote !== undefined ? { agentLogsNote: input.agentLogsNote } : {}),
     ...(supabaseDeepLink !== undefined ? { supabaseDeepLink } : {}),
   };
 }
@@ -463,7 +469,7 @@ export function formatDiagnosticMarkdown(
 
   sections.push('## Diagnostic bundle (for debugging)\n');
   sections.push(
-    '_Auto-generated on mirror. Includes deploy context, session state, Supabase enrichment, agent events, and export-time Railway logs when available._\n',
+    '_Auto-generated on mirror. Includes deploy context, session state, Supabase enrichment, agent events, and export-time LiveKit agent logs when available._\n',
   );
 
   sections.push('### Deploy & runtime\n');
@@ -564,23 +570,22 @@ export function formatDiagnosticMarkdown(
     sections.push(bundle.diagnosticContextMarkdown);
   }
 
-  sections.push('\n### Railway logs\n');
-  if (bundle.railwayLogs?.trim()) {
-    sections.push('<details><summary>Exported Railway logs (call window)</summary>\n\n```');
-    sections.push(bundle.railwayLogs.trim());
+  sections.push('\n### LiveKit agent logs\n');
+  if (bundle.agentLogs?.trim()) {
+    sections.push('<details><summary>Exported agent logs (call window)</summary>\n\n```');
+    sections.push(bundle.agentLogs.trim());
     sections.push('```\n\n</details>');
   } else {
     sections.push(
-      bundle.railwayLogsNote?.trim() ||
-        'No Railway logs bundled. From a linked project run:',
+      bundle.agentLogsNote?.trim() ||
+        'No agent logs bundled. From the worker repo run:',
     );
     if (callStartedAtMs) {
       const since = new Date(callStartedAtMs - 120_000).toISOString();
       const until = new Date(callStartedAtMs + 600_000).toISOString();
       sections.push('\n```bash');
-      sections.push(
-        `railway logs --lines 400 --since ${since} --until ${until} --filter "[agent]"`,
-      );
+      sections.push(`lk agent logs --project hellocara --log-type runtime`);
+      sections.push(`# window: ${since} → ${until}`);
       sections.push('```');
     }
   }

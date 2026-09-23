@@ -1009,7 +1009,7 @@ export class CaraTools {
           const retryPayload: SearchSupervaluProductsPayload = {
             called_number: ud.calledNumber,
             query: fallbackQuery,
-            intent: resolvedIntent,
+            ...(resolvedIntent ? { intent: resolvedIntent } : {}),
             ...(effectiveServiceArea ? { service_area: effectiveServiceArea } : {}),
             ...(effectiveFulfilment ? { fulfilment: effectiveFulfilment } : {}),
           };

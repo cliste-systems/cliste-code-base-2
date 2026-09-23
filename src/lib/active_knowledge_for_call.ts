@@ -40,13 +40,17 @@ function isSchemaCacheError(message: string): boolean {
 function parsePreview(raw: unknown): TemporalOverridePreview | null {
   if (!raw || typeof raw !== 'object') return null;
   const row = raw as Record<string, unknown>;
+  const normalLabel = String(row.normalLabel ?? '').trim();
+  const temporaryLabel = String(row.temporaryLabel ?? '').trim();
+  const temporaryBody = String(row.temporaryBody ?? '').trim();
+  const scopeLabel = String(row.scopeLabel ?? '').trim();
   return {
-    normalLabel: String(row.normalLabel ?? '').trim() || undefined,
+    ...(normalLabel ? { normalLabel } : {}),
     normalBody:
       row.normalBody == null ? null : String(row.normalBody).trim() || null,
-    temporaryLabel: String(row.temporaryLabel ?? '').trim() || undefined,
-    temporaryBody: String(row.temporaryBody ?? '').trim() || undefined,
-    scopeLabel: String(row.scopeLabel ?? '').trim() || undefined,
+    ...(temporaryLabel ? { temporaryLabel } : {}),
+    ...(temporaryBody ? { temporaryBody } : {}),
+    ...(scopeLabel ? { scopeLabel } : {}),
   };
 }
 

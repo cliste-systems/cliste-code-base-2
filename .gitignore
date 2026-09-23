@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .env
+secrets.production.env
+.livekit-migration.env
 *.log
 .DS_Store
 call-transcripts/*.md

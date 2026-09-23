@@ -1,8 +1,8 @@
 /** Placeholder text that must never appear in a persisted verbatim export. */
 export const TRANSCRIPT_PARTIAL_MARKERS: readonly RegExp[] = [
   /\(inferred\)/i,
-  /STT not in Railway logs/i,
-  /Reconstructed from Railway/i,
+  /STT not in agent logs/i,
+  /Reconstructed from agent logs/i,
 ];
 
 export type TranscriptCompleteness = {

@@ -3138,7 +3138,10 @@ export default defineAgent({
         const packet = parseTextRehearsalPacket(payload);
         if (!packet || !('type' in packet)) return;
         if (packet.type === 'ping') {
-          void publishTextRehearsalPacket({ type: 'pong', turnId: packet.turnId });
+          void publishTextRehearsalPacket({
+            type: 'pong',
+            ...(packet.turnId ? { turnId: packet.turnId } : {}),
+          });
           // Client may connect after the first session_ready — answer pings until they catch up.
           void publishTextRehearsalPacket({ type: 'session_ready', greeting: null });
           return;

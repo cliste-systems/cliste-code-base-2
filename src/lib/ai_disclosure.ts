@@ -17,8 +17,7 @@ function isProductionEnv(): boolean {
   const candidates = [
     process.env.NODE_ENV,
     process.env.CLISTE_ENV,
-    process.env.RAILWAY_ENVIRONMENT,
-    process.env.RAILWAY_ENVIRONMENT_NAME,
+    process.env.LIVEKIT_AGENT_DEPLOYMENT,
   ]
     .map((v) => v?.trim().toLowerCase())
     .filter((v): v is string => Boolean(v));

@@ -5,7 +5,7 @@ Run the **full Cara worker path** (compiled prompt → LLM → tools → agent s
 ## Prerequisites
 
 1. LiveKit credentials in `.env` (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`).
-2. For **local dev**, set `LIVEKIT_AGENT_NAME=cliste-voice-local` in **both** cb1 `.env.local` and cb2 `.env` so Railway production (`cliste-retail-node`) does not steal dispatches. Production uses `cliste-retail-node` on both dashboard and worker.
+2. For **local dev**, set `LIVEKIT_AGENT_NAME=cliste-voice-local` in **both** cb1 `.env.local` and cb2 `.env` so production (`cliste-retail-node`) does not steal dispatches.
 3. Local dev stack — from **cliste-code-base-1**:
 
 ```bash

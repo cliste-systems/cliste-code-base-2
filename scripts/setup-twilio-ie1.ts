@@ -53,7 +53,7 @@ async function main(): Promise<void> {
   console.log('IE1 API key created:');
   console.log(`  TWILIO_IE1_API_KEY=${key.sid}`);
   console.log(`  TWILIO_IE1_API_SECRET=${key.secret}`);
-  console.log('\nSet both on Railway (worker service).');
+  console.log('\nSet both on LiveKit agent secrets (lk agent update-secrets).');
 
   const region = await ensureTwilioIe1MessagingRegion(bloomFrom);
   console.log(`\nIE1 messaging region for ${bloomFrom}:`, region.ok ? 'ok' : region);

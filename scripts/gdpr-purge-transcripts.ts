@@ -7,12 +7,8 @@
  *   - the `outcome` + `cost_estimate` + `caller_number` (for invoicing /
  *     billing reconciliation under Art 6(1)(f) legitimate interest).
  *
- * Run as a daily/weekly cron in Railway:
- *   npx tsx scripts/gdpr-purge-transcripts.ts --days=30
- *   npx tsx scripts/gdpr-purge-transcripts.ts --days=30 --dry-run
- *
- * Call recording purge (Supabase `call-recordings` bucket) is handled by the
- * dashboard cron `/api/cron/data-retention` in code-base-1 — not this script.
+ * Run via dashboard cron `/api/cron/data-retention` in code-base-1 (daily).
+ * This script remains for manual one-off purges:
  */
 import 'dotenv/config';
 

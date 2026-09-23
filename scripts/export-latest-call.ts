@@ -40,7 +40,7 @@ async function main() {
       'Timed out waiting for a complete call_logs row in Supabase.',
       result.completeness?.reasons,
     );
-    console.error('Check Railway logs for call-complete / insertCallLog failures.');
+    console.error('Check LiveKit agent logs for call-complete / insertCallLog failures.');
     process.exit(1);
   }
 

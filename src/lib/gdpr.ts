@@ -9,7 +9,7 @@
  *    record of the conversation; they MUST NOT contain payment-card data,
  *    CVV/security codes, IBANs, PPS numbers, or anything that looks like
  *    special-category data the agent had no business collecting.
- *  - **Logs to stdout** (Railway) are processed by a third party — caller
+ *  - **Logs to stdout** (LiveKit Cloud) are processed by a third party — caller
  *    phone numbers are masked at the info level so they cannot be lifted
  *    from log files.
  *

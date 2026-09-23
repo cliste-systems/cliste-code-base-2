@@ -16,9 +16,9 @@ npm run test:demo-golden
 
 Golden suite locks demo prompt content (LLM-owned opening arc, playbooks, endPhoneCall-only tools). If a phone call regresses, add an assertion to `src/lib/demo_conversational.test.ts` before fixing.
 
-## Local testing (no Railway deploy)
+## Local testing (no production deploy)
 
-1. Pause the Railway worker **or** set `LIVEKIT_AGENT_NAME=cliste-voice-local` so local dev does not steal jobs.
+1. Set `LIVEKIT_AGENT_NAME=cliste-voice-local` in cb1 `.env.local` and cb2 `.env` so production does not steal jobs.
 2. `npm run dev` (or `dev:trace`) with the same `LIVEKIT_*` creds as production.
 3. Use LiveKit Agents Playground with `DEFAULT_ORG_PHONE=+353749389378`.
 4. After a call: `npm run export:latest-call -- --wait` → `call-transcripts/latest.md`.
@@ -27,7 +27,7 @@ Golden suite locks demo prompt content (LLM-owned opening arc, playbooks, endPho
 
 ## Pre-call
 
-- [ ] Worker deployed with conversational demo behaviour (Railway latest commit)
+- [ ] Worker deployed on LiveKit Cloud (`hellocara`, latest commit)
 - [ ] Opening: ~1.5s pause, then *"Hello, you're through to Cara — who am I speaking to?"*
 - [ ] No duplicate greeting at call start
 
